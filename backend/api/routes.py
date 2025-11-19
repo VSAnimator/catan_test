@@ -394,3 +394,91 @@ async def get_replay(game_id: str):
         game_id=game_id,
         steps=steps
     )
+
+
+@router.post("/games/{game_id}/restore")
+async def restore_game_state(game_id: str, state: Dict[str, Any]):
+    """Restore a game to a specific state (for debugging/resuming from replay).
+    
+    This allows you to set the game's current state to any state, useful for:
+    - Resuming from a replay step
+    - Debugging by restoring to a specific point in the game
+    
+    WARNING: This modifies the original game. Use /fork instead to create a copy.
+    """
+    # Check if game exists
+    game_row = get_game_from_db(game_id)
+    if not game_row:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    # Validate that the state has required fields
+    if "game_id" not in state:
+        raise HTTPException(status_code=400, detail="State must have game_id")
+    if state["game_id"] != game_id:
+        raise HTTPException(status_code=400, detail="State game_id must match URL game_id")
+    
+    # Validate the state by trying to deserialize it
+    try:
+        deserialize_game_state(state)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid game state: {str(e)}")
+    
+    # Save the state as the current game state
+    save_game_state(game_id, state)
+    
+    return {"message": "Game state restored successfully", "game_id": game_id}
+
+
+@router.post("/games/{game_id}/fork", response_model=CreateGameResponse)
+async def fork_game(game_id: str, state: Dict[str, Any]):
+    """Fork a game from a specific state, creating a new game with a new ID.
+    
+    This creates a copy of the game at the specified state, preserving the original.
+    Useful for:
+    - Testing different paths from a saved state
+    - Debugging without modifying the original game
+    - Creating branches for experimentation
+    """
+    # Check if source game exists
+    source_game_row = get_game_from_db(game_id)
+    if not source_game_row:
+        raise HTTPException(status_code=404, detail="Source game not found")
+    
+    # Validate the state by trying to deserialize it
+    try:
+        deserialized_state = deserialize_game_state(state)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid game state: {str(e)}")
+    
+    # Generate new game ID
+    new_game_id = str(uuid.uuid4())
+    
+    # Update the state to use the new game ID
+    state["game_id"] = new_game_id
+    deserialized_state.game_id = new_game_id
+    
+    # Copy metadata from source game
+    source_metadata = {}
+    if source_game_row["metadata"]:
+        source_metadata = json.loads(source_game_row["metadata"])
+    
+    # Create metadata for the forked game
+    metadata = {
+        "player_names": [p.name for p in deserialized_state.players],
+        "num_players": len(deserialized_state.players),
+        "forked_from": game_id,
+        "forked_at_step": None,  # Could be enhanced to track which step was forked
+    }
+    
+    # Create the new game in the database
+    create_game_in_db(
+        new_game_id,
+        rng_seed=source_game_row["rng_seed"],  # Preserve RNG seed for reproducibility
+        metadata=metadata,
+        initial_state_json=state,
+    )
+    
+    return CreateGameResponse(
+        game_id=new_game_id,
+        initial_state=state
+    )

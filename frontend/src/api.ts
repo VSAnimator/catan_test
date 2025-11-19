@@ -147,3 +147,21 @@ export async function getReplay(gameId: string): Promise<ReplayResponse> {
   return handleResponse<ReplayResponse>(response)
 }
 
+export async function restoreGameState(gameId: string, state: GameState): Promise<void> {
+  const response = await fetch(`${API_BASE}/games/${gameId}/restore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(state)
+  })
+  await handleResponse<{ message: string; game_id: string }>(response)
+}
+
+export async function forkGame(gameId: string, state: GameState): Promise<CreateGameResponse> {
+  const response = await fetch(`${API_BASE}/games/${gameId}/fork`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(state)
+  })
+  return handleResponse<CreateGameResponse>(response)
+}
+

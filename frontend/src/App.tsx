@@ -6,6 +6,8 @@ import {
   getLegalActions,
   postAction,
   getReplay,
+  restoreGameState,
+  forkGame,
   type GameState,
   type LegalAction,
   type Player,
@@ -595,6 +597,104 @@ function App() {
                   <div><strong>Action:</strong> {formatActionName(currentStep.action)}</div>
                   {currentStep.dice_roll && <div><strong>Dice Roll:</strong> {currentStep.dice_roll}</div>}
                   <div><strong>Timestamp:</strong> {currentStep.timestamp}</div>
+                  <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    <button
+                      onClick={async () => {
+                        if (!displayState) return
+                        setLoading(true)
+                        setError(null)
+                        try {
+                          // Fork the game to create a new copy
+                          const forkedGame = await forkGame(replayData.game_id, displayState)
+                          // Load the forked game state
+                          setGameState(forkedGame.initial_state)
+                          // Set player ID to current player
+                          if (forkedGame.initial_state.phase === 'playing') {
+                            const currentPlayer = forkedGame.initial_state.players[forkedGame.initial_state.current_player_index]
+                            setPlayerId(currentPlayer.id)
+                          } else {
+                            const setupPlayer = forkedGame.initial_state.players[forkedGame.initial_state.setup_phase_player_index]
+                            setPlayerId(setupPlayer.id)
+                          }
+                          // Switch to game view
+                          setView('game')
+                          // Show success message
+                          alert(`Game forked! New game ID: ${forkedGame.game_id}\n\nOriginal game preserved. You can now play from this point.`)
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : 'Failed to fork game')
+                        } finally {
+                          setLoading(false)
+                        }
+                      }}
+                      disabled={loading || !displayState}
+                      className="action-button"
+                      style={{ 
+                        backgroundColor: '#4CAF50',
+                        color: 'white',
+                        padding: '0.75rem 1.5rem',
+                        fontSize: '1rem',
+                        fontWeight: 'bold'
+                      }}
+                    >
+                      {loading ? 'Forking...' : '🔀 Fork from here (Recommended)'}
+                    </button>
+                    <div style={{ 
+                      fontSize: '0.9rem', 
+                      color: '#666',
+                      fontStyle: 'italic'
+                    }}>
+                      Creates a new game copy. Original game is preserved.
+                    </div>
+                    <div style={{ 
+                      marginTop: '0.5rem',
+                      padding: '0.75rem',
+                      backgroundColor: '#fff3cd',
+                      border: '1px solid #ffc107',
+                      borderRadius: '4px',
+                      fontSize: '0.85rem'
+                    }}>
+                      <strong>⚠️ Advanced:</strong> You can also restore the original game (modifies it):
+                    </div>
+                    <button
+                      onClick={async () => {
+                        if (!displayState) return
+                        if (!confirm('This will modify the original game. Continue?')) return
+                        setLoading(true)
+                        setError(null)
+                        try {
+                          // Restore the game state to this step's state
+                          await restoreGameState(replayData.game_id, displayState)
+                          // Load the restored game state
+                          const restoredState = await getGameState(replayData.game_id)
+                          setGameState(restoredState)
+                          // Set player ID to current player
+                          if (restoredState.phase === 'playing') {
+                            const currentPlayer = restoredState.players[restoredState.current_player_index]
+                            setPlayerId(currentPlayer.id)
+                          } else {
+                            const setupPlayer = restoredState.players[restoredState.setup_phase_player_index]
+                            setPlayerId(setupPlayer.id)
+                          }
+                          // Switch to game view
+                          setView('game')
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : 'Failed to restore game state')
+                        } finally {
+                          setLoading(false)
+                        }
+                      }}
+                      disabled={loading || !displayState}
+                      className="action-button"
+                      style={{ 
+                        backgroundColor: '#ff9800',
+                        color: 'white',
+                        padding: '0.5rem 1rem',
+                        fontSize: '0.9rem'
+                      }}
+                    >
+                      {loading ? 'Restoring...' : '▶ Restore original game (modifies it)'}
+                    </button>
+                  </div>
                 </div>
               )}
 
