@@ -43,7 +43,8 @@ header h1 {
   background-color: #1976D2;
 }
 
-.auto-refresh-toggle {
+.auto-refresh-toggle,
+.dev-mode-toggle {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -52,8 +53,20 @@ header h1 {
   cursor: pointer;
 }
 
-.auto-refresh-toggle input[type="checkbox"] {
+.auto-refresh-toggle input[type="checkbox"],
+.dev-mode-toggle input[type="checkbox"] {
   cursor: pointer;
+}
+
+.dev-mode-toggle {
+  background-color: #fff3cd;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  border: 1px solid #ffc107;
+}
+
+.dev-mode-toggle input[type="checkbox"]:checked ~ * {
+  font-weight: bold;
 }
 
 main {
@@ -371,11 +384,33 @@ button.secondary:hover:not(:disabled) {
 
 .player-info,
 .legal-actions,
-.all-players {
+.all-players,
+.dev-mode-controls {
   background-color: #fff;
   border: 1px solid #ddd;
   border-radius: 4px;
   padding: 1.5rem;
+}
+
+.dev-mode-controls {
+  background-color: #fff3cd;
+  border-color: #ffc107;
+}
+
+.dev-mode-controls h2 {
+  margin-top: 0;
+  color: #856404;
+  font-size: 1.2rem;
+}
+
+.dev-mode-warning {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background-color: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 4px;
+  color: #856404;
+  font-size: 0.9rem;
 }
 
 .player-info h2,
@@ -430,6 +465,18 @@ button.secondary:hover:not(:disabled) {
 .player-card.current {
   background-color: #e3f2fd;
   border-color: #2196F3;
+}
+
+.player-card.active-turn {
+  background-color: #fff9c4;
+  border-color: #fbc02d;
+  font-weight: 500;
+}
+
+.turn-indicator {
+  color: #f57c00;
+  font-weight: bold;
+  font-size: 0.9em;
 }
 
 .error {

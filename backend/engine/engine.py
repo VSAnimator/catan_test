@@ -62,6 +62,7 @@ class Player:
     """Represents a player in the game."""
     id: str
     name: str
+    color: str = "blue"  # Player color for UI display
     resources: Dict[ResourceType, int] = field(default_factory=lambda: {
         ResourceType.WOOD: 0,
         ResourceType.BRICK: 0,

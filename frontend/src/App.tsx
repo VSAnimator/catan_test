@@ -23,6 +23,7 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(false)
+  const [devMode, setDevMode] = useState(false)
   const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null)
   
   // For create/join game
@@ -41,6 +42,21 @@ function App() {
       fetchLegalActions()
     }
   }, [gameState, playerId, view])
+
+  // Auto-switch to current player in dev mode when turn changes
+  useEffect(() => {
+    if (devMode && gameState && view === 'game') {
+      let currentPlayer: Player | null = null
+      if (gameState.phase === 'playing') {
+        currentPlayer = gameState.players[gameState.current_player_index] || null
+      } else {
+        currentPlayer = gameState.players[gameState.setup_phase_player_index] || null
+      }
+      if (currentPlayer && currentPlayer.id !== playerId) {
+        setPlayerId(currentPlayer.id)
+      }
+    }
+  }, [gameState, devMode, view, playerId])
 
   // Auto-refresh polling
   useEffect(() => {
@@ -90,9 +106,8 @@ function App() {
     setLoading(true)
     setError(null)
     try {
-      const playerNames = Array.from({ length: numPlayers }, (_, i) => 
-        playerNameInput || `Player ${i + 1}`
-      )
+      // Generate random names on backend, so just pass empty or same name
+      const playerNames = Array.from({ length: numPlayers }, () => playerNameInput || '')
       
       const response = await apiCreateGame({ player_names: playerNames })
       setGameState(response.initial_state)
@@ -315,16 +330,24 @@ function App() {
             return false
           })
           
+          // Get player color if owned
+          const ownerPlayer = intersection.owner ? state.players.find(p => p.id === intersection.owner) : null
+          const ownerColor = ownerPlayer?.color || null
+          
           return (
           <div
             key={intersection.id}
             className={`intersection ${intersection.owner === highlightPlayerId ? 'owned-by-me' : intersection.owner ? 'owned' : ''} ${hasLegalAction ? 'clickable' : ''}`}
             style={{
               left: `${x}px`,
-              top: `${y}px`
+              top: `${y}px`,
+              ...(ownerColor && {
+                backgroundColor: ownerColor,
+                borderColor: ownerColor
+              })
             }}
             onClick={() => handleIntersectionClick(intersection.id)}
-            title={`Intersection ${intersection.id}${intersection.owner ? ` (${intersection.owner})` : ''}${intersection.building_type ? ` - ${intersection.building_type}` : ''}${hasLegalAction ? ' - Click to build' : ''}`}
+            title={`Intersection ${intersection.id}${intersection.owner ? ` (${ownerPlayer?.name || intersection.owner})` : ''}${intersection.building_type ? ` - ${intersection.building_type}` : ''}${hasLegalAction ? ' - Click to build' : ''}`}
           >
             {intersection.building_type === 'city' ? '🏰' : intersection.building_type === 'settlement' ? '🏠' : '○'}
           </div>
@@ -358,6 +381,10 @@ function App() {
             return false
           })
           
+          // Get player color if owned
+          const ownerPlayer = road.owner ? state.players.find(p => p.id === road.owner) : null
+          const ownerColor = ownerPlayer?.color || null
+          
           return (
             <div
               key={road.id}
@@ -367,10 +394,13 @@ function App() {
                 top: `${y1}px`,
                 width: `${distance}px`,
                 transform: `rotate(${angle}deg)`,
-                transformOrigin: '0 50%'
+                transformOrigin: '0 50%',
+                ...(ownerColor && {
+                  backgroundColor: ownerColor
+                })
               }}
               onClick={() => handleRoadClick(road.id)}
-              title={`Road ${road.id}${road.owner ? ` (${road.owner})` : ''}${hasLegalAction ? ' - Click to build' : ''}`}
+              title={`Road ${road.id}${road.owner ? ` (${ownerPlayer?.name || road.owner})` : ''}${hasLegalAction ? ' - Click to build' : ''}`}
             />
           )
         })}
@@ -402,12 +432,12 @@ function App() {
               </div>
               <div className="form-group">
                 <label>
-                  Your Name (optional):
+                  Your Name (optional - players will get random names):
                   <input
                     type="text"
                     value={playerNameInput}
                     onChange={(e) => setPlayerNameInput(e.target.value)}
-                    placeholder="Player 1"
+                    placeholder="Leave empty for random names"
                   />
                 </label>
               </div>
@@ -593,7 +623,13 @@ function App() {
                       <div className="all-players">
                         <h2>Players</h2>
                         {displayState.players.map(player => (
-                          <div key={player.id} className="player-card">
+                          <div 
+                            key={player.id} 
+                            className="player-card"
+                            style={{
+                              borderLeft: `4px solid ${player.color || '#ccc'}`
+                            }}
+                          >
                             <div><strong>{player.name}</strong> ({player.id})</div>
                             <div>VP: {player.victory_points}</div>
                             <div>Resources: {Object.values(player.resources).reduce((a, b) => a + b, 0)}</div>
@@ -622,6 +658,14 @@ function App() {
       <header>
         <h1>Catan Game</h1>
         <div className="header-actions">
+          <label className="dev-mode-toggle">
+            <input
+              type="checkbox"
+              checked={devMode}
+              onChange={(e) => setDevMode(e.target.checked)}
+            />
+            🛠️ Dev Mode
+          </label>
           <button 
             onClick={refreshGameState} 
             disabled={loading || !gameState}
@@ -676,8 +720,39 @@ function App() {
           </div>
 
           <div className="game-sidebar">
+            {devMode && gameState && activePlayer && (
+              <div className="dev-mode-controls">
+                <h2>🛠️ Dev Mode - Switch to Current Player</h2>
+                <div className="form-group">
+                  <label>
+                    Play as:
+                    <select
+                      value={playerId}
+                      onChange={(e) => setPlayerId(e.target.value)}
+                    >
+                      <option key={activePlayer.id} value={activePlayer.id}>
+                        {activePlayer.name} ({activePlayer.id}) [Current Turn]
+                      </option>
+                    </select>
+                  </label>
+                </div>
+                <div className="dev-mode-warning">
+                  ℹ️ Dev mode allows you to switch to the current player's turn. Turn validation is still enforced.
+                </div>
+                {activePlayer.id !== playerId && (
+                  <button 
+                    onClick={() => setPlayerId(activePlayer.id)}
+                    className="action-button"
+                    style={{ marginTop: '0.5rem' }}
+                  >
+                    Switch to {activePlayer.name}
+                  </button>
+                )}
+              </div>
+            )}
+
             {currentPlayer && (
-              <div className="player-info">
+              <div className="player-info" style={{ borderLeft: `4px solid ${currentPlayer.color || '#ccc'}` }}>
                 <h2>Your Status ({currentPlayer.name})</h2>
                 <div className="info-section">
                   <div><strong>Victory Points:</strong> {currentPlayer.victory_points}</div>
@@ -739,8 +814,17 @@ function App() {
             <div className="all-players">
               <h2>All Players</h2>
               {gameState?.players.map(player => (
-                <div key={player.id} className={`player-card ${player.id === playerId ? 'current' : ''}`}>
-                  <div><strong>{player.name}</strong> ({player.id})</div>
+                <div 
+                  key={player.id} 
+                  className={`player-card ${player.id === playerId ? 'current' : ''} ${activePlayer?.id === player.id ? 'active-turn' : ''}`}
+                  style={{
+                    borderLeft: `4px solid ${player.color || '#ccc'}`
+                  }}
+                >
+                  <div>
+                    <strong>{player.name}</strong> ({player.id})
+                    {activePlayer?.id === player.id && <span className="turn-indicator"> [Current Turn]</span>}
+                  </div>
                   <div>VP: {player.victory_points}</div>
                   <div>Resources: {Object.values(player.resources).reduce((a, b) => a + b, 0)}</div>
                 </div>

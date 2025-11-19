@@ -72,6 +72,7 @@ def serialize_player(player: Player) -> Dict[str, Any]:
     return {
         "id": player.id,
         "name": player.name,
+        "color": player.color,
         "resources": {rt.value: count for rt, count in player.resources.items()},
         "victory_points": player.victory_points,
         "roads_built": player.roads_built,
@@ -98,6 +99,7 @@ def deserialize_player(data: Dict[str, Any]) -> Player:
     return Player(
         id=data["id"],
         name=data["name"],
+        color=data.get("color", "blue"),  # Default to blue for backwards compatibility
         resources=resources,
         victory_points=data.get("victory_points", 0),
         roads_built=data.get("roads_built", 0),

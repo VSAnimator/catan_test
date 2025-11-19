@@ -3,6 +3,7 @@ const API_BASE = 'http://localhost:8000/api'
 export interface Player {
   id: string
   name: string
+  color: string
   resources: Record<string, number>
   victory_points: number
   roads_built: number

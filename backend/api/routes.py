@@ -7,6 +7,33 @@ import uuid
 import random
 import json
 
+# Random name generators
+FIRST_NAMES = [
+    "Alex", "Blake", "Casey", "Drew", "Emery", "Finley", "Gray", "Harper",
+    "Jordan", "Kai", "Logan", "Morgan", "Parker", "Quinn", "Riley", "Sage",
+    "Taylor", "Avery", "Cameron", "Dakota", "Ellis", "Hayden", "Jamie", "Kendall",
+    "Lane", "Marley", "Noah", "Ocean", "Peyton", "Reese", "River", "Skylar"
+]
+
+LAST_NAMES = [
+    "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis",
+    "Rodriguez", "Martinez", "Hernandez", "Lopez", "Wilson", "Anderson", "Thomas", "Taylor",
+    "Moore", "Jackson", "Martin", "Lee", "Thompson", "White", "Harris", "Clark",
+    "Lewis", "Robinson", "Walker", "Young", "Allen", "King", "Wright", "Scott"
+]
+
+PLAYER_COLORS = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#FFA07A", "#98D8C8", "#F7DC6F"]
+
+def generate_random_name() -> str:
+    """Generate a random player name."""
+    first = random.choice(FIRST_NAMES)
+    last = random.choice(LAST_NAMES)
+    return f"{first} {last}"
+
+def get_player_color(index: int) -> str:
+    """Get a color for a player based on their index."""
+    return PLAYER_COLORS[index % len(PLAYER_COLORS)]
+
 from engine import (
     GameState,
     Player,
@@ -92,10 +119,37 @@ async def create_game(request: CreateGameRequest):
     if rng_seed is not None:
         random.seed(rng_seed)
     
-    # Create players
+    # Generate random names for players
+    # If all names are the same (or empty), generate unique random names
+    num_players = len(request.player_names)
+    if len(set(request.player_names)) <= 1:
+        # All names are the same or empty, generate unique random names
+        final_names = []
+        used_names = set()
+        for _ in range(num_players):
+            name = generate_random_name()
+            # Ensure uniqueness
+            while name in used_names:
+                name = generate_random_name()
+            used_names.add(name)
+            final_names.append(name)
+    else:
+        # Use provided names, but ensure uniqueness
+        used_names = set()
+        final_names = []
+        for name in request.player_names:
+            if not name or name in used_names:
+                # Generate a random name if empty or duplicate
+                name = generate_random_name()
+                while name in used_names:
+                    name = generate_random_name()
+            used_names.add(name)
+            final_names.append(name)
+    
+    # Create players with colors
     players = [
-        Player(id=f"player_{i}", name=name)
-        for i, name in enumerate(request.player_names)
+        Player(id=f"player_{i}", name=final_names[i], color=get_player_color(i))
+        for i in range(len(final_names))
     ]
     
     # Create initial game state
@@ -120,8 +174,8 @@ async def create_game(request: CreateGameRequest):
     
     # Save game to database with initial state
     metadata = {
-        "player_names": request.player_names,
-        "num_players": len(request.player_names),
+        "player_names": final_names,
+        "num_players": len(final_names),
     }
     create_game_in_db(
         game_id,
