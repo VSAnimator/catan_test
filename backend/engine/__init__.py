@@ -1,0 +1,62 @@
+"""
+Pure Python game engine for Catan-like game.
+No I/O, no globals - pure functional game logic.
+"""
+from .engine import (
+    ResourceType,
+    Tile,
+    NumberToken,
+    Intersection,
+    RoadEdge,
+    Player,
+    GameState,
+    Action,
+    ActionPayload,
+    BuildRoadPayload,
+    BuildSettlementPayload,
+    BuildCityPayload,
+    PlayDevCardPayload,
+    TradeBankPayload,
+    TradePlayerPayload,
+)
+from .serialization import (
+    serialize_game_state,
+    deserialize_game_state,
+    serialize_action,
+    deserialize_action,
+    serialize_action_payload,
+    deserialize_action_payload,
+    legal_actions,
+    state_to_text,
+    legal_actions_to_text,
+    parse_action_from_text,
+)
+
+__all__ = [
+    "ResourceType",
+    "Tile",
+    "NumberToken",
+    "Intersection",
+    "RoadEdge",
+    "Player",
+    "GameState",
+    "Action",
+    "ActionPayload",
+    "BuildRoadPayload",
+    "BuildSettlementPayload",
+    "BuildCityPayload",
+    "PlayDevCardPayload",
+    "TradeBankPayload",
+    "TradePlayerPayload",
+    "serialize_game_state",
+    "deserialize_game_state",
+    "serialize_action",
+    "deserialize_action",
+    "serialize_action_payload",
+    "deserialize_action_payload",
+    "legal_actions",
+    "state_to_text",
+    "legal_actions_to_text",
+    "parse_action_from_text",
+]
+
