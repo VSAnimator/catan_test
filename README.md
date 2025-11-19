@@ -15,11 +15,11 @@ A Catan-like game implementation designed for human + LLM play and research. Thi
 
 The backend is structured in two layers:
 
-1. **Game Engine** (`backend/game_engine/`)
+1. **Game Engine** (`backend/engine/`)
    - Pure Python game logic with no web framework dependencies
-   - Contains core game classes: `Game`, `Player`, `GameState`, `ResourceType`
+   - Contains core game classes: `GameState`, `Player`, `Tile`, `Intersection`, `RoadEdge`, `ResourceType`
    - Can be used independently or imported by other modules
-   - Located in `backend/game_engine/game.py`
+   - Located in `backend/engine/engine.py` and `backend/engine/serialization.py`
 
 2. **REST API Layer** (`backend/api/`)
    - FastAPI-based REST API that wraps the game engine
@@ -101,12 +101,14 @@ cd frontend && npm run dev
 ```
 catan_agent/
 ├── backend/
-│   ├── game_engine/          # Pure game engine (no web deps)
+│   ├── engine/               # Pure game engine (no web deps)
 │   │   ├── __init__.py
-│   │   └── game.py           # Core game logic
+│   │   ├── engine.py         # Core game logic
+│   │   └── serialization.py  # Serialization utilities
 │   ├── api/                  # REST API layer
 │   │   ├── __init__.py
-│   │   └── routes.py         # API endpoints
+│   │   ├── routes.py         # API endpoints
+│   │   └── database.py       # Database utilities
 │   ├── main.py               # FastAPI app entry point
 │   └── requirements.txt      # Python dependencies
 ├── frontend/

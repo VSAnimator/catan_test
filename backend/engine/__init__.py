@@ -18,6 +18,9 @@ from .engine import (
     PlayDevCardPayload,
     TradeBankPayload,
     TradePlayerPayload,
+    MoveRobberPayload,
+    StealResourcePayload,
+    DiscardResourcesPayload,
 )
 from .serialization import (
     serialize_game_state,
@@ -48,6 +51,9 @@ __all__ = [
     "PlayDevCardPayload",
     "TradeBankPayload",
     "TradePlayerPayload",
+    "MoveRobberPayload",
+    "StealResourcePayload",
+    "DiscardResourcesPayload",
     "serialize_game_state",
     "deserialize_game_state",
     "serialize_action",
