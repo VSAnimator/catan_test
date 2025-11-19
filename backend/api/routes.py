@@ -273,20 +273,34 @@ async def act(game_id: str, request: ActRequest):
         raise HTTPException(status_code=400, detail=f"Player {request.player_id} not found in game")
     
     # Verify it's the player's turn (if in playing phase)
-    if current_state.phase == "playing":
-        current_player = current_state.players[current_state.current_player_index]
-        if current_player.id != request.player_id:
-            raise HTTPException(
-                status_code=400,
-                detail=f"It's not {request.player_id}'s turn. Current player: {current_player.id}"
-            )
-    elif current_state.phase == "setup":
-        setup_player = current_state.players[current_state.setup_phase_player_index]
-        if setup_player.id != request.player_id:
-            raise HTTPException(
-                status_code=400,
-                detail=f"It's not {request.player_id}'s turn in setup. Current player: {setup_player.id}"
-            )
+    # Exception: When a 7 is rolled, any player with 8+ resources can discard
+    action_type = None
+    if "type" in request.action:
+        action_type = request.action.get("type")
+    
+    allow_out_of_turn = False
+    if current_state.phase == "playing" and current_state.dice_roll == 7:
+        if action_type == "discard_resources":
+            # Any player can discard when 7 is rolled
+            player = next((p for p in current_state.players if p.id == request.player_id), None)
+            if player and sum(player.resources.values()) >= 8:
+                allow_out_of_turn = True
+    
+    if not allow_out_of_turn:
+        if current_state.phase == "playing":
+            current_player = current_state.players[current_state.current_player_index]
+            if current_player.id != request.player_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"It's not {request.player_id}'s turn. Current player: {current_player.id}"
+                )
+        elif current_state.phase == "setup":
+            setup_player = current_state.players[current_state.setup_phase_player_index]
+            if setup_player.id != request.player_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"It's not {request.player_id}'s turn in setup. Current player: {setup_player.id}"
+                )
     
     # Deserialize action
     try:
@@ -337,7 +351,8 @@ async def act(game_id: str, request: ActRequest):
     
     # Apply step
     try:
-        new_state = current_state.step(action, payload)
+        # Pass player_id for actions that can be done out of turn (like DISCARD_RESOURCES)
+        new_state = current_state.step(action, payload, player_id=request.player_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid action: {str(e)}")
     

@@ -24,6 +24,9 @@ from .engine import (
     PlayDevCardPayload,
     TradeBankPayload,
     TradePlayerPayload,
+    MoveRobberPayload,
+    StealResourcePayload,
+    DiscardResourcesPayload,
 )
 
 
@@ -44,6 +47,8 @@ def serialize_game_state(state: GameState) -> Dict[str, Any]:
         "setup_round": state.setup_round,
         "setup_phase_player_index": state.setup_phase_player_index,
         "robber_tile_id": state.robber_tile_id,
+        "waiting_for_robber_move": state.waiting_for_robber_move,
+        "waiting_for_robber_steal": state.waiting_for_robber_steal,
     }
 
 
@@ -64,6 +69,8 @@ def deserialize_game_state(data: Dict[str, Any]) -> GameState:
         setup_round=data.get("setup_round", 0),
         setup_phase_player_index=data.get("setup_phase_player_index", 0),
         robber_tile_id=data.get("robber_tile_id"),
+        waiting_for_robber_move=data.get("waiting_for_robber_move", False),
+        waiting_for_robber_steal=data.get("waiting_for_robber_steal", False),
     )
 
 
@@ -225,6 +232,21 @@ def serialize_action_payload(payload: ActionPayload) -> Dict[str, Any]:
             "receive_resource": payload.receive_resource.value,
             "receive_amount": payload.receive_amount,
         }
+    elif isinstance(payload, MoveRobberPayload):
+        return {
+            "type": "MoveRobberPayload",
+            "tile_id": payload.tile_id,
+        }
+    elif isinstance(payload, StealResourcePayload):
+        return {
+            "type": "StealResourcePayload",
+            "other_player_id": payload.other_player_id,
+        }
+    elif isinstance(payload, DiscardResourcesPayload):
+        return {
+            "type": "DiscardResourcesPayload",
+            "resources": {rt.value: count for rt, count in payload.resources.items()},
+        }
     else:
         raise ValueError(f"Unknown payload type: {type(payload)}")
 
@@ -256,6 +278,16 @@ def deserialize_action_payload(data: Dict[str, Any]) -> ActionPayload:
             receive_resource=ResourceType(data["receive_resource"]),
             receive_amount=data["receive_amount"],
         )
+    elif payload_type == "MoveRobberPayload":
+        return MoveRobberPayload(tile_id=data["tile_id"])
+    elif payload_type == "StealResourcePayload":
+        return StealResourcePayload(other_player_id=data["other_player_id"])
+    elif payload_type == "DiscardResourcesPayload":
+        resources = {
+            ResourceType(rt): count
+            for rt, count in data.get("resources", {}).items()
+        }
+        return DiscardResourcesPayload(resources=resources)
     else:
         raise ValueError(f"Unknown payload type: {payload_type}")
 
@@ -281,8 +313,16 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
         else state.players[state.setup_phase_player_index].id == player_id
     )
     
-    if not is_current_player:
-        return legal  # Not this player's turn
+    # Special case: when a 7 is rolled, any player with 8+ resources can discard
+    # (even if it's not their turn)
+    can_discard = False
+    if state.phase == "playing" and state.dice_roll == 7:
+        player = next((p for p in state.players if p.id == player_id), None)
+        if player and sum(player.resources.values()) >= 8:
+            can_discard = True
+    
+    if not is_current_player and not can_discard:
+        return legal  # Not this player's turn (unless they can discard)
     
     if state.phase == "setup":
         # Setup phase actions
@@ -318,9 +358,63 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
         if state.dice_roll is None:
             # Must roll dice first
             legal.append((Action.ROLL_DICE, None))
-        else:
+        elif state.dice_roll == 7:
+            # Handle rolling 7
+            # First phase: ALL players with 8+ resources must discard
+            # Check if ANY player needs to discard
+            any_player_needs_discard = False
+            for p in state.players:
+                if sum(p.resources.values()) >= 8:
+                    any_player_needs_discard = True
+                    break
+            
+            if any_player_needs_discard:
+                # This player can discard if they have 8+ resources (even if not their turn)
+                total_resources = sum(player.resources.values())
+                if total_resources >= 8:
+                    # Player must discard half their resources (rounded down)
+                    legal.append((Action.DISCARD_RESOURCES, None))  # Payload will be provided by frontend
+                # Don't show other actions while discarding
+                return legal
+            
+            # All discards done, handle robber phase
+            if state.waiting_for_robber_move:
+                # All discards done, now ONLY the player who rolled the 7 can move robber
+                if is_current_player:
+                    # Can move robber to any tile except current
+                    for tile in state.tiles:
+                        if tile.id != state.robber_tile_id:
+                            legal.append((Action.MOVE_ROBBER, MoveRobberPayload(tile.id)))
+                # Don't show other actions while waiting to move robber
+                return legal
+            
+            if state.waiting_for_robber_steal:
+                # After moving robber, can steal from players on that tile
+                if is_current_player:
+                    robber_tile = next((t for t in state.tiles if t.id == state.robber_tile_id), None)
+                    if robber_tile:
+                        # Find players with buildings on this tile
+                        players_on_tile = set()
+                        for intersection in state.intersections:
+                            if (robber_tile.id in intersection.adjacent_tiles and 
+                                intersection.owner and 
+                                intersection.building_type):
+                                if intersection.owner != player_id:
+                                    players_on_tile.add(intersection.owner)
+                        
+                        for other_player_id in players_on_tile:
+                            other_player = next((p for p in state.players if p.id == other_player_id), None)
+                            if other_player and sum(other_player.resources.values()) > 0:
+                                legal.append((Action.STEAL_RESOURCE, StealResourcePayload(other_player_id)))
+                # Don't show other actions while waiting to steal
+                return legal
+            
+            # If we get here, robber phase is complete - fall through to normal turn actions
+        
+        # Normal turn actions (after dice roll, or after completing robber phase on 7)
+        if state.dice_roll is not None and is_current_player:
             # Can build road
-            if (player.resources[ResourceType.WOOD] >= 1 and 
+            if (player.resources[ResourceType.WOOD] >= 1 and  
                 player.resources[ResourceType.BRICK] >= 1):
                 for road_edge in state.road_edges:
                     if not road_edge.owner:
@@ -416,8 +510,20 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
                                         receive_amount=1,
                                     )))
             
-            # Can end turn
-            legal.append((Action.END_TURN, None))
+            # Can end turn (but not if waiting for robber actions, or if 7 was rolled and anyone needs to discard)
+            if state.dice_roll == 7:
+                # Check if anyone still needs to discard
+                any_player_needs_discard = False
+                for p in state.players:
+                    if sum(p.resources.values()) >= 8:
+                        any_player_needs_discard = True
+                        break
+                
+                # Can only end turn if no one needs to discard AND robber actions are complete
+                if not any_player_needs_discard and not state.waiting_for_robber_move and not state.waiting_for_robber_steal:
+                    legal.append((Action.END_TURN, None))
+            elif not state.waiting_for_robber_move and not state.waiting_for_robber_steal:
+                legal.append((Action.END_TURN, None))
     
     return legal
 

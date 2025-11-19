@@ -95,11 +95,18 @@ class GameState:
     setup_round: int = 0  # 0 = first round (clockwise), 1 = second round (counter-clockwise)
     setup_phase_player_index: int = 0  # Current player in setup phase
     robber_tile_id: Optional[int] = None  # Tile ID where robber is located (None = desert)
+    waiting_for_robber_move: bool = False  # True if robber needs to be moved (after 7 or knight)
+    waiting_for_robber_steal: bool = False  # True if resource needs to be stolen (after moving robber)
     
-    def step(self, action: 'Action', payload: Optional['ActionPayload'] = None) -> 'GameState':
+    def step(self, action: 'Action', payload: Optional['ActionPayload'] = None, player_id: Optional[str] = None) -> 'GameState':
         """
         Pure function that takes an action and returns a new GameState.
         No side effects, no I/O, no globals.
+        
+        Args:
+            action: The action to perform
+            payload: Optional payload for the action
+            player_id: Optional player ID (used for actions like DISCARD_RESOURCES that can be done out of turn)
         """
         new_state = copy.deepcopy(self)
         
@@ -127,13 +134,23 @@ class GameState:
             return self._handle_setup_place_settlement(new_state, payload)
         elif action == Action.SETUP_PLACE_ROAD:
             return self._handle_setup_place_road(new_state, payload)
+        elif action == Action.MOVE_ROBBER:
+            return self._handle_move_robber(new_state, payload)
+        elif action == Action.STEAL_RESOURCE:
+            return self._handle_steal_resource(new_state, payload)
+        elif action == Action.DISCARD_RESOURCES:
+            return self._handle_discard_resources(new_state, payload, player_id)
         else:
             raise ValueError(f"Unknown action: {action}")
     
     def _handle_roll_dice(self, new_state: 'GameState') -> 'GameState':
-        """Handle dice roll - distribute resources based on number."""
+        """Handle dice roll - distribute resources based on number, or handle 7."""
         if new_state.phase != "playing":
             raise ValueError("Can only roll dice during playing phase")
+        
+        # Can't roll if already rolled this turn
+        if new_state.dice_roll is not None:
+            raise ValueError("Dice already rolled this turn")
         
         # Roll two dice (2-12)
         die1 = random.randint(1, 6)
@@ -141,32 +158,52 @@ class GameState:
         roll = die1 + die2
         new_state.dice_roll = roll
         
-        # Distribute resources if not 7
-        if roll != 7:
+        # Handle rolling 7
+        if roll == 7:
+            # Don't set waiting_for_robber_move yet - first all players must discard if needed
+            # The legal actions will check if anyone needs to discard
+            pass
+        else:
+            # Distribute resources if not 7
             self._distribute_resources(new_state, roll)
         
         return new_state
     
     def _distribute_resources(self, state: 'GameState', roll: int):
-        """Distribute resources to players based on dice roll."""
+        """Distribute resources to players based on dice roll.
+        
+        Resources are additive - if a player has multiple buildings on a tile,
+        they get resources for each building (1 per settlement, 2 per city).
+        """
         for tile in state.tiles:
             # Skip if robber is on this tile
             if state.robber_tile_id == tile.id:
                 continue
                 
             if tile.number_token and tile.number_token.value == roll and tile.resource_type:
-                # Find intersections on this tile that have settlements/cities
+                # Count all buildings on this tile per player
+                player_resources = {}  # player_id -> amount to give
+                
+                # Find all intersections on this tile that have settlements/cities
                 for intersection in state.intersections:
                     # Check if this intersection is adjacent to this tile
                     if tile.id in intersection.adjacent_tiles:
                         # Check if intersection has a building
                         if intersection.owner and intersection.building_type:
-                            player = next(p for p in state.players if p.id == intersection.owner)
-                            # Give resources based on building type
+                            player_id = intersection.owner
+                            if player_id not in player_resources:
+                                player_resources[player_id] = 0
+                            
+                            # Add resources based on building type (additive)
                             if intersection.building_type == "settlement":
-                                player.resources[tile.resource_type] += 1
+                                player_resources[player_id] += 1
                             elif intersection.building_type == "city":
-                                player.resources[tile.resource_type] += 2
+                                player_resources[player_id] += 2
+                
+                # Distribute the resources
+                for player_id, amount in player_resources.items():
+                    player = next(p for p in state.players if p.id == player_id)
+                    player.resources[tile.resource_type] += amount
     
     def _handle_build_road(self, new_state: 'GameState', payload: Optional['ActionPayload']) -> 'GameState':
         """Handle building a road."""
@@ -340,6 +377,8 @@ class GameState:
             current_player.knights_played += 1
             # Check for largest army
             self._check_largest_army(new_state, current_player)
+            # Knight card requires moving robber and stealing (handled by separate actions)
+            new_state.waiting_for_robber_move = True
         # Other cards (road_building, year_of_plenty, monopoly) would need additional payload
         
         return new_state
@@ -387,6 +426,162 @@ class GameState:
         current_player.resources[payload.receive_resource] += payload.receive_amount
         other_player.resources[payload.give_resource] += payload.give_amount
         other_player.resources[payload.receive_resource] -= payload.receive_amount
+        
+        return new_state
+    
+    def _handle_discard_resources(self, new_state: 'GameState', payload: Optional['ActionPayload'], player_id: Optional[str] = None) -> 'GameState':
+        """Handle discarding resources when rolling 7 with 8+ resources.
+        
+        Note: When a 7 is rolled, ANY player with 8+ resources can discard,
+        not just the current player. This allows all players to discard before
+        the robber is moved.
+        
+        Args:
+            player_id: The ID of the player discarding. If None, uses current player.
+        """
+        if not payload or not isinstance(payload, DiscardResourcesPayload):
+            raise ValueError("DISCARD_RESOURCES requires DiscardResourcesPayload")
+        
+        # Find the player discarding (could be current player or another player)
+        if player_id:
+            current_player = next((p for p in new_state.players if p.id == player_id), None)
+            if not current_player:
+                raise ValueError(f"Player {player_id} not found")
+        else:
+            current_player = new_state.players[new_state.current_player_index]
+        
+        # Calculate total resources
+        total_resources = sum(current_player.resources.values())
+        
+        # Must have 8+ resources to discard
+        if total_resources < 8:
+            raise ValueError("Must have 8+ resources to discard")
+        
+        # Calculate how many to discard (half, rounded down)
+        discard_count = total_resources // 2
+        
+        # Verify the discard matches the required amount
+        total_discarded = sum(payload.resources.values())
+        if total_discarded != discard_count:
+            raise ValueError(f"Must discard exactly {discard_count} resources (half of {total_resources})")
+        
+        # Verify player has enough of each resource being discarded
+        for resource, amount in payload.resources.items():
+            if current_player.resources[resource] < amount:
+                raise ValueError(f"Insufficient {resource.value} to discard")
+        
+        # Discard the resources
+        for resource, amount in payload.resources.items():
+            current_player.resources[resource] -= amount
+        
+        # After discarding, check if we can proceed to robber move
+        # Only the player who rolled the 7 can move the robber
+        if new_state.dice_roll == 7:
+            # Check if anyone still needs to discard
+            any_player_needs_discard = False
+            for p in new_state.players:
+                if sum(p.resources.values()) >= 8:
+                    any_player_needs_discard = True
+                    break
+            
+            # If no one needs to discard, allow robber move (only for the player who rolled)
+            if not any_player_needs_discard:
+                current_turn_player = new_state.players[new_state.current_player_index]
+                new_state.waiting_for_robber_move = True
+        
+        return new_state
+    
+    def _handle_move_robber(self, new_state: 'GameState', payload: Optional['ActionPayload']) -> 'GameState':
+        """Handle moving the robber to a new tile."""
+        if not payload or not isinstance(payload, MoveRobberPayload):
+            raise ValueError("MOVE_ROBBER requires MoveRobberPayload")
+        
+        # Verify tile exists
+        tile = next((t for t in new_state.tiles if t.id == payload.tile_id), None)
+        if not tile:
+            raise ValueError(f"Tile {payload.tile_id} not found")
+        
+        # Can't move robber to the same tile
+        if new_state.robber_tile_id == payload.tile_id:
+            raise ValueError("Robber is already on this tile")
+        
+        # Move the robber
+        new_state.robber_tile_id = payload.tile_id
+        new_state.waiting_for_robber_move = False
+        
+        # Check if there are players on this tile to steal from
+        robber_tile = next((t for t in new_state.tiles if t.id == payload.tile_id), None)
+        if robber_tile:
+            # Find players with buildings on this tile
+            players_on_tile = set()
+            for intersection in new_state.intersections:
+                if (robber_tile.id in intersection.adjacent_tiles and 
+                    intersection.owner and 
+                    intersection.building_type):
+                    if intersection.owner != new_state.players[new_state.current_player_index].id:
+                        players_on_tile.add(intersection.owner)
+            
+            if players_on_tile:
+                # Set flag that we're waiting for steal
+                new_state.waiting_for_robber_steal = True
+            else:
+                # No one to steal from, clear the flags
+                new_state.waiting_for_robber_steal = False
+        
+        return new_state
+    
+    def _handle_steal_resource(self, new_state: 'GameState', payload: Optional['ActionPayload']) -> 'GameState':
+        """Handle stealing a resource from another player."""
+        if not payload or not isinstance(payload, StealResourcePayload):
+            raise ValueError("STEAL_RESOURCE requires StealResourcePayload")
+        
+        current_player = new_state.players[new_state.current_player_index]
+        other_player = next((p for p in new_state.players if p.id == payload.other_player_id), None)
+        
+        if not other_player:
+            raise ValueError(f"Player {payload.other_player_id} not found")
+        
+        if other_player.id == current_player.id:
+            raise ValueError("Cannot steal from yourself")
+        
+        # Check if other player has any resources
+        total_resources = sum(other_player.resources.values())
+        if total_resources == 0:
+            raise ValueError(f"{other_player.name} has no resources to steal")
+        
+        # Check if other player has a settlement/city on the robber's tile
+        robber_tile = next((t for t in new_state.tiles if t.id == new_state.robber_tile_id), None)
+        if not robber_tile:
+            raise ValueError("Robber not placed on any tile")
+        
+        has_building_on_tile = False
+        for intersection in new_state.intersections:
+            if (robber_tile.id in intersection.adjacent_tiles and 
+                intersection.owner == other_player.id and 
+                intersection.building_type):
+                has_building_on_tile = True
+                break
+        
+        if not has_building_on_tile:
+            raise ValueError(f"{other_player.name} has no building on the robber's tile")
+        
+        # Randomly select a resource to steal
+        available_resources = []
+        for resource_type, amount in other_player.resources.items():
+            if amount > 0:
+                available_resources.extend([resource_type] * amount)
+        
+        if not available_resources:
+            raise ValueError(f"{other_player.name} has no resources to steal")
+        
+        stolen_resource = random.choice(available_resources)
+        
+        # Steal the resource
+        other_player.resources[stolen_resource] -= 1
+        current_player.resources[stolen_resource] += 1
+        
+        # Clear the waiting flag
+        new_state.waiting_for_robber_steal = False
         
         return new_state
     
@@ -484,10 +679,16 @@ class GameState:
         if new_state.phase != "playing":
             raise ValueError("Can only end turn during playing phase")
         
+        # Can't end turn if waiting for robber actions
+        if new_state.waiting_for_robber_move or new_state.waiting_for_robber_steal:
+            raise ValueError("Must complete robber move and steal before ending turn")
+        
         # Advance to next player
         new_state.current_player_index = (new_state.current_player_index + 1) % len(new_state.players)
         new_state.turn_number += 1
         new_state.dice_roll = None  # Reset dice roll
+        new_state.waiting_for_robber_move = False  # Clear flags
+        new_state.waiting_for_robber_steal = False
         
         return new_state
     
@@ -881,6 +1082,9 @@ class Action(Enum):
     START_GAME = "start_game"
     SETUP_PLACE_SETTLEMENT = "setup_place_settlement"
     SETUP_PLACE_ROAD = "setup_place_road"
+    MOVE_ROBBER = "move_robber"
+    STEAL_RESOURCE = "steal_resource"
+    DISCARD_RESOURCES = "discard_resources"
 
 
 # Action payload types
@@ -893,6 +1097,9 @@ ActionPayload = Union[
     'PlayDevCardPayload',
     'TradeBankPayload',
     'TradePlayerPayload',
+    'MoveRobberPayload',
+    'StealResourcePayload',
+    'DiscardResourcesPayload',
 ]
 
 
@@ -937,4 +1144,22 @@ class TradePlayerPayload:
     give_amount: int
     receive_resource: ResourceType
     receive_amount: int
+
+
+@dataclass(frozen=True)
+class MoveRobberPayload:
+    """Payload for MOVE_ROBBER action."""
+    tile_id: int
+
+
+@dataclass(frozen=True)
+class StealResourcePayload:
+    """Payload for STEAL_RESOURCE action."""
+    other_player_id: str
+
+
+@dataclass(frozen=True)
+class DiscardResourcesPayload:
+    """Payload for DISCARD_RESOURCES action."""
+    resources: Dict[ResourceType, int]  # Resources to discard
 

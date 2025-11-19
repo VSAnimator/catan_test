@@ -51,6 +51,8 @@ export interface GameState {
   setup_round: number
   setup_phase_player_index: number
   robber_tile_id: number | null
+  waiting_for_robber_move: boolean
+  waiting_for_robber_steal: boolean
 }
 
 export interface LegalAction {
@@ -65,6 +67,8 @@ export interface LegalAction {
     receive_resource?: string
     receive_amount?: number
     other_player_id?: string
+    tile_id?: number
+    resources?: Record<string, number>
   }
 }
 

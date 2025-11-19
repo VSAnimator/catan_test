@@ -159,15 +159,22 @@ function App() {
     setError(null)
     try {
       // Ensure action has proper structure
+      // The payload from backend includes a "type" field, but we need to pass it as-is
       const actionToSend: LegalAction = {
         type: action.type,
         payload: action.payload || undefined
       }
+      
+      // Debug: log the action being sent
+      console.log('Executing action:', actionToSend)
+      
       const newState = await postAction(gameState.game_id, playerId, actionToSend)
       setGameState(newState)
       // Legal actions will be refetched via useEffect
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error'
+      setError(errorMessage)
+      console.error('Action execution error:', err)
     } finally {
       setLoading(false)
     }
@@ -208,6 +215,22 @@ function App() {
     }
   }
 
+  const handleTileClick = (tileId: number) => {
+    if (!gameState || !playerId || loading) return
+    
+    // Find legal action for moving robber to this tile
+    const action = legalActions.find(a => {
+      if (a.type === 'move_robber') {
+        return a.payload?.tile_id === tileId
+      }
+      return false
+    })
+    
+    if (action) {
+      handleExecuteAction(action)
+    }
+  }
+
   const handleLoadReplay = async () => {
     if (!replayGameId.trim()) {
       setError('Please enter a game ID')
@@ -239,6 +262,9 @@ function App() {
       if (payload.road_edge_id !== undefined) {
         return `${type} on road edge ${payload.road_edge_id}`
       }
+      if (payload.tile_id !== undefined) {
+        return `${type} to tile ${payload.tile_id}`
+      }
       if (payload.card_type) {
         return `${type} (${payload.card_type})`
       }
@@ -246,7 +272,14 @@ function App() {
         return `${type}: Give ${payload.give_amount} ${payload.give_resource}, receive ${payload.receive_amount} ${payload.receive_resource}`
       }
       if (payload.other_player_id) {
-        return `${type} with ${payload.other_player_id}`
+        return `${type} from ${payload.other_player_id}`
+      }
+      if (payload.resources) {
+        const resourceList = Object.entries(payload.resources)
+          .filter(([_, count]) => count > 0)
+          .map(([resource, count]) => `${count} ${resource}`)
+          .join(', ')
+        return `${type}: ${resourceList}`
       }
     }
     
@@ -291,14 +324,27 @@ function App() {
         {state.tiles.map(tile => {
           const { x, y } = hexToPixel(tile.position[0], tile.position[1])
           
+          // Check if this tile has a legal action for moving robber (only in game view)
+          const hasRobberMoveAction = isGameView && legalActions.some(a => {
+            if (a.type === 'move_robber') {
+              return a.payload?.tile_id === tile.id
+            }
+            return false
+          })
+          
+          // Check if robber is on this tile
+          const hasRobber = state.robber_tile_id === tile.id
+          
           return (
           <div
             key={tile.id}
-            className="hex-tile"
+            className={`hex-tile ${hasRobberMoveAction ? 'clickable' : ''}`}
             style={{
               left: `${x}px`,
               top: `${y}px`
             }}
+            onClick={() => hasRobberMoveAction && handleTileClick(tile.id)}
+            title={`Tile ${tile.id}${tile.resource_type ? ` - ${tile.resource_type}` : ' - Desert'}${hasRobber ? ' (Robber here)' : ''}${hasRobberMoveAction ? ' - Click to move robber here' : ''}`}
           >
             <div className={`hex-resource ${tile.resource_type || 'desert'}`}>
               {tile.resource_type ? (
@@ -310,6 +356,12 @@ function App() {
                 </>
               ) : (
                 <div className="resource-name">Desert</div>
+              )}
+              {hasRobber && (
+                <div className="robber-icon" title="Robber">👹</div>
+              )}
+              {hasRobberMoveAction && (
+                <div className="tile-clickable-overlay" />
               )}
             </div>
           </div>
@@ -900,8 +952,11 @@ function App() {
                   {legalActions.map((action, idx) => (
                     <button
                       key={idx}
-                      onClick={() => handleExecuteAction(action)}
-                      disabled={loading || activePlayer?.id !== playerId}
+                      onClick={() => {
+                        console.log('Action button clicked:', action)
+                        handleExecuteAction(action)
+                      }}
+                      disabled={loading || (activePlayer?.id !== playerId && action.type !== 'discard_resources')}
                       className="action-button"
                     >
                       {formatActionName(action)}
