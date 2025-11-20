@@ -42,7 +42,8 @@ class AgentRunner:
     
     def run_automatic(
         self,
-        save_state_callback: Optional[callable] = None
+        save_state_callback: Optional[callable] = None,
+        progress_callback: Optional[callable] = None
     ) -> Tuple[GameState, bool, Optional[str]]:
         """
         Run the game automatically until completion, error, or max turns.
@@ -50,6 +51,8 @@ class AgentRunner:
         Args:
             save_state_callback: Optional callback to save state after each action
                                 Signature: (game_id: str, state_before: GameState, state_after: GameState, action: dict, player_id: str) -> None
+            progress_callback: Optional callback for progress updates
+                              Signature: (turn_count: int, action_count: int) -> None
         
         Returns:
             Tuple of (final_state, completed, error_message)
@@ -57,6 +60,7 @@ class AgentRunner:
             - error_message: None if no error, otherwise error description
         """
         try:
+            action_count = 0
             while self.turn_count < self.max_turns:
                 # Check if game is finished
                 if self.state.phase == "finished":
@@ -184,6 +188,12 @@ class AgentRunner:
                 # Increment turn count if we ended a turn
                 if action == Action.END_TURN:
                     self.turn_count += 1
+                
+                action_count += 1
+                
+                # Progress callback for verbose output (more frequent)
+                if progress_callback and action_count % 20 == 0:
+                    progress_callback(self.turn_count, action_count)
             
             # Reached max turns
             return self.state, False, f"Reached maximum turn limit ({self.max_turns})"

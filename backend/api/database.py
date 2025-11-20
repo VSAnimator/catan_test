@@ -1,21 +1,71 @@
 """
 Database module for SQLite storage of games and steps.
+Optimized for parallel execution with WAL mode and batched writes.
 """
 import sqlite3
 import json
+import threading
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 from pathlib import Path
+from collections import deque
+import time
 
 # Database file path
 DB_PATH = Path(__file__).parent.parent / "catan.db"
 
+# Process-local storage for database connections (works in both threading and multiprocessing)
+# Use a simple dict keyed by process/thread ID
+_connection_cache = {}
+_connection_lock = threading.Lock()
+
+# Process-local write queue for batched writes (each process has its own)
+# In multiprocessing, each process gets its own copy of this dict
+_write_queue = {}
+_write_lock = threading.Lock()  # This is per-process, so threading.Lock is fine
+_write_batch_size = 50  # Write in batches of 50 steps
+_write_timeout = 0.5  # Write after 0.5 seconds even if batch not full
+
 
 def get_db_connection():
-    """Get a database connection."""
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row  # Enable column access by name
-    return conn
+    """Get a database connection (process-local for better concurrency)."""
+    import os
+    import threading
+    
+    # Use process ID + thread ID as key (works in both threading and multiprocessing)
+    process_id = os.getpid()
+    thread_id = threading.get_ident()
+    cache_key = (process_id, thread_id)
+    
+    with _connection_lock:
+        if cache_key not in _connection_cache:
+            conn = sqlite3.connect(str(DB_PATH), timeout=30.0)  # 30 second timeout for concurrent access
+            conn.row_factory = sqlite3.Row
+            # Enable WAL mode for better concurrent reads/writes
+            conn.execute("PRAGMA journal_mode=WAL")
+            # Optimize for performance
+            conn.execute("PRAGMA synchronous=NORMAL")  # Faster than FULL, still safe
+            conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
+            conn.execute("PRAGMA temp_store=MEMORY")
+            # Disable foreign key checks for faster inserts
+            conn.execute("PRAGMA foreign_keys=OFF")
+            _connection_cache[cache_key] = conn
+        return _connection_cache[cache_key]
+
+
+def close_db_connection():
+    """Close the process-local database connection."""
+    import os
+    import threading
+    
+    process_id = os.getpid()
+    thread_id = threading.get_ident()
+    cache_key = (process_id, thread_id)
+    
+    with _connection_lock:
+        if cache_key in _connection_cache:
+            _connection_cache[cache_key].close()
+            del _connection_cache[cache_key]
 
 
 def init_db():
@@ -63,8 +113,11 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_steps_game_step ON steps(game_id, step_idx)
     """)
     
+    # Enable WAL mode for better concurrency
+    cursor.execute("PRAGMA journal_mode=WAL")
+    
     conn.commit()
-    conn.close()
+    # Don't close - keep connection for thread
 
 
 def create_game(
@@ -86,7 +139,7 @@ def create_game(
     """, (game_id, rng_seed, metadata_json, state_json))
     
     conn.commit()
-    conn.close()
+    # Don't close - keep connection for thread
 
 
 def get_game(game_id: str) -> Optional[sqlite3.Row]:
@@ -97,7 +150,7 @@ def get_game(game_id: str) -> Optional[sqlite3.Row]:
     cursor.execute("SELECT * FROM games WHERE id = ?", (game_id,))
     row = cursor.fetchone()
     
-    conn.close()
+    # Don't close - keep connection for thread
     return row
 
 
@@ -113,7 +166,7 @@ def save_game_state(game_id: str, state_json: Dict[str, Any]) -> None:
     """, (json.dumps(state_json), game_id))
     
     conn.commit()
-    conn.close()
+    # Don't close - keep connection for thread
 
 
 def add_step(
@@ -127,37 +180,127 @@ def add_step(
     state_text: Optional[str] = None,
     legal_actions_text: Optional[str] = None,
     chosen_action_text: Optional[str] = None,
+    batch_write: bool = False,
 ) -> None:
-    """Add a step to the database."""
+    """
+    Add a step to the database.
+    
+    Args:
+        batch_write: If True, queue for batched write instead of immediate write
+    """
+    if batch_write:
+        # Queue for batched write
+        should_flush = False
+        with _write_lock:
+            if game_id not in _write_queue:
+                _write_queue[game_id] = deque()
+            _write_queue[game_id].append({
+                'game_id': game_id,
+                'step_idx': step_idx,
+                'player_id': player_id,
+                'state_before_json': state_before_json,
+                'state_after_json': state_after_json,
+                'action_json': action_json,
+                'dice_roll': dice_roll,
+                'state_text': state_text,
+                'legal_actions_text': legal_actions_text,
+                'chosen_action_text': chosen_action_text,
+            })
+            
+            queue_size = len(_write_queue[game_id])
+            # Check if we should flush, but do it outside the lock to avoid deadlock
+            if queue_size >= _write_batch_size:
+                should_flush = True
+        
+        # Flush outside the lock to avoid deadlock
+        if should_flush:
+            _flush_write_queue(game_id)
+    else:
+        # Immediate write
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            INSERT INTO steps (
+                game_id, step_idx, player_id,
+                state_before_json, state_after_json, action_json,
+                dice_roll, state_text, legal_actions_text, chosen_action_text
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            game_id,
+            step_idx,
+            player_id,
+            json.dumps(state_before_json),
+            json.dumps(state_after_json),
+            json.dumps(action_json),
+            dice_roll,
+            state_text,
+            legal_actions_text,
+            chosen_action_text,
+        ))
+        
+        conn.commit()
+        # Don't close - keep connection for thread
+
+
+def _flush_write_queue(game_id: str) -> None:
+    """Flush the write queue for a specific game."""
+    with _write_lock:
+        if game_id not in _write_queue or len(_write_queue[game_id]) == 0:
+            return
+        
+        steps = list(_write_queue[game_id])
+        _write_queue[game_id].clear()
+    
+    # Write all steps in a single transaction
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    cursor.execute("""
-        INSERT INTO steps (
-            game_id, step_idx, player_id,
-            state_before_json, state_after_json, action_json,
-            dice_roll, state_text, legal_actions_text, chosen_action_text
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        game_id,
-        step_idx,
-        player_id,
-        json.dumps(state_before_json),
-        json.dumps(state_after_json),
-        json.dumps(action_json),
-        dice_roll,
-        state_text,
-        legal_actions_text,
-        chosen_action_text,
-    ))
+    try:
+        cursor.executemany("""
+            INSERT INTO steps (
+                game_id, step_idx, player_id,
+                state_before_json, state_after_json, action_json,
+                dice_roll, state_text, legal_actions_text, chosen_action_text
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            (
+                step['game_id'],
+                step['step_idx'],
+                step['player_id'],
+                json.dumps(step['state_before_json']),
+                json.dumps(step['state_after_json']),
+                json.dumps(step['action_json']),
+                step['dice_roll'],
+                step['state_text'],
+                step['legal_actions_text'],
+                step['chosen_action_text'],
+            )
+            for step in steps
+        ])
+        
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise e
+
+
+def flush_all_write_queues() -> None:
+    """Flush all pending write queues (call at end of game)."""
+    with _write_lock:
+        game_ids = list(_write_queue.keys())
     
-    conn.commit()
-    conn.close()
+    for game_id in game_ids:
+        _flush_write_queue(game_id)
 
 
 def get_steps(game_id: str) -> List[sqlite3.Row]:
     """Get all steps for a game, ordered by step_idx."""
+    # Flush any pending writes for this game first
+    _flush_write_queue(game_id)
+    
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -168,7 +311,7 @@ def get_steps(game_id: str) -> List[sqlite3.Row]:
     """, (game_id,))
     
     rows = cursor.fetchall()
-    conn.close()
+    # Don't close - keep connection for thread
     return rows
 
 
@@ -178,6 +321,9 @@ def get_latest_state(game_id: str) -> Optional[Dict[str, Any]]:
     First tries to get from the most recent step, then falls back to
     current_state_json in games table.
     """
+    # Flush any pending writes for this game first
+    _flush_write_queue(game_id)
+    
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -192,7 +338,7 @@ def get_latest_state(game_id: str) -> Optional[Dict[str, Any]]:
     
     row = cursor.fetchone()
     if row:
-        conn.close()
+        # Don't close - keep connection for thread
         return json.loads(row[0])
     
     # Fall back to current_state_json in games table
@@ -203,7 +349,7 @@ def get_latest_state(game_id: str) -> Optional[Dict[str, Any]]:
     """, (game_id,))
     
     row = cursor.fetchone()
-    conn.close()
+    # Don't close - keep connection for thread
     
     if row and row[0]:
         return json.loads(row[0])
@@ -212,6 +358,9 @@ def get_latest_state(game_id: str) -> Optional[Dict[str, Any]]:
 
 def get_step_count(game_id: str) -> int:
     """Get the number of steps for a game."""
+    # Flush any pending writes for this game first
+    _flush_write_queue(game_id)
+    
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -222,7 +371,7 @@ def get_step_count(game_id: str) -> int:
     """, (game_id,))
     
     row = cursor.fetchone()
-    conn.close()
+    # Don't close - keep connection for thread
     
     return row[0] if row else 0
 
