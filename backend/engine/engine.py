@@ -99,6 +99,9 @@ class GameState:
     robber_tile_id: Optional[int] = None  # Tile ID where robber is located (None = desert)
     waiting_for_robber_move: bool = False  # True if robber needs to be moved (after 7 or knight)
     waiting_for_robber_steal: bool = False  # True if resource needs to be stolen (after moving robber)
+    players_discarded: Set[str] = field(default_factory=set)  # Players who have already discarded this turn (when 7 is rolled)
+    robber_initial_tile_id: Optional[int] = None  # Robber position when 7 was rolled (to detect if it's been moved)
+    roads_from_road_building: Dict[str, int] = field(default_factory=dict)  # Player ID -> number of free roads remaining from road building card
     
     def step(self, action: 'Action', payload: Optional['ActionPayload'] = None, player_id: Optional[str] = None) -> 'GameState':
         """
@@ -154,7 +157,8 @@ class GameState:
         if new_state.dice_roll is not None:
             raise ValueError("Dice already rolled this turn")
         
-        # Roll two dice (2-12)
+        # Roll two 6-sided dice and sum them (result: 2-12, with proper distribution)
+        # 7 is most likely (6 ways), 2 and 12 are least likely (1 way each)
         die1 = random.randint(1, 6)
         die2 = random.randint(1, 6)
         roll = die1 + die2
@@ -162,9 +166,21 @@ class GameState:
         
         # Handle rolling 7
         if roll == 7:
-            # Don't set waiting_for_robber_move yet - first all players must discard if needed
-            # The legal actions will check if anyone needs to discard
-            pass
+            # Reset the discarded players set for this new 7 roll
+            new_state.players_discarded = set()
+            # Store the initial robber position to detect if it's been moved
+            new_state.robber_initial_tile_id = new_state.robber_tile_id
+            # Check if anyone needs to discard
+            any_player_needs_discard = False
+            for p in new_state.players:
+                if sum(p.resources.values()) >= 8:
+                    any_player_needs_discard = True
+                    break
+            
+            # If no one needs to discard, set waiting_for_robber_move immediately
+            if not any_player_needs_discard:
+                new_state.waiting_for_robber_move = True
+            # Otherwise, wait for all players to discard before setting the flag
         else:
         # Distribute resources if not 7
             self._distribute_resources(new_state, roll)
@@ -214,10 +230,15 @@ class GameState:
         
         current_player = new_state.players[new_state.current_player_index]
         
-        # Check resources: 1 wood, 1 brick
-        if (current_player.resources[ResourceType.WOOD] < 1 or 
-            current_player.resources[ResourceType.BRICK] < 1):
-            raise ValueError("Insufficient resources to build road")
+        # Check if this is a free road from road building card
+        free_roads_remaining = new_state.roads_from_road_building.get(current_player.id, 0)
+        using_road_building = free_roads_remaining > 0
+        
+        # Check resources: 1 wood, 1 brick (unless using road building card)
+        if not using_road_building:
+            if (current_player.resources[ResourceType.WOOD] < 1 or 
+                current_player.resources[ResourceType.BRICK] < 1):
+                raise ValueError("Insufficient resources to build road")
         
         # Check if road edge exists and is unowned
         road_edge = next((r for r in new_state.road_edges if r.id == payload.road_edge_id), None)
@@ -226,9 +247,16 @@ class GameState:
         if road_edge.owner:
             raise ValueError(f"Road edge {payload.road_edge_id} already owned")
         
-        # Deduct resources
-        current_player.resources[ResourceType.WOOD] -= 1
-        current_player.resources[ResourceType.BRICK] -= 1
+        # Deduct resources (unless using road building card)
+        if not using_road_building:
+            current_player.resources[ResourceType.WOOD] -= 1
+            current_player.resources[ResourceType.BRICK] -= 1
+        else:
+            # Decrement free roads remaining
+            new_state.roads_from_road_building[current_player.id] = free_roads_remaining - 1
+            if new_state.roads_from_road_building[current_player.id] == 0:
+                # Remove from dict when exhausted
+                del new_state.roads_from_road_building[current_player.id]
         
         # Build road
         road_index = next(i for i, r in enumerate(new_state.road_edges) if r.id == payload.road_edge_id)
@@ -383,7 +411,37 @@ class GameState:
             self._check_largest_army(new_state, current_player)
             # Knight card requires moving robber and stealing (handled by separate actions)
             new_state.waiting_for_robber_move = True
-        # Other cards (road_building, year_of_plenty, monopoly) would need additional payload
+        elif payload.card_type == "road_building":
+            # Road building card allows building 2 roads for free
+            new_state.roads_from_road_building[current_player.id] = 2
+        elif payload.card_type == "year_of_plenty":
+            # Year of plenty gives player 2 resources of their choice
+            if not payload.year_of_plenty_resources:
+                raise ValueError("year_of_plenty requires year_of_plenty_resources payload")
+            
+            # Verify exactly 2 resources total
+            total_resources = sum(payload.year_of_plenty_resources.values())
+            if total_resources != 2:
+                raise ValueError(f"year_of_plenty must give exactly 2 resources, got {total_resources}")
+            
+            # Add the resources to player
+            for resource, amount in payload.year_of_plenty_resources.items():
+                if amount > 0:
+                    current_player.resources[resource] += amount
+        elif payload.card_type == "monopoly":
+            # Monopoly lets player steal all of a resource type from other players
+            if not payload.monopoly_resource_type:
+                raise ValueError("monopoly requires monopoly_resource_type payload")
+            
+            # Steal all of this resource type from all other players
+            total_stolen = 0
+            for other_player in new_state.players:
+                if other_player.id != current_player.id:
+                    stolen_amount = other_player.resources[payload.monopoly_resource_type]
+                    if stolen_amount > 0:
+                        other_player.resources[payload.monopoly_resource_type] = 0
+                        current_player.resources[payload.monopoly_resource_type] += stolen_amount
+                        total_stolen += stolen_amount
         
         return new_state
     
@@ -391,6 +449,33 @@ class GameState:
         """Handle trading with the bank."""
         if not payload or not isinstance(payload, TradeBankPayload):
             raise ValueError("TRADE_BANK requires TradeBankPayload")
+        
+        # Trading is only allowed after dice is rolled
+        if new_state.dice_roll is None:
+            raise ValueError("Cannot trade before rolling dice")
+        
+        # If a 7 is rolled, trading is not allowed until all phases are complete
+        if new_state.dice_roll == 7:
+            # Check if we're still in discard phase
+            robber_has_been_moved = (new_state.robber_initial_tile_id is not None and 
+                                     new_state.robber_tile_id != new_state.robber_initial_tile_id)
+            in_discard_phase = (not new_state.waiting_for_robber_move and 
+                               not new_state.waiting_for_robber_steal and 
+                               not robber_has_been_moved)
+            
+            if in_discard_phase:
+                # Check if any player still needs to discard
+                any_player_needs_discard = False
+                for p in new_state.players:
+                    if p.id not in new_state.players_discarded and sum(p.resources.values()) >= 8:
+                        any_player_needs_discard = True
+                        break
+                if any_player_needs_discard:
+                    raise ValueError("Cannot trade while players need to discard after rolling 7")
+            
+            # Check if we're in robber move/steal phase
+            if new_state.waiting_for_robber_move or new_state.waiting_for_robber_steal:
+                raise ValueError("Cannot trade while robber phase is active after rolling 7")
         
         current_player = new_state.players[new_state.current_player_index]
         
@@ -461,6 +546,33 @@ class GameState:
         """Handle trading with another player."""
         if not payload or not isinstance(payload, TradePlayerPayload):
             raise ValueError("TRADE_PLAYER requires TradePlayerPayload")
+        
+        # Trading is only allowed after dice is rolled
+        if new_state.dice_roll is None:
+            raise ValueError("Cannot trade before rolling dice")
+        
+        # If a 7 is rolled, trading is not allowed until all phases are complete
+        if new_state.dice_roll == 7:
+            # Check if we're still in discard phase
+            robber_has_been_moved = (new_state.robber_initial_tile_id is not None and 
+                                     new_state.robber_tile_id != new_state.robber_initial_tile_id)
+            in_discard_phase = (not new_state.waiting_for_robber_move and 
+                               not new_state.waiting_for_robber_steal and 
+                               not robber_has_been_moved)
+            
+            if in_discard_phase:
+                # Check if any player still needs to discard
+                any_player_needs_discard = False
+                for p in new_state.players:
+                    if p.id not in new_state.players_discarded and sum(p.resources.values()) >= 8:
+                        any_player_needs_discard = True
+                        break
+                if any_player_needs_discard:
+                    raise ValueError("Cannot trade while players need to discard after rolling 7")
+            
+            # Check if we're in robber move/steal phase
+            if new_state.waiting_for_robber_move or new_state.waiting_for_robber_steal:
+                raise ValueError("Cannot trade while robber phase is active after rolling 7")
         
         current_player = new_state.players[new_state.current_player_index]
         other_player = next((p for p in new_state.players if p.id == payload.other_player_id), None)
@@ -541,13 +653,16 @@ class GameState:
         for resource, amount in payload.resources.items():
             current_player.resources[resource] -= amount
         
+        # Mark this player as having discarded
+        new_state.players_discarded.add(current_player.id)
+        
         # After discarding, check if we can proceed to robber move
         # Only the player who rolled the 7 can move the robber
         if new_state.dice_roll == 7:
-            # Check if anyone still needs to discard
+            # Check if anyone still needs to discard (and hasn't discarded yet)
             any_player_needs_discard = False
             for p in new_state.players:
-                if sum(p.resources.values()) >= 8:
+                if p.id not in new_state.players_discarded and sum(p.resources.values()) >= 8:
                     any_player_needs_discard = True
                     break
             
@@ -756,6 +871,9 @@ class GameState:
         new_state.dice_roll = None  # Reset dice roll
         new_state.waiting_for_robber_move = False  # Clear flags
         new_state.waiting_for_robber_steal = False
+        new_state.players_discarded = set()  # Clear discarded players set for next turn
+        new_state.robber_initial_tile_id = None  # Clear initial robber position
+        # Note: roads_from_road_building persists across turns until used (player can build roads on later turns)
         
         return new_state
     
@@ -1455,6 +1573,10 @@ class BuildCityPayload:
 class PlayDevCardPayload:
     """Payload for PLAY_DEV_CARD action."""
     card_type: str
+    # For year_of_plenty: resources to receive (2 resources total)
+    year_of_plenty_resources: Optional[Dict[ResourceType, int]] = None
+    # For monopoly: resource type to steal from all players
+    monopoly_resource_type: Optional[ResourceType] = None
 
 
 @dataclass(frozen=True)

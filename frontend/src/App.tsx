@@ -11,8 +11,7 @@ import {
   type GameState,
   type LegalAction,
   type Player,
-  type ReplayResponse,
-  type StepLog
+  type ReplayResponse
 } from './api'
 
 type View = 'main' | 'game' | 'replay'
@@ -26,7 +25,7 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [autoRefresh, setAutoRefresh] = useState(false)
   const [devMode, setDevMode] = useState(false)
-  const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const refreshIntervalRef = useRef<number | null>(null)
   
   // For create/join game
   const [gameIdInput, setGameIdInput] = useState('')
@@ -40,11 +39,15 @@ function App() {
   
   // For trading UI
   const [showTradingPanel, setShowTradingPanel] = useState(false)
-  const [tradeType, setTradeType] = useState<'bank' | 'player' | null>(null)
-  const [tradeTargetPlayer, setTradeTargetPlayer] = useState<string>('')
   const [giveResources, setGiveResources] = useState<Record<string, number>>({})
   const [receiveResources, setReceiveResources] = useState<Record<string, number>>({})
-  const [selectedPortId, setSelectedPortId] = useState<number | null>(null)
+  const [selectedTradePlayers, setSelectedTradePlayers] = useState<Set<string>>(new Set())
+  
+  // For discard resources UI (when 7 is rolled)
+  const [showDiscardPanel, setShowDiscardPanel] = useState(false)
+  const [discardResources, setDiscardResources] = useState<Record<string, number>>({})
+  const [playerWhoRolled7, setPlayerWhoRolled7] = useState<string | null>(null)
+  const [isAutoDiscarding, setIsAutoDiscarding] = useState(false)
 
   // Fetch legal actions when game state or player ID changes
   useEffect(() => {
@@ -52,10 +55,102 @@ function App() {
       fetchLegalActions()
     }
   }, [gameState, playerId, view])
+  
+  // Track when a 7 is rolled
+  useEffect(() => {
+    if (gameState && gameState.dice_roll === 7 && gameState.phase === 'playing') {
+      const currentPlayer = gameState.players[gameState.current_player_index]
+      if (currentPlayer && !playerWhoRolled7) {
+        setPlayerWhoRolled7(currentPlayer.id)
+      }
+    } else if (gameState && gameState.dice_roll !== 7) {
+      // Reset when 7 is no longer the roll
+      setPlayerWhoRolled7(null)
+      setIsAutoDiscarding(false)
+    }
+  }, [gameState?.dice_roll, gameState?.current_player_index, playerWhoRolled7])
+
+  // Auto-open discard panel when 7 is rolled and player needs to discard
+  // But only if we're still in the discard phase (not in robber phase)
+  // And only if the player hasn't already discarded
+  useEffect(() => {
+    if (gameState && playerId && gameState.dice_roll === 7 && 
+        !gameState.waiting_for_robber_move && !gameState.waiting_for_robber_steal) {
+      const player = gameState.players.find(p => p.id === playerId)
+      if (player) {
+        const totalResources = Object.values(player.resources).reduce((a, b) => a + b, 0)
+        const hasAlreadyDiscarded = gameState.players_discarded?.includes(playerId) || false
+        if (totalResources >= 8 && !hasAlreadyDiscarded) {
+          setShowDiscardPanel(true)
+          // Also clear any previous discard selections
+          setDiscardResources({})
+        } else {
+          setShowDiscardPanel(false)
+        }
+      }
+    } else {
+      // Clear discard panel when not needed or when robber phase has started
+      setShowDiscardPanel(false)
+    }
+  }, [gameState, playerId])
+
+  // Dev mode: Auto-switch to players who need to discard when 7 is rolled
+  // But only if we're still in the discard phase (not in robber phase)
+  useEffect(() => {
+    if (!devMode || !gameState || gameState.dice_roll !== 7) return
+    
+    // Don't auto-switch if we're already in the robber phase
+    if (gameState.waiting_for_robber_move || gameState.waiting_for_robber_steal) {
+      // Robber phase has started, switch back to player who rolled 7 if needed
+      if (playerWhoRolled7 && playerId !== playerWhoRolled7 && isAutoDiscarding) {
+        setPlayerId(playerWhoRolled7)
+        setIsAutoDiscarding(false)
+      }
+      return
+    }
+    
+    // Find all players who need to discard (and haven't discarded yet)
+    const playersNeedingDiscard = gameState.players.filter(p => {
+      const totalResources = Object.values(p.resources).reduce((a, b) => a + b, 0)
+      const hasDiscarded = gameState.players_discarded?.includes(p.id) || false
+      return totalResources >= 8 && !hasDiscarded
+    })
+    
+    if (playersNeedingDiscard.length === 0) {
+      // No one needs to discard, switch back to player who rolled 7
+      if (playerWhoRolled7 && playerId !== playerWhoRolled7 && isAutoDiscarding) {
+        setPlayerId(playerWhoRolled7)
+        setIsAutoDiscarding(false)
+      }
+      return
+    }
+    
+    // Check if current player needs to discard
+    const currentPlayerNeedsDiscard = playersNeedingDiscard.some(p => p.id === playerId)
+    
+    if (!currentPlayerNeedsDiscard && !isAutoDiscarding) {
+      // Switch to first player who needs to discard
+      setIsAutoDiscarding(true)
+      setPlayerId(playersNeedingDiscard[0].id)
+    }
+  }, [devMode, gameState?.dice_roll, gameState?.waiting_for_robber_move, gameState?.waiting_for_robber_steal, gameState?.players, playerId, playerWhoRolled7, isAutoDiscarding])
 
   // Auto-switch to current player in dev mode when turn changes
+  // But don't interfere if we're auto-discarding
   useEffect(() => {
-    if (devMode && gameState && view === 'game') {
+    if (devMode && gameState && view === 'game' && !isAutoDiscarding) {
+      // Don't auto-switch if a 7 was rolled and players need to discard
+      if (gameState.dice_roll === 7) {
+        const playersNeedingDiscard = gameState.players.filter(p => {
+          const totalResources = Object.values(p.resources).reduce((a, b) => a + b, 0)
+          return totalResources >= 8
+        })
+        if (playersNeedingDiscard.length > 0) {
+          // Let the discard auto-switching handle it
+          return
+        }
+      }
+      
       let currentPlayer: Player | null = null
       if (gameState.phase === 'playing') {
         currentPlayer = gameState.players[gameState.current_player_index] || null
@@ -66,7 +161,7 @@ function App() {
         setPlayerId(currentPlayer.id)
       }
     }
-  }, [gameState, devMode, view, playerId])
+  }, [gameState, devMode, view, playerId, isAutoDiscarding])
 
   // Auto-refresh polling
   useEffect(() => {
@@ -168,9 +263,18 @@ function App() {
     try {
       // Ensure action has proper structure
       // The payload from backend includes a "type" field, but we need to pass it as-is
+      // For PLAY_DEV_CARD actions, ensure the payload has the type field
+      let payload = action.payload
+      if (action.type === 'play_dev_card' && payload && !payload.type) {
+        payload = {
+          ...payload,
+          type: 'PlayDevCardPayload'
+        }
+      }
+      
       const actionToSend: LegalAction = {
         type: action.type,
-        payload: action.payload || undefined
+        payload: payload || undefined
       }
       
       // Debug: log the action being sent
@@ -274,7 +378,18 @@ function App() {
         return `${type} to tile ${payload.tile_id}`
       }
       if (payload.card_type) {
-        return `${type} (${payload.card_type})`
+        let cardInfo = payload.card_type
+        // Add details for year_of_plenty and monopoly
+        if (payload.card_type === 'year_of_plenty' && 'year_of_plenty_resources' in payload && payload.year_of_plenty_resources) {
+          const resourceList = Object.entries(payload.year_of_plenty_resources)
+            .filter(([_, count]) => (count as number) > 0)
+            .map(([resource, count]) => `${count} ${resource}`)
+            .join(', ')
+          cardInfo = `${payload.card_type}: ${resourceList}`
+        } else if (payload.card_type === 'monopoly' && 'monopoly_resource_type' in payload && payload.monopoly_resource_type) {
+          cardInfo = `${payload.card_type}: ${payload.monopoly_resource_type}`
+        }
+        return `${type} (${cardInfo})`
       }
       // New multi-resource trade format
       if (payload.give_resources && payload.receive_resources) {
@@ -1132,12 +1247,27 @@ function App() {
             {devMode && gameState && activePlayer && (
               <div className="dev-mode-controls">
                 <h2>🛠️ Dev Mode - Switch to Current Player</h2>
+                {isAutoDiscarding && gameState.dice_roll === 7 && (
+                  <div style={{ 
+                    marginBottom: '1rem', 
+                    padding: '0.75rem', 
+                    backgroundColor: '#fff3cd', 
+                    border: '1px solid #ffc107',
+                    borderRadius: '4px',
+                    color: '#856404'
+                  }}>
+                    🔄 Auto-discarding: Cycling through players who need to discard...
+                  </div>
+                )}
                 <div className="form-group">
                   <label>
                     Play as:
                     <select
                       value={playerId}
-                      onChange={(e) => setPlayerId(e.target.value)}
+                      onChange={(e) => {
+                        setPlayerId(e.target.value)
+                        setIsAutoDiscarding(false)  // Stop auto-discarding if manually switched
+                      }}
                     >
                       <option key={activePlayer.id} value={activePlayer.id}>
                         {activePlayer.name} ({activePlayer.id}) [Current Turn]
@@ -1147,8 +1277,13 @@ function App() {
                 </div>
                 <div className="dev-mode-warning">
                   ℹ️ Dev mode allows you to switch to the current player's turn. Turn validation is still enforced.
+                  {gameState.dice_roll === 7 && (
+                    <div style={{ marginTop: '0.5rem', fontWeight: 'bold' }}>
+                      When a 7 is rolled, dev mode automatically switches to each player who needs to discard.
                 </div>
-                {activePlayer.id !== playerId && (
+                  )}
+                </div>
+                {activePlayer.id !== playerId && !isAutoDiscarding && (
                   <button 
                     onClick={() => setPlayerId(activePlayer.id)}
                     className="action-button"
@@ -1234,17 +1369,527 @@ function App() {
                       )}
                     </div>
                     
-                    {/* Custom Trade Builder - Coming soon */}
-                    <div className="custom-trade" style={{ marginTop: '1rem', padding: '1rem', border: '1px dashed #ccc', borderRadius: '4px' }}>
-                      <h3>Custom Trade (Coming Soon)</h3>
-                      <div style={{ color: '#666', fontSize: '0.9rem' }}>
-                        Multi-resource custom trades will be available here. For now, use the quick trades above.
+                    {/* Custom Trade Builder */}
+                    <div className="custom-trade" style={{ marginTop: '1rem', padding: '1rem', border: '1px solid #ccc', borderRadius: '4px', backgroundColor: '#fff' }}>
+                      <h3>Custom Trade</h3>
+                      
+                      {/* Resource Types */}
+                      {(() => {
+                        const resourceTypes = ['wood', 'brick', 'wheat', 'sheep', 'ore']
+                        const resourceIcons: Record<string, string> = {
+                          'wood': '🌲',
+                          'brick': '🧱',
+                          'wheat': '🌾',
+                          'sheep': '🐑',
+                          'ore': '⛏️'
+                        }
+                        
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                            {/* Give Resources */}
+                            <div>
+                              <h4 style={{ marginBottom: '0.5rem' }}>Resources to Give</h4>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                {resourceTypes.map(resource => {
+                                  const currentAmount = giveResources[resource] || 0
+                                  const available = currentPlayer?.resources[resource] || 0
+                                  return (
+                                    <div key={resource} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                      <span style={{ width: '80px' }}>{resourceIcons[resource]} {resource}:</span>
+                                      <button
+                                        onClick={() => {
+                                          if (currentAmount > 0) {
+                                            setGiveResources({ ...giveResources, [resource]: currentAmount - 1 })
+                                          }
+                                        }}
+                                        disabled={currentAmount === 0}
+                                        style={{ width: '30px', height: '30px' }}
+                                      >
+                                        -
+                                      </button>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        max={available}
+                                        value={currentAmount}
+                                        onChange={(e) => {
+                                          const val = Math.max(0, Math.min(available, parseInt(e.target.value) || 0))
+                                          setGiveResources({ ...giveResources, [resource]: val })
+                                        }}
+                                        style={{ width: '60px', textAlign: 'center' }}
+                                      />
+                                      <button
+                                        onClick={() => {
+                                          if (currentAmount < available) {
+                                            setGiveResources({ ...giveResources, [resource]: currentAmount + 1 })
+                                          }
+                                        }}
+                                        disabled={currentAmount >= available}
+                                        style={{ width: '30px', height: '30px' }}
+                                      >
+                                        +
+                                      </button>
+                                      <span style={{ color: '#666', fontSize: '0.85rem' }}>
+                                        (You have {available})
+                                      </span>
                       </div>
+                                  )
+                                })}
+                    </div>
+                  </div>
+                            
+                            {/* Receive Resources */}
+                            <div>
+                              <h4 style={{ marginBottom: '0.5rem' }}>Resources to Receive</h4>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                {resourceTypes.map(resource => {
+                                  const currentAmount = receiveResources[resource] || 0
+                                  return (
+                                    <div key={resource} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                      <span style={{ width: '80px' }}>{resourceIcons[resource]} {resource}:</span>
+                                      <button
+                                        onClick={() => {
+                                          if (currentAmount > 0) {
+                                            setReceiveResources({ ...receiveResources, [resource]: currentAmount - 1 })
+                                          }
+                                        }}
+                                        disabled={currentAmount === 0}
+                                        style={{ width: '30px', height: '30px' }}
+                                      >
+                                        -
+                                      </button>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        value={currentAmount}
+                                        onChange={(e) => {
+                                          const val = Math.max(0, parseInt(e.target.value) || 0)
+                                          setReceiveResources({ ...receiveResources, [resource]: val })
+                                        }}
+                                        style={{ width: '60px', textAlign: 'center' }}
+                                      />
+                                      <button
+                                        onClick={() => {
+                                          setReceiveResources({ ...receiveResources, [resource]: currentAmount + 1 })
+                                        }}
+                                        style={{ width: '30px', height: '30px' }}
+                                      >
+                                        +
+                                      </button>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                            
+                            {/* Player Selection */}
+                            {gameState && (
+                              <div>
+                                <h4 style={{ marginBottom: '0.5rem' }}>Trade With Players</h4>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                  {gameState.players
+                                    .filter(p => p.id !== playerId)
+                                    .map(player => {
+                                      const isSelected = selectedTradePlayers.has(player.id)
+                                      const totalReceive = Object.values(receiveResources).reduce((a, b) => a + b, 0)
+                                      const canAfford = totalReceive === 0 || Object.entries(receiveResources).every(([res, amt]) => 
+                                        amt === 0 || (player.resources[res] || 0) >= amt
+                                      )
+                                      
+                                      return (
+                                        <label
+                                          key={player.id}
+                                          style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '0.5rem',
+                                            padding: '0.5rem',
+                                            backgroundColor: isSelected ? '#e3f2fd' : '#f5f5f5',
+                                            borderRadius: '4px',
+                                            cursor: canAfford ? 'pointer' : 'not-allowed',
+                                            opacity: canAfford ? 1 : 0.6
+                                          }}
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={isSelected}
+                                            onChange={(e) => {
+                                              const newSet = new Set(selectedTradePlayers)
+                                              if (e.target.checked) {
+                                                newSet.add(player.id)
+                                              } else {
+                                                newSet.delete(player.id)
+                                              }
+                                              setSelectedTradePlayers(newSet)
+                                            }}
+                                            disabled={!canAfford}
+                                          />
+                                          <span style={{ flex: 1 }}>
+                                            <strong>{player.name}</strong>
+                                            {!canAfford && totalReceive > 0 && (
+                                              <span style={{ color: '#d32f2f', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
+                                                (Cannot afford this trade)
+                                              </span>
+                                            )}
+                                          </span>
+                                          <span style={{ fontSize: '0.85rem', color: '#666' }}>
+                                            Resources: {Object.values(player.resources).reduce((a, b) => a + b, 0)}
+                                          </span>
+                                        </label>
+                                      )
+                                    })}
+                                </div>
+              </div>
+            )}
+                            
+                            {/* Submit Button */}
+                            <div style={{ marginTop: '1rem' }}>
+                              <button
+                                onClick={async () => {
+                                  // Validate trade
+                                  const totalGive = Object.values(giveResources).reduce((a, b) => a + b, 0)
+                                  const totalReceive = Object.values(receiveResources).reduce((a, b) => a + b, 0)
+                                  
+                                  if (totalGive === 0) {
+                                    setError('You must give at least one resource')
+                                    return
+                                  }
+                                  
+                                  if (totalReceive === 0) {
+                                    setError('You must receive at least one resource')
+                                    return
+                                  }
+                                  
+                                  if (selectedTradePlayers.size === 0) {
+                                    setError('You must select at least one player to trade with')
+                                    return
+                                  }
+                                  
+                                  // Check if current player has enough resources
+                                  for (const [resource, amount] of Object.entries(giveResources)) {
+                                    if (amount > 0 && (currentPlayer?.resources[resource] || 0) < amount) {
+                                      setError(`You don't have enough ${resource} (have ${currentPlayer?.resources[resource] || 0}, need ${amount})`)
+                                      return
+                                    }
+                                  }
+                                  
+                                  // Execute trades with all selected players (auto-accept)
+                                  setLoading(true)
+                                  setError(null)
+                                  
+                                  try {
+                                    for (const targetPlayerId of selectedTradePlayers) {
+                                      // Check if target player can afford the trade
+                                      const targetPlayer = gameState?.players.find(p => p.id === targetPlayerId)
+                                      if (!targetPlayer) continue
+                                      
+                                      const canAfford = Object.entries(receiveResources).every(([res, amt]) => 
+                                        amt === 0 || (targetPlayer.resources[res] || 0) >= amt
+                                      )
+                                      
+                                      if (!canAfford) {
+                                        console.warn(`Player ${targetPlayer.name} cannot afford this trade, skipping`)
+                                        continue
+                                      }
+                                      
+                                      // Execute the trade
+                                      // Filter out zero amounts from resources
+                                      const filteredGiveResources: Record<string, number> = {}
+                                      const filteredReceiveResources: Record<string, number> = {}
+                                      
+                                      for (const [resource, amount] of Object.entries(giveResources)) {
+                                        if (amount > 0) {
+                                          filteredGiveResources[resource] = amount
+                                        }
+                                      }
+                                      
+                                      for (const [resource, amount] of Object.entries(receiveResources)) {
+                                        if (amount > 0) {
+                                          filteredReceiveResources[resource] = amount
+                                        }
+                                      }
+                                      
+                                      const tradeAction: LegalAction = {
+                                        type: 'trade_player',
+                                        payload: {
+                                          type: 'TradePlayerPayload',
+                                          other_player_id: targetPlayerId,
+                                          give_resources: filteredGiveResources,
+                                          receive_resources: filteredReceiveResources
+                                        }
+                                      }
+                                      
+                                      const newState = await postAction(gameState!.game_id, playerId, tradeAction)
+                                      setGameState(newState)
+                                    }
+                                    
+                                    // Clear the trade form
+                                    setGiveResources({})
+                                    setReceiveResources({})
+                                    setSelectedTradePlayers(new Set())
+                                  } catch (err) {
+                                    setError(err instanceof Error ? err.message : 'Failed to execute trade')
+                                  } finally {
+                                    setLoading(false)
+                                  }
+                                }}
+                                disabled={loading}
+                                className="action-button"
+                                style={{
+                                  width: '100%',
+                                  padding: '0.75rem',
+                                  fontSize: '1rem',
+                                  fontWeight: 'bold',
+                                  backgroundColor: '#4CAF50',
+                                  color: 'white'
+                                }}
+                              >
+                                {loading ? 'Executing Trade...' : 'Execute Trade (Auto-Accept)'}
+                              </button>
+                              <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: '#666' }}>
+                                Trades are automatically accepted and executed immediately.
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })()}
                     </div>
                   </div>
                 )}
               </div>
             )}
+
+            {/* Discard Resources Panel (when 7 is rolled) */}
+            {gameState && gameState.dice_roll === 7 && currentPlayer && (() => {
+              // Check if robber has been moved (discard phase is over)
+              const robberHasBeenMoved = gameState.robber_initial_tile_id !== undefined && 
+                                          gameState.robber_initial_tile_id !== null &&
+                                          gameState.robber_tile_id !== gameState.robber_initial_tile_id
+              
+              if (gameState.waiting_for_robber_move || gameState.waiting_for_robber_steal || robberHasBeenMoved) {
+                return null  // Discard phase is over
+              }
+              
+              const totalResources = Object.values(currentPlayer.resources).reduce((a, b) => a + b, 0)
+              const hasAlreadyDiscarded = gameState.players_discarded?.includes(playerId) || false
+              const needsDiscard = totalResources >= 8 && !hasAlreadyDiscarded
+              const discardCount = needsDiscard ? Math.floor(totalResources / 2) : 0
+              const currentDiscardTotal = Object.values(discardResources).reduce((a, b) => a + b, 0)
+              
+              // Check if any other players still need to discard (and haven't discarded yet)
+              const otherPlayersNeedDiscard = gameState.players.some(p => {
+                const pResources = Object.values(p.resources).reduce((a, b) => a + b, 0)
+                const pDiscarded = gameState.players_discarded?.includes(p.id) || false
+                return p.id !== playerId && pResources >= 8 && !pDiscarded
+              })
+              
+              if (!needsDiscard) {
+                // Show status message if other players need to discard
+                if (otherPlayersNeedDiscard) {
+                  return (
+                    <div className="trading-panel" style={{ backgroundColor: '#e3f2fd', borderColor: '#2196F3' }}>
+                      <h2>⏳ Waiting for Other Players to Discard</h2>
+                      <p style={{ margin: 0, color: '#666' }}>
+                        A 7 was rolled. Other players with 8+ resources must discard half their resources before the robber can be moved.
+                      </p>
+                    </div>
+                  )
+                }
+                return null
+              }
+              
+              return (
+                <div className="trading-panel" style={{ backgroundColor: '#fff3cd', borderColor: '#ffc107' }}>
+                  <h2>
+                    ⚠️ Discard Resources (7 Rolled)
+                    <button
+                      onClick={() => setShowDiscardPanel(!showDiscardPanel)}
+                      className="toggle-button"
+                      style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}
+                    >
+                      {showDiscardPanel ? '▼' : '▶'}
+                    </button>
+                  </h2>
+                  {true && (  // Always show when needed - panel should be open
+                    <div className="trading-content">
+                      <div style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#fff', borderRadius: '4px' }}>
+                        <p style={{ margin: 0 }}>
+                          <strong>You have {totalResources} resources.</strong> You must discard <strong>{discardCount} resources</strong> (half, rounded down).
+                        </p>
+                        <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem', color: '#666' }}>
+                          Currently selected: <strong>{currentDiscardTotal} / {discardCount}</strong>
+                        </p>
+                      </div>
+                      
+                      {(() => {
+                        const resourceTypes = ['wood', 'brick', 'wheat', 'sheep', 'ore']
+                        const resourceIcons: Record<string, string> = {
+                          'wood': '🌲',
+                          'brick': '🧱',
+                          'wheat': '🌾',
+                          'sheep': '🐑',
+                          'ore': '⛏️'
+                        }
+                        
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                            <div>
+                              <h4 style={{ marginBottom: '0.5rem' }}>Resources to Discard</h4>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                {resourceTypes.map(resource => {
+                                  const currentAmount = discardResources[resource] || 0
+                                  const available = currentPlayer.resources[resource] || 0
+                                  return (
+                                    <div key={resource} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                      <span style={{ width: '80px' }}>{resourceIcons[resource]} {resource}:</span>
+                                      <button
+                                        onClick={() => {
+                                          if (currentAmount > 0) {
+                                            setDiscardResources({ ...discardResources, [resource]: currentAmount - 1 })
+                                          }
+                                        }}
+                                        disabled={currentAmount === 0}
+                                        style={{ width: '30px', height: '30px' }}
+                                      >
+                                        -
+                                      </button>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        max={available}
+                                        value={currentAmount}
+                                        onChange={(e) => {
+                                          const val = Math.max(0, Math.min(available, parseInt(e.target.value) || 0))
+                                          setDiscardResources({ ...discardResources, [resource]: val })
+                                        }}
+                                        style={{ width: '60px', textAlign: 'center' }}
+                                      />
+                                      <button
+                                        onClick={() => {
+                                          if (currentAmount < available && currentDiscardTotal < discardCount) {
+                                            setDiscardResources({ ...discardResources, [resource]: currentAmount + 1 })
+                                          }
+                                        }}
+                                        disabled={currentAmount >= available || currentDiscardTotal >= discardCount}
+                                        style={{ width: '30px', height: '30px' }}
+                                      >
+                                        +
+                                      </button>
+                                      <span style={{ color: '#666', fontSize: '0.85rem' }}>
+                                        (You have {available})
+                                      </span>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                            
+                            <div style={{ marginTop: '1rem' }}>
+                              <button
+                                onClick={async () => {
+                                  if (currentDiscardTotal !== discardCount) {
+                                    setError(`You must discard exactly ${discardCount} resources (currently ${currentDiscardTotal})`)
+                                    return
+                                  }
+                                  
+                                  // Validate player has enough of each resource
+                                  for (const [resource, amount] of Object.entries(discardResources)) {
+                                    if (amount > 0 && (currentPlayer.resources[resource] || 0) < amount) {
+                                      setError(`You don't have enough ${resource} to discard`)
+                                      return
+                                    }
+                                  }
+                                  
+                                  setLoading(true)
+                                  setError(null)
+                                  
+                                  try {
+                                    // Filter out zero amounts
+                                    const filteredDiscardResources: Record<string, number> = {}
+                                    for (const [resource, amount] of Object.entries(discardResources)) {
+                                      if (amount > 0) {
+                                        filteredDiscardResources[resource] = amount
+                                      }
+                                    }
+                                    
+                                    // Ensure we have resources to discard
+                                    if (Object.keys(filteredDiscardResources).length === 0) {
+                                      setError('No resources selected to discard')
+                                      setLoading(false)
+                                      return
+                                    }
+                                    
+                                    const discardAction: LegalAction = {
+                                      type: 'discard_resources',
+                                      payload: {
+                                        type: 'DiscardResourcesPayload',
+                                        resources: filteredDiscardResources
+                                      }
+                                    }
+                                    
+                                    console.log('Executing discard action:', discardAction)
+                                    const newState = await postAction(gameState.game_id, playerId, discardAction)
+                                    setGameState(newState)
+                                    
+                                    // Clear the discard form
+                                    setDiscardResources({})
+                                    setShowDiscardPanel(false)
+                                    
+                                    // Dev mode: Auto-switch to next player who needs to discard, or back to player who rolled 7
+                                    if (devMode && isAutoDiscarding) {
+                                      // Find all players who still need to discard (and haven't discarded yet)
+                                      const playersStillNeedingDiscard = newState.players.filter(p => {
+                                        const totalResources = Object.values(p.resources).reduce((a, b) => a + b, 0)
+                                        const hasDiscarded = newState.players_discarded?.includes(p.id) || false
+                                        return totalResources >= 8 && !hasDiscarded
+                                      })
+                                      
+                                      if (playersStillNeedingDiscard.length > 0) {
+                                        // Switch to next player who needs to discard
+                                        const currentIndex = playersStillNeedingDiscard.findIndex(p => p.id === playerId)
+                                        const nextIndex = (currentIndex + 1) % playersStillNeedingDiscard.length
+                                        setPlayerId(playersStillNeedingDiscard[nextIndex].id)
+                                      } else {
+                                        // All discards done, switch back to player who rolled 7
+                                        if (playerWhoRolled7) {
+                                          setPlayerId(playerWhoRolled7)
+                                          setIsAutoDiscarding(false)
+                                        }
+                                      }
+                                    }
+                                  } catch (err) {
+                                    setError(err instanceof Error ? err.message : 'Failed to discard resources')
+                                  } finally {
+                                    setLoading(false)
+                                  }
+                                }}
+                                disabled={loading || currentDiscardTotal !== discardCount}
+                                className="action-button"
+                                style={{
+                                  width: '100%',
+                                  padding: '0.75rem',
+                                  fontSize: '1rem',
+                                  fontWeight: 'bold',
+                                  backgroundColor: currentDiscardTotal === discardCount ? '#4CAF50' : '#ccc',
+                                  color: 'white'
+                                }}
+                              >
+                                {loading ? 'Discarding...' : `Discard ${discardCount} Resources`}
+                              </button>
+                              {currentDiscardTotal !== discardCount && (
+                                <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: '#d32f2f' }}>
+                                  Please select exactly {discardCount} resources to discard.
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })()}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
 
             <div className="legal-actions">
               <h2>Legal Actions</h2>
@@ -1255,7 +1900,11 @@ function App() {
               ) : (
                 <div className="actions-list">
                   {legalActions
-                    .filter(a => a.type !== 'trade_bank' && a.type !== 'trade_player')  // Hide trades from main list, show in trading panel
+                    .filter(a => 
+                      a.type !== 'trade_bank' && 
+                      a.type !== 'trade_player' &&
+                      a.type !== 'discard_resources'  // Hide discard from main list, show in discard panel
+                    )
                     .map((action, idx) => (
                       <button
                         key={idx}

@@ -49,6 +49,9 @@ def serialize_game_state(state: GameState) -> Dict[str, Any]:
         "robber_tile_id": state.robber_tile_id,
         "waiting_for_robber_move": state.waiting_for_robber_move,
         "waiting_for_robber_steal": state.waiting_for_robber_steal,
+        "players_discarded": list(state.players_discarded),
+        "robber_initial_tile_id": state.robber_initial_tile_id,
+        "roads_from_road_building": state.roads_from_road_building,
     }
 
 
@@ -71,6 +74,9 @@ def deserialize_game_state(data: Dict[str, Any]) -> GameState:
         robber_tile_id=data.get("robber_tile_id"),
         waiting_for_robber_move=data.get("waiting_for_robber_move", False),
         waiting_for_robber_steal=data.get("waiting_for_robber_steal", False),
+        players_discarded=set(data.get("players_discarded", [])),
+        robber_initial_tile_id=data.get("robber_initial_tile_id"),
+        roads_from_road_building=dict(data.get("roads_from_road_building", {})),
     )
 
 
@@ -213,10 +219,15 @@ def serialize_action_payload(payload: ActionPayload) -> Dict[str, Any]:
             "intersection_id": payload.intersection_id,
         }
     elif isinstance(payload, PlayDevCardPayload):
-        return {
+        result = {
             "type": "PlayDevCardPayload",
             "card_type": payload.card_type,
         }
+        if payload.year_of_plenty_resources:
+            result["year_of_plenty_resources"] = {rt.value: count for rt, count in payload.year_of_plenty_resources.items()}
+        if payload.monopoly_resource_type:
+            result["monopoly_resource_type"] = payload.monopoly_resource_type.value
+        return result
     elif isinstance(payload, TradeBankPayload):
         return {
             "type": "TradeBankPayload",
@@ -261,7 +272,22 @@ def deserialize_action_payload(data: Dict[str, Any]) -> ActionPayload:
     elif payload_type == "BuildCityPayload":
         return BuildCityPayload(intersection_id=data["intersection_id"])
     elif payload_type == "PlayDevCardPayload":
-        return PlayDevCardPayload(card_type=data["card_type"])
+        year_of_plenty_resources = None
+        if "year_of_plenty_resources" in data and data["year_of_plenty_resources"]:
+            year_of_plenty_resources = {
+                ResourceType(rt): count
+                for rt, count in data["year_of_plenty_resources"].items()
+            }
+        
+        monopoly_resource_type = None
+        if "monopoly_resource_type" in data and data["monopoly_resource_type"]:
+            monopoly_resource_type = ResourceType(data["monopoly_resource_type"])
+        
+        return PlayDevCardPayload(
+            card_type=data["card_type"],
+            year_of_plenty_resources=year_of_plenty_resources,
+            monopoly_resource_type=monopoly_resource_type
+        )
     elif payload_type == "TradeBankPayload":
         give_resources = {
             ResourceType(rt): count
@@ -373,21 +399,35 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
         elif state.dice_roll == 7:
             # Handle rolling 7
             # First phase: ALL players with 8+ resources must discard
-            # Check if ANY player needs to discard
-            any_player_needs_discard = False
-            for p in state.players:
-                if sum(p.resources.values()) >= 8:
-                    any_player_needs_discard = True
-                    break
+            # BUT: Only allow discarding BEFORE the robber phase starts
+            # Once waiting_for_robber_move is set, discards are done and we're in robber phase
+            # Even if a player gets 8+ resources from stealing, they don't need to discard again
             
-            if any_player_needs_discard:
-                # This player can discard if they have 8+ resources (even if not their turn)
-                total_resources = sum(player.resources.values())
-                if total_resources >= 8:
-                    # Player must discard half their resources (rounded down)
-                    legal.append((Action.DISCARD_RESOURCES, None))  # Payload will be provided by frontend
-                # Don't show other actions while discarding
-                return legal
+            # Check if we're still in discard phase
+            # Discard phase is over if:
+            # 1. waiting_for_robber_move is True (all discards done, waiting to move robber), OR
+            # 2. waiting_for_robber_steal is True (robber moved, waiting to steal), OR
+            # 3. Robber has been moved (robber_tile_id != robber_initial_tile_id)
+            robber_has_been_moved = (state.robber_initial_tile_id is not None and 
+                                     state.robber_tile_id != state.robber_initial_tile_id)
+            
+            if not state.waiting_for_robber_move and not state.waiting_for_robber_steal and not robber_has_been_moved:
+                # Still in discard phase - check if ANY player needs to discard
+                any_player_needs_discard = False
+                for p in state.players:
+                    if sum(p.resources.values()) >= 8:
+                        any_player_needs_discard = True
+                        break
+                
+                if any_player_needs_discard:
+                    # This player can discard if they have 8+ resources AND haven't discarded yet
+                    # (even if not their turn)
+                    total_resources = sum(player.resources.values())
+                    if total_resources >= 8 and player_id not in state.players_discarded:
+                        # Player must discard half their resources (rounded down)
+                        legal.append((Action.DISCARD_RESOURCES, None))  # Payload will be provided by frontend
+                    # Don't show other actions while discarding
+                    return legal
             
             # All discards done, handle robber phase
             if state.waiting_for_robber_move:
@@ -424,10 +464,44 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
             # If we get here, robber phase is complete - fall through to normal turn actions
         
         # Normal turn actions (after dice roll, or after completing robber phase on 7)
+        # Trading is only allowed after dice is rolled AND all 7-roll phases are complete
+        can_trade = False
         if state.dice_roll is not None and is_current_player:
-            # Can build road
-            if (player.resources[ResourceType.WOOD] >= 1 and  
-                player.resources[ResourceType.BRICK] >= 1):
+            # Check if we're in a 7-roll phase that hasn't been completed
+            if state.dice_roll == 7:
+                # Check if we're still in discard phase
+                robber_has_been_moved = (state.robber_initial_tile_id is not None and 
+                                         state.robber_tile_id != state.robber_initial_tile_id)
+                in_discard_phase = (not state.waiting_for_robber_move and 
+                                   not state.waiting_for_robber_steal and 
+                                   not robber_has_been_moved)
+                
+                if in_discard_phase:
+                    # Check if any player still needs to discard
+                    any_player_needs_discard = False
+                    for p in state.players:
+                        if p.id not in state.players_discarded and sum(p.resources.values()) >= 8:
+                            any_player_needs_discard = True
+                            break
+                    if any_player_needs_discard:
+                        can_trade = False  # Still in discard phase
+                    else:
+                        can_trade = False  # Discard phase just finished, but robber phase hasn't started yet
+                elif state.waiting_for_robber_move or state.waiting_for_robber_steal:
+                    can_trade = False  # In robber move/steal phase
+                else:
+                    can_trade = True  # All 7-roll phases complete
+            else:
+                can_trade = True  # Not a 7 roll, trading allowed after dice roll
+        
+        if state.dice_roll is not None and is_current_player:
+            # Can build road (either with resources or using road building card)
+            free_roads_remaining = state.roads_from_road_building.get(player_id, 0)
+            has_resources = (player.resources[ResourceType.WOOD] >= 1 and  
+                            player.resources[ResourceType.BRICK] >= 1)
+            can_build_road = has_resources or free_roads_remaining > 0
+            
+            if can_build_road:
                 for road_edge in state.road_edges:
                     if not road_edge.owner:
                         # Check if player has a road/settlement adjacent
@@ -492,7 +566,36 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
             
             # Can play dev cards
             for card_type in player.dev_cards:
-                legal.append((Action.PLAY_DEV_CARD, PlayDevCardPayload(card_type)))
+                if card_type == "year_of_plenty":
+                    # Year of plenty: player can choose 2 resources
+                    # Generate actions for all valid combinations:
+                    # - 2 of the same resource (5 options: 2 wood, 2 brick, 2 wheat, 2 sheep, 2 ore)
+                    # - 2 different resources (C(5,2) = 10 combinations)
+                    resource_types = list(ResourceType)
+                    # Same resource twice
+                    for res in resource_types:
+                        legal.append((Action.PLAY_DEV_CARD, PlayDevCardPayload(
+                            card_type=card_type,
+                            year_of_plenty_resources={res: 2}
+                        )))
+                    # Two different resources
+                    for i, res1 in enumerate(resource_types):
+                        for j, res2 in enumerate(resource_types):
+                            if i < j:  # Different resources, avoid duplicates
+                                legal.append((Action.PLAY_DEV_CARD, PlayDevCardPayload(
+                                    card_type=card_type,
+                                    year_of_plenty_resources={res1: 1, res2: 1}
+                                )))
+                elif card_type == "monopoly":
+                    # Monopoly: player can choose a resource type to steal
+                    for resource_type in ResourceType:
+                        legal.append((Action.PLAY_DEV_CARD, PlayDevCardPayload(
+                            card_type=card_type,
+                            monopoly_resource_type=resource_type
+                        )))
+                else:
+                    # Other cards (victory_point, knight, road_building) don't need payloads
+                    legal.append((Action.PLAY_DEV_CARD, PlayDevCardPayload(card_type)))
             
             # Check for ports owned by player
             # Ports span 2 adjacent intersections - player must own at least one
@@ -518,57 +621,46 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
                         owned_ports.append(intersection)
                         port_types_seen.add(intersection.port_type)
             
-            # Can trade with bank using ports
-            for port_inter in owned_ports:
-                if port_inter.port_type == "3:1":
-                    # 3:1 generic port - can trade 3 of any resource for 1 of any resource
-                    for give_rt in ResourceType:
-                        if player.resources[give_rt] >= 3:
+            # Can trade with bank using ports (only if trading is allowed)
+            if can_trade:
+                for port_inter in owned_ports:
+                    if port_inter.port_type == "3:1":
+                        # 3:1 generic port - can trade 3 of any resource for 1 of any resource
+                        for give_rt in ResourceType:
+                            if player.resources[give_rt] >= 3:
+                                for receive_rt in ResourceType:
+                                    if give_rt != receive_rt:
+                                        legal.append((Action.TRADE_BANK, TradeBankPayload(
+                                            give_resources={give_rt: 3},
+                                            receive_resources={receive_rt: 1},
+                                            port_intersection_id=port_inter.id,
+                                        )))
+                    else:
+                        # 2:1 specific resource port
+                        port_resource = ResourceType(port_inter.port_type)
+                        if player.resources[port_resource] >= 2:
                             for receive_rt in ResourceType:
-                                if give_rt != receive_rt:
+                                if port_resource != receive_rt:
                                     legal.append((Action.TRADE_BANK, TradeBankPayload(
-                                        give_resources={give_rt: 3},
+                                        give_resources={port_resource: 2},
                                         receive_resources={receive_rt: 1},
                                         port_intersection_id=port_inter.id,
                                     )))
-                else:
-                    # 2:1 specific resource port
-                    port_resource = ResourceType(port_inter.port_type)
-                    if player.resources[port_resource] >= 2:
+            
+            # Can trade with bank (standard 4:1, no port) (only if trading is allowed)
+            if can_trade:
+                for give_rt in ResourceType:
+                    if player.resources[give_rt] >= 4:
                         for receive_rt in ResourceType:
-                            if port_resource != receive_rt:
+                            if give_rt != receive_rt:
                                 legal.append((Action.TRADE_BANK, TradeBankPayload(
-                                    give_resources={port_resource: 2},
+                                    give_resources={give_rt: 4},
                                     receive_resources={receive_rt: 1},
-                                    port_intersection_id=port_inter.id,
+                                    port_intersection_id=None,
                                 )))
             
-            # Can trade with bank (standard 4:1, no port)
-            for give_rt in ResourceType:
-                if player.resources[give_rt] >= 4:
-                    for receive_rt in ResourceType:
-                        if give_rt != receive_rt:
-                            legal.append((Action.TRADE_BANK, TradeBankPayload(
-                                give_resources={give_rt: 4},
-                                receive_resources={receive_rt: 1},
-                                port_intersection_id=None,
-                            )))
-            
-            # Can trade with other players (multi-resource trades)
-            # For simplicity, we'll generate common trade patterns
-            # Players can construct custom trades via the UI
-            for other_player in state.players:
-                if other_player.id != player_id:
-                    # Single resource trades (1:1)
-                    for give_rt in ResourceType:
-                        if player.resources[give_rt] > 0:
-                            for receive_rt in ResourceType:
-                                if give_rt != receive_rt and other_player.resources[receive_rt] > 0:
-                                    legal.append((Action.TRADE_PLAYER, TradePlayerPayload(
-                                        other_player_id=other_player.id,
-                                        give_resources={give_rt: 1},
-                                        receive_resources={receive_rt: 1},
-                                    )))
+            # Player trades are now constructed via the UI, not auto-generated
+            # This allows for multi-resource trades with custom give/receive amounts
             
             # Can end turn (but not if waiting for robber actions, or if 7 was rolled and anyone needs to discard)
             if state.dice_roll == 7:

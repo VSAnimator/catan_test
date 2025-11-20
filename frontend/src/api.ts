@@ -54,6 +54,9 @@ export interface GameState {
   robber_tile_id: number | null
   waiting_for_robber_move: boolean
   waiting_for_robber_steal: boolean
+  players_discarded?: string[]  // Players who have already discarded this turn (when 7 is rolled)
+  robber_initial_tile_id?: number | null  // Robber position when 7 was rolled (to detect if it's been moved)
+  roads_from_road_building?: Record<string, number>  // Player ID -> number of free roads remaining from road building card
 }
 
 export interface LegalAction {
@@ -63,6 +66,8 @@ export interface LegalAction {
     road_edge_id?: number
     intersection_id?: number
     card_type?: string
+    year_of_plenty_resources?: Record<string, number>  // For year_of_plenty: 2 resources to receive
+    monopoly_resource_type?: string  // For monopoly: resource type to steal
     give_resources?: Record<string, number>  // Multi-resource support
     receive_resources?: Record<string, number>  // Multi-resource support
     port_intersection_id?: number | null
