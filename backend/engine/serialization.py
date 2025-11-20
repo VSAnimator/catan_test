@@ -440,11 +440,19 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
         elif state.dice_roll == 7:
             # Handle rolling 7
             # First phase: ALL players with 8+ resources must discard
-            # BUT: Only allow discarding BEFORE the robber phase starts
-            # Once waiting_for_robber_move is set, discards are done and we're in robber phase
-            # Even if a player gets 8+ resources from stealing, they don't need to discard again
+            # Players can discard even if it's not their turn, and even if the robber phase has started
+            # (though ideally the robber shouldn't move until all discards are done)
             
-            # Check if we're still in discard phase
+            # Check if this player needs to discard (has 8+ resources and hasn't discarded yet)
+            total_resources = sum(player.resources.values())
+            if total_resources >= 8 and player_id not in state.players_discarded:
+                # Player must discard - allow this even if robber phase has started
+                # (This handles edge cases where the game state might be inconsistent)
+                legal.append((Action.DISCARD_RESOURCES, None))  # Payload will be provided by frontend
+                # Don't show other actions while this player needs to discard
+                return legal
+            
+            # Check if we're still in discard phase (other players need to discard)
             # Discard phase is over if:
             # 1. waiting_for_robber_move is True (all discards done, waiting to move robber), OR
             # 2. waiting_for_robber_steal is True (robber moved, waiting to steal), OR
@@ -452,35 +460,43 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
             robber_has_been_moved = (state.robber_initial_tile_id is not None and 
                                      state.robber_tile_id != state.robber_initial_tile_id)
             
-            if not state.waiting_for_robber_move and not state.waiting_for_robber_steal and not robber_has_been_moved:
-                # Still in discard phase - check if ANY player needs to discard
-                any_player_needs_discard = False
-                for p in state.players:
-                    if sum(p.resources.values()) >= 8:
-                        any_player_needs_discard = True
-                        break
-                
-                if any_player_needs_discard:
-                    # This player can discard if they have 8+ resources AND haven't discarded yet
-                    # (even if not their turn)
-                    total_resources = sum(player.resources.values())
-                    if total_resources >= 8 and player_id not in state.players_discarded:
-                        # Player must discard half their resources (rounded down)
-                        legal.append((Action.DISCARD_RESOURCES, None))  # Payload will be provided by frontend
-                    # Don't show other actions while discarding
-                    return legal
+            # Check if any other players still need to discard
+            any_player_needs_discard = False
+            for p in state.players:
+                if p.id not in state.players_discarded and sum(p.resources.values()) >= 8:
+                    any_player_needs_discard = True
+                    break
+            
+            # If other players need to discard and we're not in robber phase yet, don't show other actions
+            if any_player_needs_discard and not state.waiting_for_robber_move and not state.waiting_for_robber_steal and not robber_has_been_moved:
+                # Other players still need to discard, and we're not in robber phase
+                # This player can't do anything else until all discards are done
+                return legal
             
             # All discards done, handle robber phase (for 7 roll only)
             # Note: waiting_for_robber_move from knight cards is handled above
             if state.waiting_for_robber_move:
-                # All discards done, now ONLY the player who rolled the 7 can move robber
-                if is_current_player:
-                    # Can move robber to any tile except current
-                    for tile in state.tiles:
-                        if tile.id != state.robber_tile_id:
-                            legal.append((Action.MOVE_ROBBER, MoveRobberPayload(tile.id)))
-                # Don't show other actions while waiting to move robber
-                return legal
+                # Verify that all players with 8+ resources have actually discarded
+                all_discarded = True
+                for p in state.players:
+                    if p.id not in state.players_discarded and sum(p.resources.values()) >= 8:
+                        all_discarded = False
+                        break
+                
+                # Only allow moving robber if all discards are complete
+                if all_discarded:
+                    # All discards done, now ONLY the player who rolled the 7 can move robber
+                    if is_current_player:
+                        # Can move robber to any tile except current
+                        for tile in state.tiles:
+                            if tile.id != state.robber_tile_id:
+                                legal.append((Action.MOVE_ROBBER, MoveRobberPayload(tile.id)))
+                    # Don't show other actions while waiting to move robber
+                    return legal
+                else:
+                    # Not all players have discarded yet - don't allow moving robber
+                    # (This shouldn't happen if the engine logic is correct, but handle it gracefully)
+                    return legal
             
             if state.waiting_for_robber_steal:
                 # After moving robber, can steal from players on that tile

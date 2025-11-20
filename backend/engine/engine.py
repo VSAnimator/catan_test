@@ -678,6 +678,12 @@ class GameState:
         if not payload or not isinstance(payload, MoveRobberPayload):
             raise ValueError("MOVE_ROBBER requires MoveRobberPayload")
         
+        # If a 7 was rolled, ensure ALL players with 8+ resources have discarded before moving robber
+        if new_state.dice_roll == 7:
+            for p in new_state.players:
+                if p.id not in new_state.players_discarded and sum(p.resources.values()) >= 8:
+                    raise ValueError(f"Cannot move robber until all players have discarded. Player {p.name} ({p.id}) still needs to discard.")
+        
         # Verify tile exists
         tile = next((t for t in new_state.tiles if t.id == payload.tile_id), None)
         if not tile:
