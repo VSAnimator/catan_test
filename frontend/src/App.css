@@ -383,6 +383,61 @@ button.secondary:hover:not(:disabled) {
   border-color: #2e7d32;
 }
 
+.port-edge-indicator {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-size: 1.2rem;
+  z-index: 18; /* Between roads and intersections */
+  filter: drop-shadow(2px 2px 4px rgba(0, 0, 0, 0.8));
+  background-color: rgba(255, 255, 255, 0.95);
+  border-radius: 50%;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #333;
+  font-weight: bold;
+  pointer-events: none;
+}
+
+/* Resource ports (2:1) should render on top of 3:1 ports */
+.port-edge-indicator[data-port-type]:not([data-port-type="3:1"]) {
+  z-index: 19; /* Higher than 3:1 ports */
+}
+
+.trading-panel {
+  margin-bottom: 1.5rem;
+  padding: 1rem;
+  background-color: #f9f9f9;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+}
+
+.trading-panel h2 {
+  margin-top: 0;
+  display: flex;
+  align-items: center;
+}
+
+.toggle-button {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  color: #666;
+}
+
+.trading-content {
+  margin-top: 1rem;
+}
+
+.quick-trades {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
 .road {
   position: absolute;
   height: 6px;

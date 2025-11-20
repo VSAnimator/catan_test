@@ -148,6 +148,7 @@ def serialize_intersection(intersection: Intersection) -> Dict[str, Any]:
         "adjacent_intersections": list(intersection.adjacent_intersections),
         "owner": intersection.owner,
         "building_type": intersection.building_type,
+        "port_type": intersection.port_type,
     }
 
 
@@ -160,6 +161,7 @@ def deserialize_intersection(data: Dict[str, Any]) -> Intersection:
         adjacent_intersections=set(data.get("adjacent_intersections", [])),
         owner=data.get("owner"),
         building_type=data.get("building_type"),
+        port_type=data.get("port_type"),
     )
 
 
@@ -218,19 +220,16 @@ def serialize_action_payload(payload: ActionPayload) -> Dict[str, Any]:
     elif isinstance(payload, TradeBankPayload):
         return {
             "type": "TradeBankPayload",
-            "give_resource": payload.give_resource.value,
-            "give_amount": payload.give_amount,
-            "receive_resource": payload.receive_resource.value,
-            "receive_amount": payload.receive_amount,
+            "give_resources": {rt.value: count for rt, count in payload.give_resources.items()},
+            "receive_resources": {rt.value: count for rt, count in payload.receive_resources.items()},
+            "port_intersection_id": payload.port_intersection_id,
         }
     elif isinstance(payload, TradePlayerPayload):
         return {
             "type": "TradePlayerPayload",
             "other_player_id": payload.other_player_id,
-            "give_resource": payload.give_resource.value,
-            "give_amount": payload.give_amount,
-            "receive_resource": payload.receive_resource.value,
-            "receive_amount": payload.receive_amount,
+            "give_resources": {rt.value: count for rt, count in payload.give_resources.items()},
+            "receive_resources": {rt.value: count for rt, count in payload.receive_resources.items()},
         }
     elif isinstance(payload, MoveRobberPayload):
         return {
@@ -264,19 +263,32 @@ def deserialize_action_payload(data: Dict[str, Any]) -> ActionPayload:
     elif payload_type == "PlayDevCardPayload":
         return PlayDevCardPayload(card_type=data["card_type"])
     elif payload_type == "TradeBankPayload":
+        give_resources = {
+            ResourceType(rt): count
+            for rt, count in data.get("give_resources", {}).items()
+        }
+        receive_resources = {
+            ResourceType(rt): count
+            for rt, count in data.get("receive_resources", {}).items()
+        }
         return TradeBankPayload(
-            give_resource=ResourceType(data["give_resource"]),
-            give_amount=data["give_amount"],
-            receive_resource=ResourceType(data["receive_resource"]),
-            receive_amount=data["receive_amount"],
+            give_resources=give_resources,
+            receive_resources=receive_resources,
+            port_intersection_id=data.get("port_intersection_id"),
         )
     elif payload_type == "TradePlayerPayload":
+        give_resources = {
+            ResourceType(rt): count
+            for rt, count in data.get("give_resources", {}).items()
+        }
+        receive_resources = {
+            ResourceType(rt): count
+            for rt, count in data.get("receive_resources", {}).items()
+        }
         return TradePlayerPayload(
             other_player_id=data["other_player_id"],
-            give_resource=ResourceType(data["give_resource"]),
-            give_amount=data["give_amount"],
-            receive_resource=ResourceType(data["receive_resource"]),
-            receive_amount=data["receive_amount"],
+            give_resources=give_resources,
+            receive_resources=receive_resources,
         )
     elif payload_type == "MoveRobberPayload":
         return MoveRobberPayload(tile_id=data["tile_id"])
@@ -482,32 +494,80 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
             for card_type in player.dev_cards:
                 legal.append((Action.PLAY_DEV_CARD, PlayDevCardPayload(card_type)))
             
-            # Can trade with bank (4:1)
+            # Check for ports owned by player
+            # Ports span 2 adjacent intersections - player must own at least one
+            owned_ports = []
+            port_types_seen = set()
+            for intersection in state.intersections:
+                if intersection.port_type is not None and intersection.port_type not in port_types_seen:
+                    # Check if player owns this intersection or an adjacent one with same port
+                    owns_port = False
+                    if intersection.owner == player_id:
+                        owns_port = True
+                    else:
+                        # Check adjacent intersections
+                        for adj_id in intersection.adjacent_intersections:
+                            adj_inter = next((i for i in state.intersections if i.id == adj_id), None)
+                            if (adj_inter and 
+                                adj_inter.port_type == intersection.port_type and
+                                adj_inter.owner == player_id):
+                                owns_port = True
+                                break
+                    
+                    if owns_port:
+                        owned_ports.append(intersection)
+                        port_types_seen.add(intersection.port_type)
+            
+            # Can trade with bank using ports
+            for port_inter in owned_ports:
+                if port_inter.port_type == "3:1":
+                    # 3:1 generic port - can trade 3 of any resource for 1 of any resource
+                    for give_rt in ResourceType:
+                        if player.resources[give_rt] >= 3:
+                            for receive_rt in ResourceType:
+                                if give_rt != receive_rt:
+                                    legal.append((Action.TRADE_BANK, TradeBankPayload(
+                                        give_resources={give_rt: 3},
+                                        receive_resources={receive_rt: 1},
+                                        port_intersection_id=port_inter.id,
+                                    )))
+                else:
+                    # 2:1 specific resource port
+                    port_resource = ResourceType(port_inter.port_type)
+                    if player.resources[port_resource] >= 2:
+                        for receive_rt in ResourceType:
+                            if port_resource != receive_rt:
+                                legal.append((Action.TRADE_BANK, TradeBankPayload(
+                                    give_resources={port_resource: 2},
+                                    receive_resources={receive_rt: 1},
+                                    port_intersection_id=port_inter.id,
+                                )))
+            
+            # Can trade with bank (standard 4:1, no port)
             for give_rt in ResourceType:
                 if player.resources[give_rt] >= 4:
                     for receive_rt in ResourceType:
                         if give_rt != receive_rt:
                             legal.append((Action.TRADE_BANK, TradeBankPayload(
-                                give_resource=give_rt,
-                                give_amount=4,
-                                receive_resource=receive_rt,
-                                receive_amount=1,
+                                give_resources={give_rt: 4},
+                                receive_resources={receive_rt: 1},
+                                port_intersection_id=None,
                             )))
             
-            # Can trade with other players
+            # Can trade with other players (multi-resource trades)
+            # For simplicity, we'll generate common trade patterns
+            # Players can construct custom trades via the UI
             for other_player in state.players:
                 if other_player.id != player_id:
+                    # Single resource trades (1:1)
                     for give_rt in ResourceType:
                         if player.resources[give_rt] > 0:
                             for receive_rt in ResourceType:
                                 if give_rt != receive_rt and other_player.resources[receive_rt] > 0:
-                                    # Simplified: allow 1:1 trades
                                     legal.append((Action.TRADE_PLAYER, TradePlayerPayload(
                                         other_player_id=other_player.id,
-                                        give_resource=give_rt,
-                                        give_amount=1,
-                                        receive_resource=receive_rt,
-                                        receive_amount=1,
+                                        give_resources={give_rt: 1},
+                                        receive_resources={receive_rt: 1},
                                     )))
             
             # Can end turn (but not if waiting for robber actions, or if 7 was rolled and anyone needs to discard)
@@ -670,12 +730,14 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]])
             elif isinstance(payload, PlayDevCardPayload):
                 lines.append(f"- {action_name} ({payload.card_type})")
             elif isinstance(payload, TradeBankPayload):
-                lines.append(f"- {action_name}: Give {payload.give_amount} {payload.give_resource.value}, "
-                           f"receive {payload.receive_amount} {payload.receive_resource.value}")
+                give_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.give_resources.items()])
+                receive_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.receive_resources.items()])
+                port_info = f" (via port at intersection {payload.port_intersection_id})" if payload.port_intersection_id else ""
+                lines.append(f"- {action_name}: Give {give_str}, receive {receive_str}{port_info}")
             elif isinstance(payload, TradePlayerPayload):
-                lines.append(f"- {action_name} with {payload.other_player_id}: "
-                           f"Give {payload.give_amount} {payload.give_resource.value}, "
-                           f"receive {payload.receive_amount} {payload.receive_resource.value}")
+                give_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.give_resources.items()])
+                receive_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.receive_resources.items()])
+                lines.append(f"- {action_name} with {payload.other_player_id}: Give {give_str}, receive {receive_str}")
         else:
             # Multiple actions of same type
             lines.append(f"- {action_name}:")
@@ -689,12 +751,14 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]])
                 elif isinstance(payload, PlayDevCardPayload):
                     lines.append(f"  * Card: {payload.card_type}")
                 elif isinstance(payload, TradeBankPayload):
-                    lines.append(f"  * Give {payload.give_amount} {payload.give_resource.value}, "
-                               f"receive {payload.receive_amount} {payload.receive_resource.value}")
+                    give_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.give_resources.items()])
+                    receive_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.receive_resources.items()])
+                    port_info = f" (port at {payload.port_intersection_id})" if payload.port_intersection_id else ""
+                    lines.append(f"  * Give {give_str}, receive {receive_str}{port_info}")
                 elif isinstance(payload, TradePlayerPayload):
-                    lines.append(f"  * With {payload.other_player_id}: "
-                               f"Give {payload.give_amount} {payload.give_resource.value}, "
-                               f"receive {payload.receive_amount} {payload.receive_resource.value}")
+                    give_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.give_resources.items()])
+                    receive_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.receive_resources.items()])
+                    lines.append(f"  * With {payload.other_player_id}: Give {give_str}, receive {receive_str}")
     
     return "\n".join(lines)
 

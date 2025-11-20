@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple, Set, Any
 from dataclasses import dataclass, field
 import random
 import copy
+import math
 
 
 class ResourceType(Enum):
@@ -46,6 +47,7 @@ class Intersection:
     adjacent_intersections: Set[int] = field(default_factory=set)  # Intersection IDs
     owner: Optional[str] = None  # Player ID
     building_type: Optional[str] = None  # "settlement" or "city"
+    port_type: Optional[str] = None  # None = no port, "3:1" = generic port, or resource type (e.g., "sheep") for 2:1 port
 
 
 @dataclass(frozen=True)
@@ -164,7 +166,7 @@ class GameState:
             # The legal actions will check if anyone needs to discard
             pass
         else:
-            # Distribute resources if not 7
+        # Distribute resources if not 7
             self._distribute_resources(new_state, roll)
         
         return new_state
@@ -390,17 +392,66 @@ class GameState:
         
         current_player = new_state.players[new_state.current_player_index]
         
-        # Check if player has enough of the resource they're giving
-        if current_player.resources[payload.give_resource] < payload.give_amount:
-            raise ValueError(f"Insufficient {payload.give_resource.value} to trade")
+        # Check if player has enough of all resources they're giving
+        for resource, amount in payload.give_resources.items():
+            if current_player.resources[resource] < amount:
+                raise ValueError(f"Insufficient {resource.value} to trade (have {current_player.resources[resource]}, need {amount})")
         
-        # Standard trade: 4:1 ratio
-        if payload.give_amount != 4 or payload.receive_amount != 1:
-            raise ValueError("Bank trades must be 4:1 ratio")
+        # Validate trade ratio based on port or default 4:1
+        total_give = sum(payload.give_resources.values())
+        total_receive = sum(payload.receive_resources.values())
         
-        # Execute trade
-        current_player.resources[payload.give_resource] -= payload.give_amount
-        current_player.resources[payload.receive_resource] += payload.receive_amount
+        if payload.port_intersection_id is not None:
+            # Using a port - check ownership and validate ratio
+            # Ports span 2 adjacent intersections - player must own at least one
+            port_intersection = next((i for i in new_state.intersections if i.id == payload.port_intersection_id), None)
+            if not port_intersection:
+                raise ValueError(f"Port intersection {payload.port_intersection_id} not found")
+            
+            if port_intersection.port_type is None:
+                raise ValueError(f"Intersection {payload.port_intersection_id} does not have a port")
+            
+            # Check if player owns this intersection or an adjacent intersection with the same port
+            owns_port = False
+            if port_intersection.owner == current_player.id:
+                owns_port = True
+            else:
+                # Check adjacent intersections for the same port type
+                for adj_id in port_intersection.adjacent_intersections:
+                    adj_inter = next((i for i in new_state.intersections if i.id == adj_id), None)
+                    if (adj_inter and 
+                        adj_inter.port_type == port_intersection.port_type and
+                        adj_inter.owner == current_player.id):
+                        owns_port = True
+                        break
+            
+            if not owns_port:
+                raise ValueError(f"Player does not own port at intersection {payload.port_intersection_id} or adjacent intersection")
+            
+            if port_intersection.port_type == "3:1":
+                # 3:1 generic port - can trade 3 of any resource for 1 of any resource
+                if total_give != 3 or total_receive != 1:
+                    raise ValueError("3:1 port trades must be exactly 3 resources for 1 resource")
+            else:
+                # 2:1 specific resource port
+                port_resource = ResourceType(port_intersection.port_type)
+                # Must give exactly 2 of the port's resource type
+                if payload.give_resources.get(port_resource, 0) != 2 or total_give != 2:
+                    raise ValueError(f"2:1 {port_resource.value} port requires exactly 2 {port_resource.value} for 1 of any resource")
+                if total_receive != 1:
+                    raise ValueError("2:1 port trades must receive exactly 1 resource")
+        else:
+            # Standard 4:1 trade (no port)
+            if total_give != 4 or total_receive != 1:
+                raise ValueError("Standard bank trades must be 4:1 ratio")
+        
+        # Execute trade - remove given resources
+        for resource, amount in payload.give_resources.items():
+            current_player.resources[resource] -= amount
+        
+        # Add received resources
+        for resource, amount in payload.receive_resources.items():
+            current_player.resources[resource] += amount
         
         return new_state
     
@@ -415,17 +466,31 @@ class GameState:
         if not other_player:
             raise ValueError(f"Player {payload.other_player_id} not found")
         
-        # Check resources
-        if current_player.resources[payload.give_resource] < payload.give_amount:
-            raise ValueError(f"Insufficient {payload.give_resource.value} to trade")
-        if other_player.resources[payload.receive_resource] < payload.receive_amount:
-            raise ValueError(f"Other player has insufficient {payload.receive_resource.value}")
+        # Check current player has enough of all resources they're giving
+        for resource, amount in payload.give_resources.items():
+            if current_player.resources[resource] < amount:
+                raise ValueError(f"Insufficient {resource.value} to trade (have {current_player.resources[resource]}, need {amount})")
         
-        # Execute trade
-        current_player.resources[payload.give_resource] -= payload.give_amount
-        current_player.resources[payload.receive_resource] += payload.receive_amount
-        other_player.resources[payload.give_resource] += payload.give_amount
-        other_player.resources[payload.receive_resource] -= payload.receive_amount
+        # Check other player has enough of all resources they're giving
+        for resource, amount in payload.receive_resources.items():
+            if other_player.resources[resource] < amount:
+                raise ValueError(f"Other player has insufficient {resource.value} (they have {other_player.resources[resource]}, need {amount})")
+        
+        # Execute trade - remove given resources from current player
+        for resource, amount in payload.give_resources.items():
+            current_player.resources[resource] -= amount
+        
+        # Add received resources to current player
+        for resource, amount in payload.receive_resources.items():
+            current_player.resources[resource] += amount
+        
+        # Remove given resources from other player (what current player receives)
+        for resource, amount in payload.receive_resources.items():
+            other_player.resources[resource] -= amount
+        
+        # Add received resources to other player (what current player gives)
+        for resource, amount in payload.give_resources.items():
+            other_player.resources[resource] += amount
         
         return new_state
     
@@ -825,7 +890,8 @@ class GameState:
                         id=intersection_id,
                         position=(corner_q, corner_r),
                         adjacent_tiles={tile.id},
-                        adjacent_intersections=set()
+                        adjacent_intersections=set(),
+                        port_type=None  # Will assign ports later
                     )
                     intersections.append(intersection)
                     intersection_map[corner_key] = intersection_id
@@ -840,7 +906,8 @@ class GameState:
                         adjacent_tiles=existing_inter.adjacent_tiles | {tile.id},
                         adjacent_intersections=existing_inter.adjacent_intersections,
                         owner=existing_inter.owner,
-                        building_type=existing_inter.building_type
+                        building_type=existing_inter.building_type,
+                        port_type=existing_inter.port_type
                     )
         
         # Link adjacent intersections (those on the same hex edge)
@@ -862,14 +929,274 @@ class GameState:
                 inter1 = intersections[corner1_id]
                 inter2 = intersections[corner2_id]
                 
-                # Add to each other's adjacent list
+                # Add to each other's adjacent list (bidirectional)
                 intersections[corner1_id] = Intersection(
                     id=inter1.id,
                     position=inter1.position,
                     adjacent_tiles=inter1.adjacent_tiles,
                     adjacent_intersections=inter1.adjacent_intersections | {corner2_id},
                     owner=inter1.owner,
-                    building_type=inter1.building_type
+                    building_type=inter1.building_type,
+                    port_type=inter1.port_type
+                )
+                
+                intersections[corner2_id] = Intersection(
+                    id=inter2.id,
+                    position=inter2.position,
+                    adjacent_tiles=inter2.adjacent_tiles,
+                    adjacent_intersections=inter2.adjacent_intersections | {corner1_id},
+                    owner=inter2.owner,
+                    building_type=inter2.building_type,
+                    port_type=inter2.port_type
+                )
+        
+        # Assign ports to coastal edges using the user's algorithm:
+        # - 30 coastal edges total
+        # - Traverse coastline in order
+        # - Place ports at intervals: 3, 3, 4, 3, 3, 4, 3, 3, 4 (repeating pattern, sums to 30)
+        # - This gives exactly 9 ports
+        
+        # Find all edges along the coastline (perimeter)
+        # The coastline is the perimeter of the board - all intersections with < 3 adjacent tiles
+        # These form a loop of 30 edges
+        
+        # Identify perimeter intersections (those with < 3 adjacent tiles)
+        perimeter_intersections = [i for i in intersections if len(i.adjacent_tiles) < 3]
+        perimeter_ids = {i.id for i in perimeter_intersections}
+        
+        # Build the full coastline graph (all edges between perimeter intersections)
+        coastline_edges = []
+        coastline_graph = {}
+        
+        for inter in perimeter_intersections:
+            inter_id = inter.id
+            coastline_graph[inter_id] = []
+            
+            for adj_id in inter.adjacent_intersections:
+                # Only include edges to other perimeter intersections
+                if adj_id in perimeter_ids:
+                    edge_key = tuple(sorted([inter_id, adj_id]))
+                    if edge_key not in coastline_edges:
+                        coastline_edges.append(edge_key)
+                    coastline_graph[inter_id].append(adj_id)
+        
+        # Verify coastline forms a loop (single connected component, all nodes degree 2)
+        if coastline_graph:
+            visited = set()
+            start_node = next(iter(coastline_graph.keys()))
+            stack = [start_node]
+            while stack:
+                node = stack.pop()
+                if node in visited:
+                    continue
+                visited.add(node)
+                if node in coastline_graph:
+                    for neighbor in coastline_graph[node]:
+                        if neighbor not in visited:
+                            stack.append(neighbor)
+            
+            is_loop = len(visited) == len(coastline_graph)
+            degrees = {node: len(neighbors) for node, neighbors in coastline_graph.items()}
+            all_degree_2 = all(d == 2 for d in degrees.values())
+            
+            if not is_loop or not all_degree_2:
+                # Coastline doesn't form a proper loop - this shouldn't happen
+                pass
+        
+        # For port placement, we need edges that can have ports
+        # Ports are on edges between edge_inter (1 tile) and coastal_inter (2 tiles)
+        edge_intersections = [i for i in intersections if len(i.adjacent_tiles) == 1]
+        valid_port_edges = []
+        for edge_inter in edge_intersections:
+            # Find adjacent coastal intersection (2 tiles)
+            for adj_id in edge_inter.adjacent_intersections:
+                adj_inter = intersections[adj_id]
+                if len(adj_inter.adjacent_tiles) == 2:
+                    valid_port_edges.append((edge_inter.id, adj_id))
+                    break  # Each edge intersection connects to at most one coastal intersection
+        
+        # Order edges around the board by traversing the coastline loop
+        # We need to traverse the perimeter in order to place ports correctly
+        # Build an ordered list of perimeter intersections by following the loop
+        perimeter_ordered = []
+        if coastline_graph:
+            # Start from any perimeter intersection
+            start_node = next(iter(coastline_graph.keys()))
+            visited = set()
+            current = start_node
+            prev = None
+            
+            # Traverse the perimeter loop
+            while len(visited) < len(coastline_graph):
+                visited.add(current)
+                perimeter_ordered.append(current)
+                
+                # Find next unvisited neighbor (or start if we've visited all)
+                next_node = None
+                for neighbor in coastline_graph[current]:
+                    if neighbor != prev and neighbor not in visited:
+                        next_node = neighbor
+                        break
+                
+                if next_node is None:
+                    # Check if we can loop back to start
+                    if start_node in coastline_graph[current] and len(visited) == len(coastline_graph):
+                        break
+                    else:
+                        # Shouldn't happen if it's a proper loop
+                        break
+                
+                prev = current
+                current = next_node
+        
+        # Build ordered list of 30 edges along the perimeter loop
+        # Each edge connects two consecutive nodes in the perimeter_ordered list
+        perimeter_edges = []
+        for i in range(len(perimeter_ordered)):
+            node1 = perimeter_ordered[i]
+            node2 = perimeter_ordered[(i + 1) % len(perimeter_ordered)]
+            perimeter_edges.append((node1, node2))
+        
+        # All 30 perimeter edges are valid port edges
+        valid_port_edge_indices = list(range(len(perimeter_edges)))  # All 30 edges
+        
+        # We still need to identify edge_inter and coastal_inter for port assignment
+        edge_intersection_ids = {i.id for i in intersections if len(i.adjacent_tiles) == 1}
+        coastal_intersection_ids = {i.id for i in intersections if len(i.adjacent_tiles) == 2}
+        
+        # Place ports at intervals: 3, 3, 4, 3, 3, 4, 3, 3, 4 along the 30-edge perimeter
+        # This pattern sums to 30, giving exactly 9 ports
+        # Not all 30 edges are valid port edges - only edges between edge_inter and coastal_inter
+        # So we place at the target position if valid, otherwise find nearest valid edge
+        port_intervals = [3, 3, 4, 3, 3, 4, 3, 3, 4]
+        selected_port_edges = []
+        selected_edge_indices = []  # Track which edge indices we selected
+        used_intersections = set()
+        
+        # Start from a random offset to add variety
+        start_offset = random.randint(0, len(perimeter_edges) - 1)
+        current_idx = start_offset
+        
+        for interval in port_intervals:
+            # Move to the target position along the perimeter (at the interval)
+            target_idx = (current_idx + interval) % len(perimeter_edges)
+            
+            # Calculate last placed port index for gap checking
+            last_idx = selected_edge_indices[-1] if selected_edge_indices else None
+            
+            # Since all 30 edges are valid, we can place at the exact target position
+            # Just need to check minimum gap and intersection conflicts
+            found = False
+            best_idx = None
+            
+            # Check minimum gap from last port
+            if last_idx is not None:
+                gap = (target_idx - last_idx) % len(perimeter_edges)
+                if gap < 3:
+                    # Target too close - skip this interval
+                    current_idx = target_idx
+                    continue
+            
+            # Check if intersections are available
+            n1, n2 = perimeter_edges[target_idx]
+            if (n1 not in used_intersections and n2 not in used_intersections):
+                best_idx = target_idx
+                found = True
+            
+            # Place port at the target position
+            if found and best_idx is not None:
+                n1, n2 = perimeter_edges[best_idx]
+                # For port assignment, identify edge_inter and coastal_inter
+                if n1 in edge_intersection_ids:
+                    edge_inter_id, coastal_inter_id = n1, n2
+                elif n2 in edge_intersection_ids:
+                    edge_inter_id, coastal_inter_id = n2, n1
+                else:
+                    # Both are coastal (2 tiles) - just pick one as edge, one as coastal
+                    edge_inter_id, coastal_inter_id = n1, n2
+                selected_port_edges.append((edge_inter_id, coastal_inter_id))
+                selected_edge_indices.append(best_idx)
+                used_intersections.add(edge_inter_id)
+                used_intersections.add(coastal_inter_id)
+                # Continue from target to maintain exact spacing
+                current_idx = target_idx
+            else:
+                # If intersections are in use, skip this interval
+                # Continue from target to maintain spacing for next iteration
+                current_idx = target_idx
+        
+        # If we don't have exactly 9 ports, try to fill remaining slots
+        # while respecting minimum gap of 3
+        while len(selected_port_edges) < 9:
+            last_idx = selected_edge_indices[-1] if selected_edge_indices else None
+            found_additional = False
+            
+            for idx in valid_port_edge_indices:
+                if idx in selected_edge_indices:
+                    continue
+                
+                # Check minimum gap
+                if last_idx is not None:
+                    gap = (idx - last_idx) % len(perimeter_edges)
+                    if gap < 3:
+                        continue
+                
+                n1, n2 = perimeter_edges[idx]
+                if (n1 not in used_intersections and n2 not in used_intersections):
+                    if n1 in edge_intersection_ids:
+                        edge_inter_id, coastal_inter_id = n1, n2
+                    else:
+                        edge_inter_id, coastal_inter_id = n2, n1
+                    selected_port_edges.append((edge_inter_id, coastal_inter_id))
+                    selected_edge_indices.append(idx)
+                    used_intersections.add(edge_inter_id)
+                    used_intersections.add(coastal_inter_id)
+                    found_additional = True
+                    break
+            
+            if not found_additional:
+                # Can't find more ports that respect gap - break to avoid infinite loop
+                break
+        
+        # Ensure we have exactly 9 ports (trim if we have more)
+        if len(selected_port_edges) > 9:
+            selected_port_edges = selected_port_edges[:9]
+            selected_edge_indices = selected_edge_indices[:9]
+        
+        # Port types: 4 generic 3:1 ports, 5 specific 2:1 ports (one per resource)
+        port_assignments = ["3:1"] * 4 + [rt.value for rt in ResourceType]  # Total: 9 ports
+        random.shuffle(port_assignments)  # Randomize which ports get which type
+        
+        # Assign ports to selected edges (exactly 9)
+        for i, port_type in enumerate(port_assignments):
+            if i >= len(selected_port_edges):
+                break
+            if i >= len(selected_port_edges):
+                break
+            inter1_id, inter2_id = selected_port_edges[i]
+            
+            # Assign port to both intersections in the edge pair
+            inter1 = intersections[inter1_id]
+            inter2 = intersections[inter2_id]
+            
+            intersections[inter1_id] = Intersection(
+                id=inter1.id,
+                position=inter1.position,
+                adjacent_tiles=inter1.adjacent_tiles,
+                adjacent_intersections=inter1.adjacent_intersections,
+                owner=inter1.owner,
+                building_type=inter1.building_type,
+                port_type=port_type
+            )
+            
+            intersections[inter2_id] = Intersection(
+                id=inter2.id,
+                position=inter2.position,
+                adjacent_tiles=inter2.adjacent_tiles,
+                adjacent_intersections=inter2.adjacent_intersections,
+                owner=inter2.owner,
+                building_type=inter2.building_type,
+                port_type=port_type
                 )
         
         state.intersections = intersections
@@ -1130,20 +1457,17 @@ class PlayDevCardPayload:
 @dataclass(frozen=True)
 class TradeBankPayload:
     """Payload for TRADE_BANK action."""
-    give_resource: ResourceType
-    give_amount: int
-    receive_resource: ResourceType
-    receive_amount: int
+    give_resources: Dict[ResourceType, int]  # Resources to give (can be multiple types)
+    receive_resources: Dict[ResourceType, int]  # Resources to receive (can be multiple types)
+    port_intersection_id: Optional[int] = None  # If using a port, the intersection ID with the port
 
 
 @dataclass(frozen=True)
 class TradePlayerPayload:
     """Payload for TRADE_PLAYER action."""
     other_player_id: str
-    give_resource: ResourceType
-    give_amount: int
-    receive_resource: ResourceType
-    receive_amount: int
+    give_resources: Dict[ResourceType, int]  # Resources to give (can be multiple types)
+    receive_resources: Dict[ResourceType, int]  # Resources to receive (can be multiple types)
 
 
 @dataclass(frozen=True)

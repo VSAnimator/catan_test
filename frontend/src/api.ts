@@ -29,6 +29,7 @@ export interface Intersection {
   adjacent_intersections: number[]
   owner: string | null
   building_type: string | null
+  port_type: string | null  // null = no port, "3:1" = generic port, or resource type for 2:1 port
 }
 
 export interface RoadEdge {
@@ -62,13 +63,17 @@ export interface LegalAction {
     road_edge_id?: number
     intersection_id?: number
     card_type?: string
+    give_resources?: Record<string, number>  // Multi-resource support
+    receive_resources?: Record<string, number>  // Multi-resource support
+    port_intersection_id?: number | null
+    other_player_id?: string
+    tile_id?: number
+    resources?: Record<string, number>
+    // Legacy single-resource fields (for backward compatibility during transition)
     give_resource?: string
     give_amount?: number
     receive_resource?: string
     receive_amount?: number
-    other_player_id?: string
-    tile_id?: number
-    resources?: Record<string, number>
   }
 }
 

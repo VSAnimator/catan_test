@@ -37,6 +37,14 @@ function App() {
   const [replayData, setReplayData] = useState<ReplayResponse | null>(null)
   const [replayStepIndex, setReplayStepIndex] = useState(0)
   const [replayGameId, setReplayGameId] = useState('')
+  
+  // For trading UI
+  const [showTradingPanel, setShowTradingPanel] = useState(false)
+  const [tradeType, setTradeType] = useState<'bank' | 'player' | null>(null)
+  const [tradeTargetPlayer, setTradeTargetPlayer] = useState<string>('')
+  const [giveResources, setGiveResources] = useState<Record<string, number>>({})
+  const [receiveResources, setReceiveResources] = useState<Record<string, number>>({})
+  const [selectedPortId, setSelectedPortId] = useState<number | null>(null)
 
   // Fetch legal actions when game state or player ID changes
   useEffect(() => {
@@ -268,10 +276,24 @@ function App() {
       if (payload.card_type) {
         return `${type} (${payload.card_type})`
       }
+      // New multi-resource trade format
+      if (payload.give_resources && payload.receive_resources) {
+        const giveStr = Object.entries(payload.give_resources)
+          .filter(([_, count]) => count > 0)
+          .map(([resource, count]) => `${count} ${resource}`)
+          .join(', ')
+        const receiveStr = Object.entries(payload.receive_resources)
+          .filter(([_, count]) => count > 0)
+          .map(([resource, count]) => `${count} ${resource}`)
+          .join(', ')
+        const portInfo = payload.port_intersection_id ? ` (port)` : ''
+        return `${type}: Give ${giveStr}, receive ${receiveStr}${portInfo}`
+      }
+      // Legacy single-resource format (for backward compatibility)
       if (payload.give_resource && payload.receive_resource) {
         return `${type}: Give ${payload.give_amount} ${payload.give_resource}, receive ${payload.receive_amount} ${payload.receive_resource}`
       }
-      if (payload.other_player_id) {
+      if (payload.other_player_id && !payload.give_resources) {
         return `${type} from ${payload.other_player_id}`
       }
       if (payload.resources) {
@@ -401,12 +423,174 @@ function App() {
               })
             }}
             onClick={() => handleIntersectionClick(intersection.id)}
-            title={`Intersection ${intersection.id}${intersection.owner ? ` (${ownerPlayer?.name || intersection.owner})` : ''}${intersection.building_type ? ` - ${intersection.building_type}` : ''}${hasLegalAction ? ' - Click to build' : ''}`}
+            title={`Intersection ${intersection.id}${intersection.owner ? ` (${ownerPlayer?.name || intersection.owner})` : ''}${intersection.building_type ? ` - ${intersection.building_type}` : ''}${intersection.port_type ? ` - Port: ${intersection.port_type}` : ''}${hasLegalAction ? ' - Click to build' : ''}`}
           >
             {intersection.building_type === 'city' ? '🏰' : intersection.building_type === 'settlement' ? '🏠' : '○'}
           </div>
           )
         })}
+        
+        {/* Render ports on coastal edges (between port pairs) */}
+        {(() => {
+          // First, identify all port pairs
+          const portPairs: Array<{ inter1: typeof state.intersections[0], inter2: typeof state.intersections[0], portType: string }> = []
+          const seenPairs = new Set<string>()
+          
+          for (const inter of state.intersections) {
+            if (inter.port_type === null) continue
+            
+            const adjacentSameType = state.intersections.filter(
+              adj => adj.id !== inter.id && 
+                     inter.adjacent_intersections.includes(adj.id) && 
+                     adj.port_type === inter.port_type
+            )
+            
+            if (adjacentSameType.length === 0) continue
+            
+            const portPair = adjacentSameType.reduce((min, curr) => 
+              curr.id < min.id ? curr : min, adjacentSameType[0])
+            
+            const pairKey = `${Math.min(inter.id, portPair.id)}-${Math.max(inter.id, portPair.id)}`
+            if (seenPairs.has(pairKey)) continue
+            if (inter.id > portPair.id) continue
+            
+            seenPairs.add(pairKey)
+            portPairs.push({ inter1: inter, inter2: portPair, portType: inter.port_type || '' })
+          }
+          
+          // Order ports by their position around the perimeter
+          // Build perimeter order by traversing the coastline
+          const perimeterIntersections = state.intersections.filter(i => i.adjacent_tiles.length < 3)
+          const perimeterIds = new Set(perimeterIntersections.map(i => i.id))
+          
+          // Build coastline graph
+          const coastlineGraph: Record<number, number[]> = {}
+          for (const inter of perimeterIntersections) {
+            coastlineGraph[inter.id] = []
+            for (const adjId of inter.adjacent_intersections) {
+              const adjInter = state.intersections.find(i => i.id === adjId)
+              if (adjInter && adjInter.adjacent_tiles.length < 3) {
+                coastlineGraph[inter.id].push(adjId)
+              }
+            }
+          }
+          
+          // Remove unused variable warning
+          void perimeterIds
+          
+          // Traverse perimeter to get ordered list
+          const perimeterOrdered: number[] = []
+          if (Object.keys(coastlineGraph).length > 0) {
+            const start = Number(Object.keys(coastlineGraph)[0])
+            const visited = new Set<number>()
+            let current = start
+            let prev: number | null = null
+            
+            while (visited.size < Object.keys(coastlineGraph).length) {
+              visited.add(current)
+              perimeterOrdered.push(current)
+              
+              let nextNode: number | null = null
+              for (const neighbor of coastlineGraph[current] || []) {
+                if (neighbor !== prev && !visited.has(neighbor)) {
+                  nextNode = neighbor
+                  break
+                }
+              }
+              
+              if (nextNode === null) {
+                if (coastlineGraph[current]?.includes(start) && visited.size === Object.keys(coastlineGraph).length) {
+                  break
+                } else {
+                  break
+                }
+              }
+              
+              prev = current
+              current = nextNode
+            }
+          }
+          
+          // Build ordered list of perimeter edges
+          const perimeterEdges: Array<[number, number]> = []
+          for (let i = 0; i < perimeterOrdered.length; i++) {
+            const node1 = perimeterOrdered[i]
+            const node2 = perimeterOrdered[(i + 1) % perimeterOrdered.length]
+            perimeterEdges.push([node1, node2])
+          }
+          
+          // Find which edge each port pair is on, and order by perimeter position
+          const portPairsWithOrder = portPairs.map(pair => {
+            // Find which perimeter edge this pair is on
+            for (let idx = 0; idx < perimeterEdges.length; idx++) {
+              const [n1, n2] = perimeterEdges[idx]
+              if ((n1 === pair.inter1.id && n2 === pair.inter2.id) ||
+                  (n1 === pair.inter2.id && n2 === pair.inter1.id)) {
+                return { ...pair, edgeIndex: idx }
+              }
+            }
+            return { ...pair, edgeIndex: 999 } // Fallback for ports not on perimeter (shouldn't happen)
+          })
+          
+          // Sort by perimeter position
+          portPairsWithOrder.sort((a, b) => a.edgeIndex - b.edgeIndex)
+          
+          // Render ports in perimeter order, but still sort 3:1 ports first for z-index
+          const sortedForRender = portPairsWithOrder.sort((a, b) => {
+            // First by edge index (perimeter order)
+            if (a.edgeIndex !== b.edgeIndex) return a.edgeIndex - b.edgeIndex
+            // Then by port type (3:1 first for z-index)
+            if (a.portType === '3:1' && b.portType !== '3:1') return -1
+            if (a.portType !== '3:1' && b.portType === '3:1') return 1
+            return 0
+          })
+          
+          return sortedForRender.map(pair => {
+            const { inter1: inter, inter2: portPair } = pair
+            
+            // Calculate midpoint between the two intersections
+            const { x: x1, y: y1 } = hexToPixel(inter.position[0], inter.position[1])
+            const { x: x2, y: y2 } = hexToPixel(portPair.position[0], portPair.position[1])
+            const midX = (x1 + x2) / 2
+            const midY = (y1 + y2) / 2
+            
+            // Get port icon based on type
+            let portIcon = '⚓' // Default 3:1 port
+            let portColor = '#2196F3' // Blue for 3:1
+            let portTitle = '3:1 Port (any resource)'
+            
+            if (inter.port_type !== '3:1') {
+              // 2:1 specific resource port
+              const resourceIcons: Record<string, { icon: string; color: string }> = {
+                'sheep': { icon: '🐑', color: '#90EE90' },
+                'ore': { icon: '⛏️', color: '#708090' },
+                'wood': { icon: '🌲', color: '#8B4513' },
+                'brick': { icon: '🧱', color: '#CD5C5C' },
+                'wheat': { icon: '🌾', color: '#FFD700' }
+              }
+              const resourceInfo = resourceIcons[inter.port_type || ''] || { icon: '🏭', color: '#FF9800' }
+              portIcon = resourceInfo.icon
+              portColor = resourceInfo.color
+              portTitle = `2:1 ${inter.port_type} Port`
+            }
+            
+            return (
+              <div
+                key={`port-${inter.id}-${portPair.id}`}
+                className="port-edge-indicator"
+                data-port-type={inter.port_type}
+                style={{
+                  left: `${midX}px`,
+                  top: `${midY}px`,
+                  color: portColor
+                }}
+                title={portTitle}
+              >
+                {portIcon}
+              </div>
+            )
+          })
+        })()}
         
         {/* Render roads */}
         {state.road_edges.map(road => {
@@ -941,6 +1125,54 @@ function App() {
               </div>
             )}
 
+            {/* Trading Panel */}
+            {currentPlayer && activePlayer?.id === playerId && (
+              <div className="trading-panel">
+                <h2>
+                  Trading
+                  <button
+                    onClick={() => setShowTradingPanel(!showTradingPanel)}
+                    className="toggle-button"
+                    style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}
+                  >
+                    {showTradingPanel ? '▼' : '▶'}
+                  </button>
+                </h2>
+                {showTradingPanel && (
+                  <div className="trading-content">
+                    {/* Quick Trade Actions (from legal actions) */}
+                    <div className="quick-trades">
+                      <h3>Quick Trades</h3>
+                      {legalActions
+                        .filter(a => a.type === 'trade_bank' || a.type === 'trade_player')
+                        .map((action, idx) => (
+                          <button
+                            key={idx}
+                            onClick={() => handleExecuteAction(action)}
+                            disabled={loading}
+                            className="action-button"
+                            style={{ marginBottom: '0.5rem', fontSize: '0.9rem' }}
+                          >
+                            {formatActionName(action)}
+                          </button>
+                        ))}
+                      {legalActions.filter(a => a.type === 'trade_bank' || a.type === 'trade_player').length === 0 && (
+                        <div style={{ color: '#666', fontSize: '0.9rem' }}>No trade actions available</div>
+                      )}
+                    </div>
+                    
+                    {/* Custom Trade Builder - Coming soon */}
+                    <div className="custom-trade" style={{ marginTop: '1rem', padding: '1rem', border: '1px dashed #ccc', borderRadius: '4px' }}>
+                      <h3>Custom Trade (Coming Soon)</h3>
+                      <div style={{ color: '#666', fontSize: '0.9rem' }}>
+                        Multi-resource custom trades will be available here. For now, use the quick trades above.
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="legal-actions">
               <h2>Legal Actions</h2>
               {loading ? (
@@ -949,19 +1181,21 @@ function App() {
                 <div>No legal actions available</div>
               ) : (
                 <div className="actions-list">
-                  {legalActions.map((action, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => {
-                        console.log('Action button clicked:', action)
-                        handleExecuteAction(action)
-                      }}
-                      disabled={loading || (activePlayer?.id !== playerId && action.type !== 'discard_resources')}
-                      className="action-button"
-                    >
-                      {formatActionName(action)}
-                    </button>
-                  ))}
+                  {legalActions
+                    .filter(a => a.type !== 'trade_bank' && a.type !== 'trade_player')  // Hide trades from main list, show in trading panel
+                    .map((action, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => {
+                          console.log('Action button clicked:', action)
+                          handleExecuteAction(action)
+                        }}
+                        disabled={loading || (activePlayer?.id !== playerId && action.type !== 'discard_resources')}
+                        className="action-button"
+                      >
+                        {formatActionName(action)}
+                      </button>
+                    ))}
                 </div>
               )}
             </div>
