@@ -703,11 +703,19 @@ class GameState:
                     if intersection.owner != new_state.players[new_state.current_player_index].id:
                         players_on_tile.add(intersection.owner)
             
-            if players_on_tile:
+            # Check if any players on the tile have resources to steal
+            has_valid_steal_targets = False
+            for player_id in players_on_tile:
+                player = next((p for p in new_state.players if p.id == player_id), None)
+                if player and sum(player.resources.values()) > 0:
+                    has_valid_steal_targets = True
+                    break
+            
+            if has_valid_steal_targets:
                 # Set flag that we're waiting for steal
                 new_state.waiting_for_robber_steal = True
             else:
-                # No one to steal from, clear the flags
+                # No one to steal from (either no players or no resources), clear the flags
                 new_state.waiting_for_robber_steal = False
         
         return new_state

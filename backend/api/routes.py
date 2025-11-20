@@ -49,6 +49,8 @@ from engine import (
     state_to_text,
     legal_actions_to_text,
 )
+from agents import RandomAgent
+from agents.agent_runner import AgentRunner
 from .database import (
     init_db,
     create_game as create_game_in_db,
@@ -496,4 +498,220 @@ async def fork_game(game_id: str, state: Dict[str, Any]):
     return CreateGameResponse(
         game_id=new_game_id,
         initial_state=state
+    )
+
+
+class RunAgentsRequest(BaseModel):
+    """Request to run agents automatically."""
+    max_turns: int = 1000  # Maximum number of turns
+
+
+class RunAgentsResponse(BaseModel):
+    """Response from running agents automatically."""
+    game_id: str
+    completed: bool  # True if game finished normally, False if stopped early
+    error: Optional[str] = None  # Error message if stopped early
+    final_state: Dict[str, Any]  # Final game state
+    turns_played: int  # Number of turns played
+
+
+@router.post("/games/{game_id}/run_agents", response_model=RunAgentsResponse)
+async def run_agents(game_id: str, request: RunAgentsRequest):
+    """Run agents automatically until game ends, error, or max turns reached.
+    
+    This mode runs the game completely automatically with agents for all players.
+    Returns the game ID so you can replay the game to see what happened.
+    """
+    # Check if game exists
+    game_row = get_game_from_db(game_id)
+    if not game_row:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    # Get current state from database
+    state_json = get_latest_state(game_id)
+    if state_json is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Game state not found. Game may not have been initialized."
+        )
+    
+    # Deserialize current state
+    current_state = deserialize_game_state(state_json)
+    
+    # Restore RNG seed if present for reproducibility
+    if game_row["rng_seed"] is not None:
+        random.seed(game_row["rng_seed"])
+    
+    # Create agents for all players
+    agents = {}
+    for player in current_state.players:
+        agents[player.id] = RandomAgent(player.id)
+    
+    # Create agent runner
+    runner = AgentRunner(current_state, agents, max_turns=request.max_turns)
+    
+    # Callback to save state after each action
+    def save_state_callback(game_id: str, state_before: GameState, state_after: GameState, action: Dict[str, Any], player_id: str):
+        # Serialize states
+        state_before_json = serialize_game_state(state_before)
+        state_after_json = serialize_game_state(state_after)
+        
+        # Update current state in games table
+        save_game_state(game_id, state_after)
+        
+        # Get step index
+        step_idx = get_step_count(game_id)
+        
+        # Get legal actions and text representations
+        legal_actions_list = legal_actions(state, player_id)
+        legal_actions_text = legal_actions_to_text(legal_actions_list)
+        state_text = state_to_text(state, player_id)
+        
+        # Format chosen action text
+        action_type_str = action.get("type", "")
+        chosen_action_text = action_type_str.replace("_", " ").title()
+        if "payload" in action and action["payload"]:
+            payload_dict = action["payload"]
+            if isinstance(payload_dict, dict):
+                if "intersection_id" in payload_dict:
+                    chosen_action_text += f" at intersection {payload_dict['intersection_id']}"
+                elif "road_edge_id" in payload_dict:
+                    chosen_action_text += f" on road edge {payload_dict['road_edge_id']}"
+                elif "card_type" in payload_dict:
+                    chosen_action_text += f" ({payload_dict['card_type']})"
+        
+        # Save step to database
+        add_step(
+            game_id=game_id,
+            step_idx=step_idx,
+            player_id=player_id,
+            state_before_json=state_before,
+            state_after_json=state_after,
+            action_json=action,
+            dice_roll=state.dice_roll,
+            state_text=state_text,
+            legal_actions_text=legal_actions_text,
+            chosen_action_text=chosen_action_text,
+        )
+    
+    # Run the game automatically
+    final_state, completed, error = runner.run_automatic(save_state_callback=save_state_callback)
+    
+    # Serialize final state
+    final_state_json = serialize_game_state(final_state)
+    
+    return RunAgentsResponse(
+        game_id=game_id,
+        completed=completed,
+        error=error,
+        final_state=final_state_json,
+        turns_played=runner.turn_count
+    )
+
+
+class WatchAgentsRequest(BaseModel):
+    """Request to watch agents play (step-by-step mode)."""
+    pass  # No parameters needed, just uses current game state
+
+
+class WatchAgentsResponse(BaseModel):
+    """Response from watching agents (single step)."""
+    game_id: str
+    game_continues: bool  # True if game should continue, False if finished/error
+    error: Optional[str] = None  # Error message if stopped
+    new_state: Dict[str, Any]  # New game state after action
+    player_id: Optional[str] = None  # Player who took the action
+
+
+@router.post("/games/{game_id}/watch_agents_step", response_model=WatchAgentsResponse)
+async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
+    """Execute a single step with agents (for agent-watching mode).
+    
+    This endpoint executes one action and returns the new state.
+    The frontend can call this repeatedly with a delay to watch agents play.
+    """
+    # Check if game exists
+    game_row = get_game_from_db(game_id)
+    if not game_row:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    # Get current state from database
+    state_json = get_latest_state(game_id)
+    if state_json is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Game state not found. Game may not have been initialized."
+        )
+    
+    # Deserialize current state
+    current_state = deserialize_game_state(state_json)
+    
+    # Restore RNG seed if present for reproducibility
+    if game_row["rng_seed"] is not None:
+        random.seed(game_row["rng_seed"])
+    
+    # Create agents for all players
+    agents = {}
+    for player in current_state.players:
+        agents[player.id] = RandomAgent(player.id)
+    
+    # Create agent runner
+    runner = AgentRunner(current_state, agents, max_turns=1000)
+    
+    # Callback to save state after each action
+    def save_state_callback(game_id: str, state_before: GameState, state_after: GameState, action: Dict[str, Any], player_id: str):
+        # Serialize states
+        state_before_json = serialize_game_state(state_before)
+        state_after_json = serialize_game_state(state_after)
+        
+        # Update current state in games table
+        save_game_state(game_id, state_after_json)
+        
+        # Get step index
+        step_idx = get_step_count(game_id)
+        
+        # Get legal actions and text representations (use state_before for context)
+        legal_actions_list = legal_actions(state_before, player_id)
+        legal_actions_text = legal_actions_to_text(legal_actions_list)
+        state_text = state_to_text(state_before, player_id)
+        
+        # Format chosen action text
+        action_type_str = action.get("type", "")
+        chosen_action_text = action_type_str.replace("_", " ").title()
+        if "payload" in action and action["payload"]:
+            payload_dict = action["payload"]
+            if isinstance(payload_dict, dict):
+                if "intersection_id" in payload_dict:
+                    chosen_action_text += f" at intersection {payload_dict['intersection_id']}"
+                elif "road_edge_id" in payload_dict:
+                    chosen_action_text += f" on road edge {payload_dict['road_edge_id']}"
+                elif "card_type" in payload_dict:
+                    chosen_action_text += f" ({payload_dict['card_type']})"
+        
+        # Save step to database
+        add_step(
+            game_id=game_id,
+            step_idx=step_idx,
+            player_id=player_id,
+            state_before_json=state_before_json,
+            state_after_json=state_after_json,
+            action_json=action,
+            dice_roll=state_after.dice_roll,
+            state_text=state_text,
+            legal_actions_text=legal_actions_text,
+            chosen_action_text=chosen_action_text,
+        )
+    
+    # Run a single step
+    new_state, game_continues, error, player_id = runner.run_step(save_state_callback=save_state_callback)
+    
+    # Serialize new state
+    new_state_json = serialize_game_state(new_state)
+    
+    return WatchAgentsResponse(
+        game_id=game_id,
+        game_continues=game_continues,
+        error=error,
+        new_state=new_state_json,
+        player_id=player_id
     )

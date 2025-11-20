@@ -1,0 +1,343 @@
+"""
+Agent runner for playing games with agents.
+"""
+import copy
+from typing import Dict, List, Optional, Tuple
+from engine import GameState, Action, ActionPayload
+from engine.serialization import (
+    deserialize_game_state,
+    serialize_game_state,
+    serialize_action,
+    serialize_action_payload,
+    legal_actions,
+)
+from .base_agent import BaseAgent
+from .random_agent import RandomAgent
+
+
+class AgentRunner:
+    """
+    Runs a game with agents, handling automatic gameplay.
+    """
+    
+    def __init__(
+        self,
+        state: GameState,
+        agents: Dict[str, BaseAgent],
+        max_turns: int = 1000
+    ):
+        """
+        Initialize the agent runner.
+        
+        Args:
+            state: Initial game state
+            agents: Dictionary mapping player_id to agent
+            max_turns: Maximum number of turns before stopping
+        """
+        self.state = state
+        self.agents = agents
+        self.max_turns = max_turns
+        self.turn_count = 0
+        self.error: Optional[str] = None
+    
+    def run_automatic(
+        self,
+        save_state_callback: Optional[callable] = None
+    ) -> Tuple[GameState, bool, Optional[str]]:
+        """
+        Run the game automatically until completion, error, or max turns.
+        
+        Args:
+            save_state_callback: Optional callback to save state after each action
+                                Signature: (game_id: str, state_before: GameState, state_after: GameState, action: dict, player_id: str) -> None
+        
+        Returns:
+            Tuple of (final_state, completed, error_message)
+            - completed: True if game finished normally, False if stopped early
+            - error_message: None if no error, otherwise error description
+        """
+        try:
+            while self.turn_count < self.max_turns:
+                # Check if game is finished
+                if self.state.phase == "finished":
+                    return self.state, True, None
+                
+                # Check for victory condition (10+ victory points)
+                for player in self.state.players:
+                    if player.victory_points >= 10:
+                        return self.state, True, None
+                
+                # Get current player
+                if self.state.phase == "setup":
+                    current_player = self.state.players[self.state.setup_phase_player_index]
+                elif self.state.phase == "playing":
+                    current_player = self.state.players[self.state.current_player_index]
+                else:
+                    return self.state, True, None  # Game finished
+                
+                # Get agent for current player
+                agent = self.agents.get(current_player.id)
+                if not agent:
+                    return self.state, False, f"No agent found for player {current_player.id}"
+                
+                # Handle special case: when 7 is rolled, all players with 8+ resources must discard
+                if (self.state.phase == "playing" and 
+                    self.state.dice_roll == 7 and
+                    not self.state.waiting_for_robber_move and
+                    not self.state.waiting_for_robber_steal):
+                    # Check if we're still in discard phase
+                    robber_has_been_moved = (
+                        self.state.robber_initial_tile_id is not None and 
+                        self.state.robber_tile_id != self.state.robber_initial_tile_id
+                    )
+                    
+                    if not robber_has_been_moved:
+                        # Check if any player needs to discard
+                        players_needing_discard = [
+                            p for p in self.state.players
+                            if (sum(p.resources.values()) >= 8 and 
+                                p.id not in self.state.players_discarded)
+                        ]
+                        
+                        if players_needing_discard:
+                            # Process discards for all players who need to
+                            for player in players_needing_discard:
+                                discard_agent = self.agents.get(player.id)
+                                if not discard_agent:
+                                    return self.state, False, f"No agent found for player {player.id}"
+                                
+                                # Get legal actions for this player (should include DISCARD_RESOURCES)
+                                legal_actions_list = legal_actions(self.state, player.id)
+                                
+                                # Filter to only discard actions
+                                discard_actions = [
+                                    (action, payload) 
+                                    for action, payload in legal_actions_list
+                                    if action == Action.DISCARD_RESOURCES
+                                ]
+                                
+                                if discard_actions:
+                                    # Store state before action
+                                    state_before = copy.deepcopy(self.state)
+                                    
+                                    # Choose a discard action (random agent will pick one)
+                                    action, payload = discard_agent.choose_action(self.state, discard_actions)
+                                    
+                                    # Apply the action
+                                    self.state = self.state.step(action, payload, player_id=player.id)
+                                    
+                                    # Save state if callback provided
+                                    if save_state_callback:
+                                        action_dict = {
+                                            "type": serialize_action(action),
+                                        }
+                                        if payload:
+                                            action_dict["payload"] = serialize_action_payload(payload)
+                                        save_state_callback(
+                                            self.state.game_id,
+                                            state_before,
+                                            self.state,
+                                            action_dict,
+                                            player.id
+                                        )
+                            
+                            # Continue to next iteration to check if we can proceed
+                            continue
+                
+                # Get legal actions for current player
+                legal_actions_list = legal_actions(self.state, current_player.id)
+                
+                if not legal_actions_list:
+                    # No legal actions - this might be an error or end of game
+                    return self.state, False, f"No legal actions available for player {current_player.id}"
+                
+                # Store state before action
+                state_before = copy.deepcopy(self.state)
+                
+                # Agent chooses an action
+                try:
+                    action, payload = agent.choose_action(self.state, legal_actions_list)
+                except Exception as e:
+                    return self.state, False, f"Agent error for player {current_player.id}: {str(e)}"
+                
+                # Apply the action
+                try:
+                    self.state = self.state.step(action, payload, player_id=current_player.id)
+                except ValueError as e:
+                    return self.state, False, f"Invalid action for player {current_player.id}: {str(e)}"
+                
+                # Save state if callback provided
+                if save_state_callback:
+                    action_dict = {
+                        "type": serialize_action(action),
+                    }
+                    if payload:
+                        action_dict["payload"] = serialize_action_payload(payload)
+                    save_state_callback(
+                        self.state.game_id,
+                        state_before,
+                        self.state,
+                        action_dict,
+                        current_player.id
+                    )
+                
+                # Increment turn count if we ended a turn
+                if action == Action.END_TURN:
+                    self.turn_count += 1
+            
+            # Reached max turns
+            return self.state, False, f"Reached maximum turn limit ({self.max_turns})"
+            
+        except Exception as e:
+            return self.state, False, f"Unexpected error: {str(e)}"
+    
+    def run_step(
+        self,
+        save_state_callback: Optional[callable] = None
+    ) -> Tuple[GameState, bool, Optional[str], Optional[str]]:
+        """
+        Run a single step (one action) of the game.
+        
+        Args:
+            save_state_callback: Optional callback to save state after action
+                                Signature: (game_id: str, state_before: GameState, state_after: GameState, action: dict, player_id: str) -> None
+        
+        Returns:
+            Tuple of (new_state, game_continues, error_message, player_id)
+            - game_continues: True if game should continue, False if finished/error
+            - error_message: None if no error, otherwise error description
+            - player_id: ID of player who took the action
+        """
+        try:
+            # Check if game is finished
+            if self.state.phase == "finished":
+                return self.state, False, None, None
+            
+            # Check for victory condition
+            for player in self.state.players:
+                if player.victory_points >= 10:
+                    return self.state, False, None, None
+            
+            # Get current player
+            if self.state.phase == "setup":
+                current_player = self.state.players[self.state.setup_phase_player_index]
+            elif self.state.phase == "playing":
+                current_player = self.state.players[self.state.current_player_index]
+            else:
+                return self.state, False, None, None
+            
+            # Handle special case: when 7 is rolled, all players with 8+ resources must discard
+            if (self.state.phase == "playing" and 
+                self.state.dice_roll == 7 and
+                not self.state.waiting_for_robber_move and
+                not self.state.waiting_for_robber_steal):
+                # Check if we're still in discard phase
+                robber_has_been_moved = (
+                    self.state.robber_initial_tile_id is not None and 
+                    self.state.robber_tile_id != self.state.robber_initial_tile_id
+                )
+                
+                if not robber_has_been_moved:
+                    # Check if any player needs to discard
+                    players_needing_discard = [
+                        p for p in self.state.players
+                        if (sum(p.resources.values()) >= 8 and 
+                            p.id not in self.state.players_discarded)
+                    ]
+                    
+                    if players_needing_discard:
+                        # Process discard for first player who needs to
+                        player = players_needing_discard[0]
+                        discard_agent = self.agents.get(player.id)
+                        if not discard_agent:
+                            return self.state, False, f"No agent found for player {player.id}", None
+                        
+                        # Get legal actions for this player
+                        legal_actions_list = legal_actions(self.state, player.id)
+                        
+                        # Filter to only discard actions
+                        discard_actions = [
+                            (action, payload) 
+                            for action, payload in legal_actions_list
+                            if action == Action.DISCARD_RESOURCES
+                        ]
+                        
+                        if discard_actions:
+                            # Store state before action
+                            state_before = copy.deepcopy(self.state)
+                            
+                            # Choose a discard action
+                            action, payload = discard_agent.choose_action(self.state, discard_actions)
+                            
+                            # Apply the action
+                            self.state = self.state.step(action, payload, player_id=player.id)
+                            
+                            # Save state if callback provided
+                            if save_state_callback:
+                                action_dict = {
+                                    "type": serialize_action(action),
+                                }
+                                if payload:
+                                    action_dict["payload"] = serialize_action_payload(payload)
+                                save_state_callback(
+                                    self.state.game_id,
+                                    state_before,
+                                    self.state,
+                                    action_dict,
+                                    player.id
+                                )
+                            
+                            return self.state, True, None, player.id
+                        else:
+                            return self.state, False, f"No discard actions available for player {player.id}", None
+            
+            # Get agent for current player
+            agent = self.agents.get(current_player.id)
+            if not agent:
+                return self.state, False, f"No agent found for player {current_player.id}", None
+            
+            # Get legal actions for current player
+            legal_actions_list = legal_actions(self.state, current_player.id)
+            
+            if not legal_actions_list:
+                return self.state, False, f"No legal actions available for player {current_player.id}", None
+            
+            # Store state before action
+            state_before = copy.deepcopy(self.state)
+            
+            # Agent chooses an action
+            try:
+                action, payload = agent.choose_action(self.state, legal_actions_list)
+            except Exception as e:
+                return self.state, False, f"Agent error for player {current_player.id}: {str(e)}", None
+            
+            # Apply the action
+            try:
+                self.state = self.state.step(action, payload, player_id=current_player.id)
+            except ValueError as e:
+                return self.state, False, f"Invalid action for player {current_player.id}: {str(e)}", None
+            
+            # Save state if callback provided
+            if save_state_callback:
+                action_dict = {
+                    "type": serialize_action(action),
+                }
+                if payload:
+                    action_dict["payload"] = serialize_action_payload(payload)
+                save_state_callback(
+                    self.state.game_id,
+                    state_before,
+                    self.state,
+                    action_dict,
+                    current_player.id
+                )
+            
+            # Increment turn count if we ended a turn
+            if action == Action.END_TURN:
+                self.turn_count += 1
+            
+            return self.state, True, None, current_player.id
+            
+        except Exception as e:
+            return self.state, False, f"Unexpected error: {str(e)}", None
+

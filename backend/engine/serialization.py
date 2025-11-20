@@ -396,6 +396,47 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
         if state.dice_roll is None:
             # Must roll dice first
             legal.append((Action.ROLL_DICE, None))
+        elif state.waiting_for_robber_move:
+            # Robber must be moved (either from 7 roll or knight card)
+            if is_current_player:
+                # Can move robber to any tile except current
+                for tile in state.tiles:
+                    if tile.id != state.robber_tile_id:
+                        legal.append((Action.MOVE_ROBBER, MoveRobberPayload(tile.id)))
+            # Don't show other actions while waiting to move robber
+            return legal
+        elif state.waiting_for_robber_steal:
+            # After moving robber, can steal from players on that tile
+            if is_current_player:
+                robber_tile = next((t for t in state.tiles if t.id == state.robber_tile_id), None)
+                if robber_tile:
+                    # Find players with buildings on this tile
+                    players_on_tile = set()
+                    for intersection in state.intersections:
+                        if (robber_tile.id in intersection.adjacent_tiles and 
+                            intersection.owner and 
+                            intersection.building_type):
+                            if intersection.owner != player_id:
+                                players_on_tile.add(intersection.owner)
+                    
+                    valid_steal_targets = []
+                    for other_player_id in players_on_tile:
+                        other_player = next((p for p in state.players if p.id == other_player_id), None)
+                        if other_player and sum(other_player.resources.values()) > 0:
+                            valid_steal_targets.append(other_player_id)
+                            legal.append((Action.STEAL_RESOURCE, StealResourcePayload(other_player_id)))
+                    
+                    # If there are no valid steal targets, allow normal turn actions to continue
+                    # (The waiting_for_robber_steal flag will be cleared when we try to end turn)
+                    if not valid_steal_targets:
+                        # No one to steal from, fall through to normal turn actions
+                        pass
+                    else:
+                        # Don't show other actions while waiting to steal
+                        return legal
+            else:
+                # Not current player, no actions available
+                return legal
         elif state.dice_roll == 7:
             # Handle rolling 7
             # First phase: ALL players with 8+ resources must discard
@@ -429,7 +470,8 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
                     # Don't show other actions while discarding
                     return legal
             
-            # All discards done, handle robber phase
+            # All discards done, handle robber phase (for 7 roll only)
+            # Note: waiting_for_robber_move from knight cards is handled above
             if state.waiting_for_robber_move:
                 # All discards done, now ONLY the player who rolled the 7 can move robber
                 if is_current_player:
@@ -454,12 +496,24 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
                                 if intersection.owner != player_id:
                                     players_on_tile.add(intersection.owner)
                         
+                        valid_steal_targets = []
                         for other_player_id in players_on_tile:
                             other_player = next((p for p in state.players if p.id == other_player_id), None)
                             if other_player and sum(other_player.resources.values()) > 0:
+                                valid_steal_targets.append(other_player_id)
                                 legal.append((Action.STEAL_RESOURCE, StealResourcePayload(other_player_id)))
-                # Don't show other actions while waiting to steal
-                return legal
+                        
+                        # If there are no valid steal targets, allow normal turn actions to continue
+                        # (The waiting_for_robber_steal flag will be cleared when we try to end turn)
+                        if not valid_steal_targets:
+                            # No one to steal from, fall through to normal turn actions
+                            pass
+                        else:
+                            # Don't show other actions while waiting to steal
+                            return legal
+                else:
+                    # Not current player, no actions available
+                    return legal
             
             # If we get here, robber phase is complete - fall through to normal turn actions
         
@@ -663,18 +717,24 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
             # This allows for multi-resource trades with custom give/receive amounts
             
             # Can end turn (but not if waiting for robber actions, or if 7 was rolled and anyone needs to discard)
-            if state.dice_roll == 7:
-                # Check if anyone still needs to discard
+            # Never allow END_TURN if waiting_for_robber_move or waiting_for_robber_steal is True
+            # (The engine will clear these flags when appropriate, e.g., when there are no valid steal targets)
+            if state.waiting_for_robber_move or state.waiting_for_robber_steal:
+                # Cannot end turn while waiting for robber actions
+                pass
+            elif state.dice_roll == 7:
+                # Check if anyone still needs to discard (and hasn't discarded yet)
                 any_player_needs_discard = False
                 for p in state.players:
-                    if sum(p.resources.values()) >= 8:
+                    if p.id not in state.players_discarded and sum(p.resources.values()) >= 8:
                         any_player_needs_discard = True
                         break
                 
-                # Can only end turn if no one needs to discard AND robber actions are complete
-                if not any_player_needs_discard and not state.waiting_for_robber_move and not state.waiting_for_robber_steal:
+                # Can only end turn if no one needs to discard
+                if not any_player_needs_discard:
                     legal.append((Action.END_TURN, None))
-            elif not state.waiting_for_robber_move and not state.waiting_for_robber_steal:
+            else:
+                # Normal turn - can end
                 legal.append((Action.END_TURN, None))
     
     return legal

@@ -179,3 +179,41 @@ export async function forkGame(gameId: string, state: GameState): Promise<Create
   return handleResponse<CreateGameResponse>(response)
 }
 
+export interface RunAgentsRequest {
+  max_turns?: number
+}
+
+export interface RunAgentsResponse {
+  game_id: string
+  completed: boolean
+  error?: string | null
+  final_state: GameState
+  turns_played: number
+}
+
+export async function runAgents(gameId: string, request: RunAgentsRequest = {}): Promise<RunAgentsResponse> {
+  const response = await fetch(`${API_BASE}/games/${gameId}/run_agents`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  })
+  return handleResponse<RunAgentsResponse>(response)
+}
+
+export interface WatchAgentsResponse {
+  game_id: string
+  game_continues: boolean
+  error?: string | null
+  new_state: GameState
+  player_id?: string | null
+}
+
+export async function watchAgentsStep(gameId: string): Promise<WatchAgentsResponse> {
+  const response = await fetch(`${API_BASE}/games/${gameId}/watch_agents_step`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})
+  })
+  return handleResponse<WatchAgentsResponse>(response)
+}
+

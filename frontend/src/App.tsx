@@ -8,13 +8,15 @@ import {
   getReplay,
   restoreGameState,
   forkGame,
+  runAgents,
+  watchAgentsStep,
   type GameState,
   type LegalAction,
   type Player,
   type ReplayResponse
 } from './api'
 
-type View = 'main' | 'game' | 'replay'
+type View = 'main' | 'game' | 'replay' | 'agent-watch'
 
 function App() {
   const [view, setView] = useState<View>('main')
@@ -36,6 +38,11 @@ function App() {
   const [replayData, setReplayData] = useState<ReplayResponse | null>(null)
   const [replayStepIndex, setReplayStepIndex] = useState(0)
   const [replayGameId, setReplayGameId] = useState('')
+  
+  // For agent-watching mode
+  const [agentWatchGameId, setAgentWatchGameId] = useState('')
+  const [isWatchingAgents, setIsWatchingAgents] = useState(false)
+  const [watchInterval, setWatchInterval] = useState<number | null>(null)
   
   // For trading UI
   const [showTradingPanel, setShowTradingPanel] = useState(false)
@@ -182,6 +189,15 @@ function App() {
       }
     }
   }, [autoRefresh, gameState, view])
+
+  // Cleanup watch interval on unmount or view change
+  useEffect(() => {
+    return () => {
+      if (watchInterval) {
+        clearInterval(watchInterval)
+      }
+    }
+  }, [watchInterval])
 
   const refreshGameState = async () => {
     if (!gameState) return
@@ -954,8 +970,237 @@ function App() {
                 {loading ? 'Loading...' : 'Load Replay'}
               </button>
             </div>
+
+            <div className="menu-divider">OR</div>
+
+            <div className="menu-section">
+              <h2>🤖 Agent Testing</h2>
+              <div className="form-group">
+                <label>
+                  Game ID:
+                  <input
+                    type="text"
+                    value={agentWatchGameId}
+                    onChange={(e) => setAgentWatchGameId(e.target.value)}
+                    placeholder="Enter game ID for agent testing"
+                  />
+                </label>
+              </div>
+              <div className="button-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <button 
+                  onClick={async () => {
+                    if (!agentWatchGameId.trim()) {
+                      setError('Please enter a game ID')
+                      return
+                    }
+                    setLoading(true)
+                    setError(null)
+                    try {
+                      const result = await runAgents(agentWatchGameId, { max_turns: 1000 })
+                      if (result.error) {
+                        alert(`Agents finished with error: ${result.error}\n\nGame ID: ${result.game_id}\nTurns played: ${result.turns_played}\nCompleted: ${result.completed}`)
+                      } else {
+                        alert(`Agents finished successfully!\n\nGame ID: ${result.game_id}\nTurns played: ${result.turns_played}\nCompleted: ${result.completed}`)
+                      }
+                      // Load the final state
+                      const finalState = await getGameState(result.game_id)
+                      setGameState(finalState)
+                      setReplayGameId(result.game_id)
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : 'Failed to run agents')
+                    } finally {
+                      setLoading(false)
+                    }
+                  }}
+                  disabled={loading || !agentWatchGameId.trim()}
+                  className="secondary"
+                >
+                  {loading ? 'Running...' : '▶ Run Agents Automatically'}
+                </button>
+                <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
+                  Runs game to completion (or max 1000 turns). Returns game ID for replay.
+                </div>
+                <button 
+                  onClick={async () => {
+                    if (!agentWatchGameId.trim()) {
+                      setError('Please enter a game ID')
+                      return
+                    }
+                    setLoading(true)
+                    setError(null)
+                    try {
+                      const state = await getGameState(agentWatchGameId)
+                      setGameState(state)
+                      setView('agent-watch')
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : 'Failed to load game')
+                    } finally {
+                      setLoading(false)
+                    }
+                  }}
+                  disabled={loading || !agentWatchGameId.trim()}
+                  className="secondary"
+                >
+                  {loading ? 'Loading...' : '👁️ Watch Agents Play'}
+                </button>
+                <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
+                  Watch agents play step-by-step with 1-second delay.
+                </div>
+              </div>
+            </div>
           </div>
           {error && <div className="error">Error: {error}</div>}
+        </main>
+      </div>
+    )
+  }
+
+  if (view === 'agent-watch') {
+    const handleStartWatching = () => {
+      if (!gameState) return
+      setIsWatchingAgents(true)
+      
+      const interval = setInterval(async () => {
+        try {
+          const result = await watchAgentsStep(gameState.game_id)
+          setGameState(result.new_state)
+          
+          if (!result.game_continues || result.error) {
+            setIsWatchingAgents(false)
+            if (watchInterval) {
+              clearInterval(watchInterval)
+            }
+            if (result.error) {
+              setError(`Agent watching stopped: ${result.error}`)
+            } else {
+              setError('Game finished or stopped')
+            }
+          }
+        } catch (err) {
+          setIsWatchingAgents(false)
+          if (watchInterval) {
+            clearInterval(watchInterval)
+          }
+          setError(err instanceof Error ? err.message : 'Failed to watch agents')
+        }
+      }, 1000) // 1 second delay
+      
+      setWatchInterval(interval)
+    }
+
+    const handleStopWatching = () => {
+      setIsWatchingAgents(false)
+      if (watchInterval) {
+        clearInterval(watchInterval)
+        setWatchInterval(null)
+      }
+    }
+
+    return (
+      <div className="app">
+        <header>
+          <h1>🤖 Agent Watching Mode</h1>
+          <div className="header-actions">
+            <button 
+              onClick={isWatchingAgents ? handleStopWatching : handleStartWatching}
+              disabled={loading || !gameState}
+              className="action-button"
+              style={{ 
+                backgroundColor: isWatchingAgents ? '#d32f2f' : '#4CAF50',
+                color: 'white'
+              }}
+            >
+              {isWatchingAgents ? '⏸ Stop Watching' : '▶ Start Watching'}
+            </button>
+            <button onClick={() => {
+              handleStopWatching()
+              setView('main')
+            }} className="back-button">
+              Back to Menu
+            </button>
+          </div>
+        </header>
+        <main className="game-main">
+          {error && <div className="error">Error: {error}</div>}
+          
+          {isWatchingAgents && (
+            <div style={{ 
+              padding: '1rem', 
+              backgroundColor: '#e3f2fd', 
+              border: '1px solid #2196F3',
+              borderRadius: '4px',
+              marginBottom: '1rem'
+            }}>
+              <strong>👁️ Watching agents play...</strong> Actions execute every 1 second.
+            </div>
+          )}
+          
+          <div className="game-info-bar">
+            <div>
+              <strong>Game ID:</strong> {gameState?.game_id}
+            </div>
+            <div>
+              <strong>Phase:</strong> {gameState?.phase}
+            </div>
+            <div>
+              <strong>Turn:</strong> {gameState?.turn_number}
+            </div>
+            {gameState?.dice_roll && (
+              <div>
+                <strong>Last Dice Roll:</strong> {gameState.dice_roll}
+              </div>
+            )}
+            {gameState && gameState.phase === 'playing' && (
+              <div>
+                <strong>Current Player:</strong> {gameState.players[gameState.current_player_index]?.name}
+              </div>
+            )}
+          </div>
+
+          <div className="game-layout">
+            <div className="game-board-section">
+              <h2>Board</h2>
+              <div className="board-container">
+                {renderBoard(gameState, undefined, [], false)}
+              </div>
+            </div>
+
+            <div className="game-sidebar">
+              {gameState && (
+                <>
+                  <div className="player-info">
+                    <h2>Game State</h2>
+                    <div className="info-section">
+                      <div><strong>Phase:</strong> {gameState.phase}</div>
+                      <div><strong>Turn:</strong> {gameState.turn_number}</div>
+                      {gameState.dice_roll && (
+                        <div><strong>Dice Roll:</strong> {gameState.dice_roll}</div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="all-players">
+                    <h2>Players</h2>
+                    {gameState.players.map(player => (
+                      <div 
+                        key={player.id} 
+                        className="player-card"
+                        style={{
+                          borderLeft: `4px solid ${player.color || '#ccc'}`
+                        }}
+                      >
+                        <div><strong>{player.name}</strong> ({player.id})</div>
+                        <div>VP: {player.victory_points}</div>
+                        <div>Resources: {Object.values(player.resources).reduce((a, b) => a + b, 0)}</div>
+                        <div>Settlements: {player.settlements_built}, Cities: {player.cities_built}</div>
+                        <div>Roads: {player.roads_built}</div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </main>
       </div>
     )
