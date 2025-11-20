@@ -288,7 +288,8 @@ class GameState:
             adjacent_tiles=intersection.adjacent_tiles,
             adjacent_intersections=intersection.adjacent_intersections,
             owner=current_player.id,
-            building_type="settlement"
+            building_type="settlement",
+            port_type=intersection.port_type  # Preserve port type
         )
         current_player.settlements_built += 1
         current_player.victory_points += 1
@@ -328,7 +329,8 @@ class GameState:
             adjacent_tiles=intersection.adjacent_tiles,
             adjacent_intersections=intersection.adjacent_intersections,
             owner=current_player.id,
-            building_type="city"
+            building_type="city",
+            port_type=intersection.port_type  # Preserve port type
         )
         current_player.settlements_built -= 1
         current_player.cities_built += 1
@@ -1328,7 +1330,8 @@ class GameState:
             adjacent_tiles=intersection.adjacent_tiles,
             adjacent_intersections=intersection.adjacent_intersections,
             owner=current_player.id,
-            building_type="settlement"
+            building_type="settlement",
+            port_type=intersection.port_type  # Preserve port type
         )
         current_player.settlements_built += 1
         current_player.victory_points += 1

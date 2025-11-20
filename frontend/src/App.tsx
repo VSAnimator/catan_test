@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import './App.css'
 import {
   createGame as apiCreateGame,
@@ -545,7 +545,13 @@ function App() {
             return 0
           })
           
-          return sortedForRender.map(pair => {
+          // Collect port data (lines and icons)
+          const portLines: Array<{
+            x1: number, y1: number, x2: number, y2: number,
+            portX: number, portY: number, color: string
+          }> = []
+          
+          const portIcons = sortedForRender.map(pair => {
             const { inter1: inter, inter2: portPair } = pair
             
             // Calculate midpoint between the two intersections
@@ -553,6 +559,20 @@ function App() {
             const { x: x2, y: y2 } = hexToPixel(portPair.position[0], portPair.position[1])
             const midX = (x1 + x2) / 2
             const midY = (y1 + y2) / 2
+            
+            // Calculate direction from board center to midpoint (outward direction)
+            const boardCenterX = 400  // Center offset from hexToPixel
+            const boardCenterY = 300
+            const dx = midX - boardCenterX
+            const dy = midY - boardCenterY
+            const distance = Math.sqrt(dx * dx + dy * dy)
+            
+            // Offset port icon outward from the edge (away from board center)
+            const offsetDistance = 35  // Pixels to offset from edge
+            const offsetX = (dx / distance) * offsetDistance
+            const offsetY = (dy / distance) * offsetDistance
+            const portX = midX + offsetX
+            const portY = midY + offsetY
             
             // Get port icon based on type
             let portIcon = '⚓' // Default 3:1 port
@@ -574,22 +594,75 @@ function App() {
               portTitle = `2:1 ${inter.port_type} Port`
             }
             
-            return (
-              <div
-                key={`port-${inter.id}-${portPair.id}`}
-                className="port-edge-indicator"
-                data-port-type={inter.port_type}
-                style={{
-                  left: `${midX}px`,
-                  top: `${midY}px`,
-                  color: portColor
-                }}
-                title={portTitle}
-              >
-                {portIcon}
-              </div>
-            )
+            // Store line data for SVG rendering
+            portLines.push({
+              x1, y1, x2, y2, portX, portY, color: portColor
+            })
+            
+            return {
+              portX, portY, portIcon, portColor, portTitle,
+              portType: inter.port_type,
+              key: `port-${inter.id}-${portPair.id}`
+            }
           })
+          
+          return (
+            <React.Fragment key="port-container">
+              {/* Single SVG for all port connection lines */}
+              <svg
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  height: '100%',
+                  pointerEvents: 'none',
+                  zIndex: 17
+                }}
+              >
+                {portLines.map((line, idx) => (
+                  <React.Fragment key={`port-line-${idx}`}>
+                    <line
+                      x1={line.x1}
+                      y1={line.y1}
+                      x2={line.portX}
+                      y2={line.portY}
+                      stroke="#888"
+                      strokeWidth="2"
+                      strokeDasharray="4,4"
+                      opacity="0.5"
+                    />
+                    <line
+                      x1={line.x2}
+                      y1={line.y2}
+                      x2={line.portX}
+                      y2={line.portY}
+                      stroke="#888"
+                      strokeWidth="2"
+                      strokeDasharray="4,4"
+                      opacity="0.5"
+                    />
+                  </React.Fragment>
+                ))}
+              </svg>
+              {/* Port icons */}
+              {portIcons.map(icon => (
+                <div
+                  key={icon.key}
+                  className="port-edge-indicator"
+                  data-port-type={icon.portType}
+                  style={{
+                    left: `${icon.portX}px`,
+                    top: `${icon.portY}px`,
+                    color: icon.portColor
+                  }}
+                  title={icon.portTitle}
+                >
+                  {icon.portIcon}
+                </div>
+              ))}
+            </React.Fragment>
+          )
         })()}
         
         {/* Render roads */}
