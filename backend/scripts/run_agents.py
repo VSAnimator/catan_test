@@ -24,11 +24,11 @@ from engine.serialization import (
     serialize_action,
     serialize_action_payload,
 )
-from agents import RandomAgent
+from agents import RandomAgent, BehaviorTreeAgent
 from agents.agent_runner import AgentRunner
 
 
-def run_agents_script(game_id: str, max_turns: int = 1000, fast_mode: bool = False):
+def run_agents_script(game_id: str, max_turns: int = 1000, fast_mode: bool = False, agent_type: str = "random"):
     """Run agents automatically on a game.
     
     Args:
@@ -77,10 +77,12 @@ def run_agents_script(game_id: str, max_turns: int = 1000, fast_mode: bool = Fal
     
     # Create agents for all players
     agents = {}
+    agent_class = BehaviorTreeAgent if agent_type == "behavior_tree" else RandomAgent
+    agent_name = "BehaviorTreeAgent" if agent_type == "behavior_tree" else "RandomAgent"
     for player in current_state.players:
-        agents[player.id] = RandomAgent(player.id)
+        agents[player.id] = agent_class(player.id)
         if not fast_mode:
-            print(f"  Created RandomAgent for {player.name} ({player.id})")
+            print(f"  Created {agent_name} for {player.name} ({player.id})")
     if not fast_mode:
         print()
     
@@ -267,7 +269,14 @@ if __name__ == "__main__":
         action="store_true",
         help="Fast mode: skip text serialization and use batched writes (for headless testing)"
     )
+    parser.add_argument(
+        "--agent-type",
+        type=str,
+        default="random",
+        choices=["random", "behavior_tree"],
+        help="Type of agent to use (default: random)"
+    )
     
     args = parser.parse_args()
-    sys.exit(run_agents_script(args.game_id, args.max_turns, fast_mode=args.fast))
+    sys.exit(run_agents_script(args.game_id, max_turns=args.max_turns, fast_mode=args.fast, agent_type=args.agent_type))
 

@@ -21,7 +21,7 @@ from scripts.run_agents import run_agents_script
 
 def run_single_game(args):
     """Run a single game (for multiprocessing)."""
-    game_num, total_games, max_turns, fast_mode = args
+    game_num, total_games, max_turns, fast_mode, agent_type = args
     import sys
     import traceback
     import time
@@ -43,9 +43,9 @@ def run_single_game(args):
         print(f"[Game {game_num}] Game created: {game_id[:8]}... ({time.time() - start_time:.2f}s)", flush=True)
         
         # Run agents in fast mode for headless testing
-        print(f"[Game {game_num}] Running agents (fast_mode={fast_mode})...", flush=True)
+        print(f"[Game {game_num}] Running agents (fast_mode={fast_mode}, agent_type={agent_type})...", flush=True)
         agent_start = time.time()
-        exit_code = run_agents_script(game_id, max_turns=max_turns, fast_mode=fast_mode)
+        exit_code = run_agents_script(game_id, max_turns=max_turns, fast_mode=fast_mode, agent_type=agent_type)
         agent_time = time.time() - agent_start
         
         # Check the actual completion status by reading the final state
@@ -97,7 +97,7 @@ def run_single_game(args):
         return ("ERROR", None, str(e), game_num)
 
 
-def test_agents_batch(num_games: int = 10, max_turns: int = 1000, fast_mode: bool = True, workers: int = None):
+def test_agents_batch(num_games: int = 10, max_turns: int = 1000, fast_mode: bool = True, workers: int = None, agent_type: str = "random"):
     # Store max_turns for use in summary message
     max_turns_arg = max_turns
     """Run multiple agent games and report results.
@@ -116,11 +116,11 @@ def test_agents_batch(num_games: int = 10, max_turns: int = 1000, fast_mode: boo
     
     results = []
     
-    print(f"=== Testing {num_games} games with agents (fast_mode={fast_mode}, workers={workers}) ===\n")
+    print(f"=== Testing {num_games} games with agents (fast_mode={fast_mode}, workers={workers}, agent_type={agent_type}) ===\n")
     print(f"Starting multiprocessing pool with {workers} workers...", flush=True)
     
     # Prepare arguments for each game
-    game_args = [(i+1, num_games, max_turns, fast_mode) for i in range(num_games)]
+    game_args = [(i+1, num_games, max_turns, fast_mode, agent_type) for i in range(num_games)]
     print(f"Prepared {len(game_args)} games for execution\n", flush=True)
     
     # Run games in parallel using multiprocessing
@@ -264,7 +264,14 @@ if __name__ == "__main__":
         default=None,
         help="Number of parallel workers (default: min(CPU cores, 8))"
     )
+    parser.add_argument(
+        "--agent-type",
+        type=str,
+        default="random",
+        choices=["random", "behavior_tree"],
+        help="Type of agent to use (default: random)"
+    )
     
     args = parser.parse_args()
-    sys.exit(test_agents_batch(args.num_games, args.max_turns, fast_mode=not args.no_fast, workers=args.workers))
+    sys.exit(test_agents_batch(args.num_games, args.max_turns, fast_mode=not args.no_fast, workers=args.workers, agent_type=args.agent_type))
 
