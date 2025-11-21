@@ -103,6 +103,11 @@ class GameState:
     robber_initial_tile_id: Optional[int] = None  # Robber position when 7 was rolled (to detect if it's been moved)
     roads_from_road_building: Dict[str, int] = field(default_factory=dict)  # Player ID -> number of free roads remaining from road building card
     
+    # Trade state
+    pending_trade_offer: Optional[Dict] = None  # Current trade offer: {proposer_id, target_player_ids, give_resources, receive_resources}
+    pending_trade_responses: Dict[str, bool] = field(default_factory=dict)  # Player ID -> True if accepted, False if rejected
+    pending_trade_current_responder_index: int = 0  # Index into target_player_ids for current responder
+    
     def step(self, action: 'Action', payload: Optional['ActionPayload'] = None, player_id: Optional[str] = None) -> 'GameState':
         """
         Pure function that takes an action and returns a new GameState.
@@ -131,6 +136,14 @@ class GameState:
             result = self._handle_trade_bank(new_state, payload)
         elif action == Action.TRADE_PLAYER:
             result = self._handle_trade_player(new_state, payload)
+        elif action == Action.PROPOSE_TRADE:
+            result = self._handle_propose_trade(new_state, payload)
+        elif action == Action.ACCEPT_TRADE:
+            result = self._handle_accept_trade(new_state)
+        elif action == Action.REJECT_TRADE:
+            result = self._handle_reject_trade(new_state)
+        elif action == Action.SELECT_TRADE_PARTNER:
+            result = self._handle_select_trade_partner(new_state, payload)
         elif action == Action.END_TURN:
             result = self._handle_end_turn(new_state)
         elif action == Action.START_GAME:
@@ -880,6 +893,275 @@ class GameState:
             player.longest_road = True
             player.victory_points += 2
     
+    def _handle_propose_trade(self, new_state: 'GameState', payload: Optional['ActionPayload']) -> 'GameState':
+        """Handle proposing a trade to one or more players."""
+        if not payload or not isinstance(payload, ProposeTradePayload):
+            raise ValueError("PROPOSE_TRADE requires ProposeTradePayload")
+        
+        # Trading is only allowed after dice is rolled
+        if new_state.dice_roll is None:
+            raise ValueError("Cannot trade before rolling dice")
+        
+        # If a 7 is rolled, trading is not allowed until all phases are complete
+        if new_state.dice_roll == 7:
+            # Check if we're still in discard phase
+            robber_has_been_moved = (new_state.robber_initial_tile_id is not None and 
+                                     new_state.robber_tile_id != new_state.robber_initial_tile_id)
+            in_discard_phase = (not new_state.waiting_for_robber_move and 
+                               not new_state.waiting_for_robber_steal and 
+                               not robber_has_been_moved)
+            
+            if in_discard_phase:
+                # Check if any player still needs to discard
+                any_player_needs_discard = False
+                for p in new_state.players:
+                    if p.id not in new_state.players_discarded and sum(p.resources.values()) >= 8:
+                        any_player_needs_discard = True
+                        break
+                if any_player_needs_discard:
+                    raise ValueError("Cannot trade while players need to discard after rolling 7")
+            
+            # Check if we're in robber move/steal phase
+            if new_state.waiting_for_robber_move or new_state.waiting_for_robber_steal:
+                raise ValueError("Cannot trade while robber phase is active after rolling 7")
+        
+        # Can't propose trade if there's already a pending trade
+        if new_state.pending_trade_offer is not None:
+            raise ValueError("There is already a pending trade offer")
+        
+        current_player = new_state.players[new_state.current_player_index]
+        
+        # Validate proposer has enough resources
+        for resource, amount in payload.give_resources.items():
+            if current_player.resources[resource] < amount:
+                raise ValueError(f"Insufficient {resource.value} to trade (have {current_player.resources[resource]}, need {amount})")
+        
+        # Validate target players exist
+        for target_id in payload.target_player_ids:
+            if target_id == current_player.id:
+                raise ValueError("Cannot propose trade to yourself")
+            target_player = next((p for p in new_state.players if p.id == target_id), None)
+            if not target_player:
+                raise ValueError(f"Target player {target_id} not found")
+        
+        # Create pending trade offer
+        new_state.pending_trade_offer = {
+            'proposer_id': current_player.id,
+            'target_player_ids': payload.target_player_ids,
+            'give_resources': payload.give_resources,
+            'receive_resources': payload.receive_resources,
+        }
+        new_state.pending_trade_responses = {}
+        new_state.pending_trade_current_responder_index = 0
+        
+        # Switch to first target player to respond
+        if payload.target_player_ids:
+            first_target_id = payload.target_player_ids[0]
+            target_index = next((i for i, p in enumerate(new_state.players) if p.id == first_target_id), None)
+            if target_index is not None:
+                new_state.current_player_index = target_index
+        
+        return new_state
+    
+    def _handle_accept_trade(self, new_state: 'GameState') -> 'GameState':
+        """Handle accepting a pending trade offer."""
+        if new_state.pending_trade_offer is None:
+            raise ValueError("No pending trade offer to accept")
+        
+        current_player = new_state.players[new_state.current_player_index]
+        offer = new_state.pending_trade_offer
+        
+        # Verify this player is a target of the trade
+        if current_player.id not in offer['target_player_ids']:
+            raise ValueError(f"Player {current_player.id} is not a target of this trade offer")
+        
+        # Verify this player hasn't already responded
+        if current_player.id in new_state.pending_trade_responses:
+            raise ValueError(f"Player {current_player.id} has already responded to this trade")
+        
+        # Verify player can afford the trade (they give receive_resources, get give_resources)
+        for resource, amount in offer['receive_resources'].items():
+            if current_player.resources[resource] < amount:
+                raise ValueError(f"Insufficient {resource.value} to accept trade (have {current_player.resources[resource]}, need {amount})")
+        
+        # Mark as accepted
+        new_state.pending_trade_responses[current_player.id] = True
+        
+        # Check if there are more players to respond
+        responded_count = len(new_state.pending_trade_responses)
+        total_targets = len(offer['target_player_ids'])
+        
+        if responded_count < total_targets:
+            # Move to next target player
+            next_index = new_state.pending_trade_current_responder_index + 1
+            if next_index < total_targets:
+                next_target_id = offer['target_player_ids'][next_index]
+                target_index = next((i for i, p in enumerate(new_state.players) if p.id == next_target_id), None)
+                if target_index is not None:
+                    new_state.current_player_index = target_index
+                    new_state.pending_trade_current_responder_index = next_index
+        else:
+            # All players have responded - check if any accepted
+            accepting_players = [pid for pid, accepted in new_state.pending_trade_responses.items() if accepted]
+            
+            if len(accepting_players) == 0:
+                # No one accepted - clear trade and return to proposer
+                proposer_index = next((i for i, p in enumerate(new_state.players) if p.id == offer['proposer_id']), None)
+                if proposer_index is not None:
+                    new_state.current_player_index = proposer_index
+                new_state.pending_trade_offer = None
+                new_state.pending_trade_responses = {}
+                new_state.pending_trade_current_responder_index = 0
+            elif len(accepting_players) == 1:
+                # Exactly one accepted - execute trade immediately
+                new_state = self._execute_trade(new_state, offer['proposer_id'], accepting_players[0], 
+                                                offer['give_resources'], offer['receive_resources'])
+                # Clear trade state and return to proposer
+                proposer_index = next((i for i, p in enumerate(new_state.players) if p.id == offer['proposer_id']), None)
+                if proposer_index is not None:
+                    new_state.current_player_index = proposer_index
+                new_state.pending_trade_offer = None
+                new_state.pending_trade_responses = {}
+                new_state.pending_trade_current_responder_index = 0
+            else:
+                # Multiple accepted - proposer chooses
+                proposer_index = next((i for i, p in enumerate(new_state.players) if p.id == offer['proposer_id']), None)
+                if proposer_index is not None:
+                    new_state.current_player_index = proposer_index
+        
+        return new_state
+    
+    def _handle_reject_trade(self, new_state: 'GameState') -> 'GameState':
+        """Handle rejecting a pending trade offer."""
+        if new_state.pending_trade_offer is None:
+            raise ValueError("No pending trade offer to reject")
+        
+        current_player = new_state.players[new_state.current_player_index]
+        offer = new_state.pending_trade_offer
+        
+        # Verify this player is a target of the trade
+        if current_player.id not in offer['target_player_ids']:
+            raise ValueError(f"Player {current_player.id} is not a target of this trade offer")
+        
+        # Verify this player hasn't already responded
+        if current_player.id in new_state.pending_trade_responses:
+            raise ValueError(f"Player {current_player.id} has already responded to this trade")
+        
+        # Mark as rejected
+        new_state.pending_trade_responses[current_player.id] = False
+        
+        # Check if there are more players to respond
+        responded_count = len(new_state.pending_trade_responses)
+        total_targets = len(offer['target_player_ids'])
+        
+        if responded_count < total_targets:
+            # Move to next target player
+            next_index = new_state.pending_trade_current_responder_index + 1
+            if next_index < total_targets:
+                next_target_id = offer['target_player_ids'][next_index]
+                target_index = next((i for i, p in enumerate(new_state.players) if p.id == next_target_id), None)
+                if target_index is not None:
+                    new_state.current_player_index = target_index
+                    new_state.pending_trade_current_responder_index = next_index
+        else:
+            # All players have responded - check if any accepted
+            accepting_players = [pid for pid, accepted in new_state.pending_trade_responses.items() if accepted]
+            
+            if len(accepting_players) == 0:
+                # No one accepted - clear trade and return to proposer
+                proposer_index = next((i for i, p in enumerate(new_state.players) if p.id == offer['proposer_id']), None)
+                if proposer_index is not None:
+                    new_state.current_player_index = proposer_index
+                new_state.pending_trade_offer = None
+                new_state.pending_trade_responses = {}
+                new_state.pending_trade_current_responder_index = 0
+            elif len(accepting_players) == 1:
+                # Exactly one accepted - execute trade immediately
+                new_state = self._execute_trade(new_state, offer['proposer_id'], accepting_players[0], 
+                                                offer['give_resources'], offer['receive_resources'])
+                # Clear trade state and return to proposer
+                proposer_index = next((i for i, p in enumerate(new_state.players) if p.id == offer['proposer_id']), None)
+                if proposer_index is not None:
+                    new_state.current_player_index = proposer_index
+                new_state.pending_trade_offer = None
+                new_state.pending_trade_responses = {}
+                new_state.pending_trade_current_responder_index = 0
+            else:
+                # Multiple accepted - proposer chooses
+                proposer_index = next((i for i, p in enumerate(new_state.players) if p.id == offer['proposer_id']), None)
+                if proposer_index is not None:
+                    new_state.current_player_index = proposer_index
+        
+        return new_state
+    
+    def _handle_select_trade_partner(self, new_state: 'GameState', payload: Optional['ActionPayload']) -> 'GameState':
+        """Handle selecting which accepting player to trade with."""
+        if not payload or not isinstance(payload, SelectTradePartnerPayload):
+            raise ValueError("SELECT_TRADE_PARTNER requires SelectTradePartnerPayload")
+        
+        if new_state.pending_trade_offer is None:
+            raise ValueError("No pending trade offer")
+        
+        current_player = new_state.players[new_state.current_player_index]
+        offer = new_state.pending_trade_offer
+        
+        # Verify current player is the proposer
+        if current_player.id != offer['proposer_id']:
+            raise ValueError("Only the proposer can select a trade partner")
+        
+        # Verify selected player accepted
+        if payload.selected_player_id not in new_state.pending_trade_responses:
+            raise ValueError(f"Player {payload.selected_player_id} has not responded to the trade")
+        
+        if not new_state.pending_trade_responses[payload.selected_player_id]:
+            raise ValueError(f"Player {payload.selected_player_id} rejected the trade")
+        
+        # Execute trade with selected player
+        new_state = self._execute_trade(new_state, offer['proposer_id'], payload.selected_player_id,
+                                        offer['give_resources'], offer['receive_resources'])
+        
+        # Clear trade state
+        new_state.pending_trade_offer = None
+        new_state.pending_trade_responses = {}
+        new_state.pending_trade_current_responder_index = 0
+        
+        return new_state
+    
+    def _execute_trade(self, new_state: 'GameState', proposer_id: str, partner_id: str,
+                      give_resources: Dict[ResourceType, int], receive_resources: Dict[ResourceType, int]) -> 'GameState':
+        """Execute a trade between two players."""
+        proposer = next((p for p in new_state.players if p.id == proposer_id), None)
+        partner = next((p for p in new_state.players if p.id == partner_id), None)
+        
+        if not proposer or not partner:
+            raise ValueError("Proposer or partner not found")
+        
+        # Verify proposer has enough resources
+        for resource, amount in give_resources.items():
+            if proposer.resources[resource] < amount:
+                raise ValueError(f"Proposer has insufficient {resource.value}")
+        
+        # Verify partner has enough resources
+        for resource, amount in receive_resources.items():
+            if partner.resources[resource] < amount:
+                raise ValueError(f"Partner has insufficient {resource.value}")
+        
+        # Execute trade - proposer gives give_resources, receives receive_resources
+        # Partner gives receive_resources, receives give_resources
+        for resource, amount in give_resources.items():
+            proposer.resources[resource] -= amount
+            if resource not in partner.resources:
+                partner.resources[resource] = 0
+            partner.resources[resource] += amount
+        
+        for resource, amount in receive_resources.items():
+            partner.resources[resource] -= amount
+            if resource not in proposer.resources:
+                proposer.resources[resource] = 0
+            proposer.resources[resource] += amount
+        
+        return new_state
+    
     def _handle_end_turn(self, new_state: 'GameState') -> 'GameState':
         """Handle ending the current turn."""
         if new_state.phase != "playing":
@@ -888,6 +1170,10 @@ class GameState:
         # Can't end turn if waiting for robber actions
         if new_state.waiting_for_robber_move or new_state.waiting_for_robber_steal:
             raise ValueError("Must complete robber move and steal before ending turn")
+        
+        # Can't end turn if there's a pending trade
+        if new_state.pending_trade_offer is not None:
+            raise ValueError("Cannot end turn while trade is pending")
         
         # Advance to next player
         new_state.current_player_index = (new_state.current_player_index + 1) % len(new_state.players)
@@ -1549,7 +1835,11 @@ class Action(Enum):
     BUY_DEV_CARD = "buy_dev_card"
     PLAY_DEV_CARD = "play_dev_card"
     TRADE_BANK = "trade_bank"
-    TRADE_PLAYER = "trade_player"
+    TRADE_PLAYER = "trade_player"  # Legacy - now use PROPOSE_TRADE
+    PROPOSE_TRADE = "propose_trade"  # Propose trade to one or more players
+    ACCEPT_TRADE = "accept_trade"  # Accept a pending trade offer
+    REJECT_TRADE = "reject_trade"  # Reject a pending trade offer
+    SELECT_TRADE_PARTNER = "select_trade_partner"  # Choose which accepting player to trade with
     END_TURN = "end_turn"
     START_GAME = "start_game"
     SETUP_PLACE_SETTLEMENT = "setup_place_settlement"
@@ -1569,6 +1859,8 @@ ActionPayload = Union[
     'PlayDevCardPayload',
     'TradeBankPayload',
     'TradePlayerPayload',
+    'ProposeTradePayload',
+    'SelectTradePartnerPayload',
     'MoveRobberPayload',
     'StealResourcePayload',
     'DiscardResourcesPayload',
@@ -1613,10 +1905,24 @@ class TradeBankPayload:
 
 @dataclass(frozen=True)
 class TradePlayerPayload:
-    """Payload for TRADE_PLAYER action."""
+    """Payload for TRADE_PLAYER action (legacy - use ProposeTradePayload)."""
     other_player_id: str
     give_resources: Dict[ResourceType, int]  # Resources to give (can be multiple types)
     receive_resources: Dict[ResourceType, int]  # Resources to receive (can be multiple types)
+
+
+@dataclass(frozen=True)
+class ProposeTradePayload:
+    """Payload for PROPOSE_TRADE action."""
+    target_player_ids: List[str]  # List of player IDs to propose trade to
+    give_resources: Dict[ResourceType, int]  # Resources proposer will give
+    receive_resources: Dict[ResourceType, int]  # Resources proposer will receive
+
+
+@dataclass(frozen=True)
+class SelectTradePartnerPayload:
+    """Payload for SELECT_TRADE_PARTNER action."""
+    selected_player_id: str  # Which accepting player to trade with
 
 
 @dataclass(frozen=True)

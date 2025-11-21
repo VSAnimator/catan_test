@@ -24,6 +24,8 @@ from .engine import (
     PlayDevCardPayload,
     TradeBankPayload,
     TradePlayerPayload,
+    ProposeTradePayload,
+    SelectTradePartnerPayload,
     MoveRobberPayload,
     StealResourcePayload,
     DiscardResourcesPayload,
@@ -242,6 +244,18 @@ def serialize_action_payload(payload: ActionPayload) -> Dict[str, Any]:
             "give_resources": {rt.value: count for rt, count in payload.give_resources.items()},
             "receive_resources": {rt.value: count for rt, count in payload.receive_resources.items()},
         }
+    elif isinstance(payload, ProposeTradePayload):
+        return {
+            "type": "ProposeTradePayload",
+            "target_player_ids": payload.target_player_ids,
+            "give_resources": {rt.value: count for rt, count in payload.give_resources.items()},
+            "receive_resources": {rt.value: count for rt, count in payload.receive_resources.items()},
+        }
+    elif isinstance(payload, SelectTradePartnerPayload):
+        return {
+            "type": "SelectTradePartnerPayload",
+            "selected_player_id": payload.selected_player_id,
+        }
     elif isinstance(payload, MoveRobberPayload):
         return {
             "type": "MoveRobberPayload",
@@ -315,6 +329,24 @@ def deserialize_action_payload(data: Dict[str, Any]) -> ActionPayload:
             other_player_id=data["other_player_id"],
             give_resources=give_resources,
             receive_resources=receive_resources,
+        )
+    elif payload_type == "ProposeTradePayload":
+        give_resources = {
+            ResourceType(rt): count
+            for rt, count in data.get("give_resources", {}).items()
+        }
+        receive_resources = {
+            ResourceType(rt): count
+            for rt, count in data.get("receive_resources", {}).items()
+        }
+        return ProposeTradePayload(
+            target_player_ids=data["target_player_ids"],
+            give_resources=give_resources,
+            receive_resources=receive_resources,
+        )
+    elif payload_type == "SelectTradePartnerPayload":
+        return SelectTradePartnerPayload(
+            selected_player_id=data["selected_player_id"]
         )
     elif payload_type == "MoveRobberPayload":
         return MoveRobberPayload(tile_id=data["tile_id"])
@@ -411,6 +443,48 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
     
     elif state.phase == "playing":
         # Playing phase actions
+        
+        # Check for pending trade first (takes priority over other actions)
+        if state.pending_trade_offer is not None:
+            offer = state.pending_trade_offer
+            current_player = state.players[state.current_player_index]
+            
+            # Check if current player is a target of the trade
+            if current_player.id in offer['target_player_ids']:
+                # Check if this player has already responded
+                if current_player.id not in state.pending_trade_responses:
+                    # Player needs to respond - can accept or reject
+                    # Verify player can afford the trade (they give receive_resources, get give_resources)
+                    can_afford = True
+                    for resource, amount in offer['receive_resources'].items():
+                        if current_player.resources[resource] < amount:
+                            can_afford = False
+                            break
+                    
+                    if can_afford:
+                        legal.append((Action.ACCEPT_TRADE, None))
+                    legal.append((Action.REJECT_TRADE, None))
+                    # Don't show other actions while trade is pending
+                    return legal
+                else:
+                    # Player has already responded - wait for other players
+                    return legal
+            # Check if current player is the proposer and multiple players accepted
+            elif current_player.id == offer['proposer_id']:
+                accepting_players = [pid for pid, accepted in state.pending_trade_responses.items() if accepted]
+                if len(accepting_players) > 1:
+                    # Multiple accepted - proposer must choose
+                    for accepting_player_id in accepting_players:
+                        legal.append((Action.SELECT_TRADE_PARTNER, SelectTradePartnerPayload(selected_player_id=accepting_player_id)))
+                    # Don't show other actions while trade is pending
+                    return legal
+                else:
+                    # Trade is being processed or no one accepted - wait
+                    return legal
+            else:
+                # Not involved in trade - wait
+                return legal
+        
         if state.dice_roll is None:
             # Must roll dice first
             legal.append((Action.ROLL_DICE, None))

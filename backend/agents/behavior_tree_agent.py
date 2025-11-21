@@ -11,7 +11,7 @@ Uses a hierarchical decision tree to make strategic choices:
 """
 import random
 from typing import Tuple, Optional, List, Dict
-from engine import GameState, Action, ActionPayload, ResourceType
+from engine import GameState, Action, ActionPayload, ResourceType, ProposeTradePayload, SelectTradePartnerPayload
 from engine.serialization import legal_actions
 from .base_agent import BaseAgent
 
@@ -70,12 +70,17 @@ class BehaviorTreeAgent(BaseAgent):
                 if settlement_action:
                     return settlement_action
         
-        # 2. HANDLE REQUIRED ACTIONS (discard, robber, etc.)
+        # 2. HANDLE PENDING TRADES (must be handled before other actions)
+        trade_response = self._handle_pending_trade(state, player, legal_actions_list)
+        if trade_response:
+            return trade_response
+        
+        # 3. HANDLE REQUIRED ACTIONS (discard, robber, etc.)
         required_action = self._handle_required_actions(state, legal_actions_list)
         if required_action:
             return required_action
         
-        # 3. STRATEGIC BUILDING: Cities > Settlements > Roads
+        # 4. STRATEGIC BUILDING: Cities > Settlements > Roads
         # Cities are highest priority (2 VPs, better production)
         city_action = self._find_build_city_action(legal_actions_list)
         if city_action:
@@ -91,7 +96,7 @@ class BehaviorTreeAgent(BaseAgent):
         if road_action:
             return road_action
         
-        # 4. DEVELOPMENT CARDS: Buy and play strategically
+        # 5. DEVELOPMENT CARDS: Buy and play strategically
         # Play useful dev cards first
         dev_card_play = self._choose_dev_card_to_play(state, player, legal_actions_list)
         if dev_card_play:
@@ -102,12 +107,12 @@ class BehaviorTreeAgent(BaseAgent):
         if buy_dev_card_action:
             return buy_dev_card_action
         
-        # 5. TRADING: Only if we're close to building something
+        # 6. TRADING: Propose trades if we need resources
         trade_action = self._choose_trade_action(state, player, legal_actions_list)
         if trade_action:
             return trade_action
         
-        # 6. DEFAULT: End turn
+        # 7. DEFAULT: End turn
         end_turn_action = self._find_end_turn_action(legal_actions_list)
         if end_turn_action:
             return end_turn_action
@@ -164,6 +169,132 @@ class BehaviorTreeAgent(BaseAgent):
                     return (action, payload)
         
         return None
+    
+    def _handle_pending_trade(
+        self,
+        state: GameState,
+        player,
+        legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
+    ) -> Optional[Tuple[Action, Optional[ActionPayload]]]:
+        """Handle pending trade offers (accept/reject/select partner)."""
+        if state.pending_trade_offer is None:
+            return None
+        
+        offer = state.pending_trade_offer
+        current_player = state.players[state.current_player_index]
+        
+        # Check if we're a target of the trade
+        if current_player.id in offer['target_player_ids']:
+            # Check if we've already responded
+            if current_player.id in state.pending_trade_responses:
+                return None  # Already responded, wait for others
+            
+            # Evaluate if the trade is beneficial
+            should_accept = self._evaluate_trade_offer(state, player, offer)
+            
+            if should_accept:
+                accept_actions = [(a, p) for a, p in legal_actions_list if a == Action.ACCEPT_TRADE]
+                if accept_actions:
+                    return accept_actions[0]
+            else:
+                reject_actions = [(a, p) for a, p in legal_actions_list if a == Action.REJECT_TRADE]
+                if reject_actions:
+                    return reject_actions[0]
+        
+        # Check if we're the proposer and need to select a partner
+        elif current_player.id == offer['proposer_id']:
+            accepting_players = [pid for pid, accepted in state.pending_trade_responses.items() if accepted]
+            if len(accepting_players) > 1:
+                # Multiple accepted - choose the best partner
+                best_partner = self._choose_best_trade_partner(state, accepting_players)
+                if best_partner:
+                    # Find the select action for the best partner
+                    for action, payload in legal_actions_list:
+                        if action == Action.SELECT_TRADE_PARTNER:
+                            if payload and isinstance(payload, SelectTradePartnerPayload):
+                                if payload.selected_player_id == best_partner:
+                                    return (action, payload)
+                    # Fallback: create a new payload for the best partner
+                    return (Action.SELECT_TRADE_PARTNER, SelectTradePartnerPayload(selected_player_id=best_partner))
+        
+        return None
+    
+    def _evaluate_trade_offer(
+        self,
+        state: GameState,
+        player,
+        offer: Dict
+    ) -> bool:
+        """Evaluate if a trade offer is beneficial to accept."""
+        # We give receive_resources, we get give_resources
+        give_resources = offer['receive_resources']  # What we give
+        receive_resources = offer['give_resources']  # What we get
+        
+        # Check if we can afford it
+        for resource, amount in give_resources.items():
+            if player.resources.get(resource, 0) < amount:
+                return False  # Can't afford
+        
+        # Evaluate trade value
+        # Get our resource needs
+        needed = self._get_needed_resources(state, player)
+        
+        # Calculate value: resources we need vs resources we're giving
+        receive_value = 0
+        for resource, amount in receive_resources.items():
+            if resource in needed:
+                receive_value += amount * 2  # Double value for needed resources
+            else:
+                receive_value += amount
+        
+        give_value = 0
+        for resource, amount in give_resources.items():
+            if resource in needed:
+                give_value += amount * 2  # Higher cost if it's something we need
+            else:
+                give_value += amount
+        
+        # Accept if we're getting more value than we're giving
+        # Or if we're getting resources we need
+        if receive_value > give_value:
+            return True
+        
+        # Accept if we're getting resources we need, even at slight loss
+        receiving_needed = any(r in needed for r in receive_resources.keys())
+        giving_needed = any(r in needed for r in give_resources.keys())
+        
+        if receiving_needed and not giving_needed:
+            return True
+        
+        # Accept if the trade is roughly equal and helps us
+        if receive_value == give_value and receiving_needed:
+            return True
+        
+        return False
+    
+    def _choose_best_trade_partner(
+        self,
+        state: GameState,
+        accepting_players: List[str]
+    ) -> Optional[str]:
+        """Choose the best trade partner from multiple accepting players."""
+        if not accepting_players:
+            return None
+        
+        # For now, prefer players with more resources (more likely to have what we need later)
+        # In a more sophisticated version, we could consider board position, VP, etc.
+        best_player = None
+        max_resources = -1
+        
+        for player_id in accepting_players:
+            player = next((p for p in state.players if p.id == player_id), None)
+            if player:
+                total_resources = sum(player.resources.values())
+                if total_resources > max_resources:
+                    max_resources = total_resources
+                    best_player = player_id
+        
+        return best_player if best_player else accepting_players[0]
     
     def _find_vp_card_action(
         self,
@@ -301,21 +432,53 @@ class BehaviorTreeAgent(BaseAgent):
         legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
     ) -> Optional[Tuple[Action, Optional[ActionPayload]]]:
         """Choose a trade action if it helps us build something."""
-        # Only trade if we're close to building something important
+        # First, try bank trades (simpler, no negotiation)
         needed = self._get_needed_resources(state, player)
-        if not needed:
-            return None
+        if needed:
+            # Check if we have enough resources to trade (4:1)
+            total_resources = sum(player.resources.values())
+            if total_resources >= 4:
+                # Find a bank trade action
+                for action, payload in legal_actions_list:
+                    if action == Action.TRADE_BANK:
+                        # Trade for a resource we need
+                        return (action, payload)
         
-        # Check if we have enough resources to trade (4:1)
-        total_resources = sum(player.resources.values())
-        if total_resources < 4:
-            return None
-        
-        # Find a trade action
-        for action, payload in legal_actions_list:
-            if action == Action.TRADE_BANK:
-                # Trade for a resource we need
-                return (action, payload)
+        # Second, try proposing player trades if we have excess resources
+        # Only propose if we're close to building something important
+        if needed and len(needed) > 0:
+            # Find resources we have in excess (4+ of same type)
+            excess_resources = []
+            for resource_type in ResourceType:
+                amount = player.resources.get(resource_type, 0)
+                if amount >= 4:
+                    excess_resources.append((resource_type, amount))
+            
+            if excess_resources:
+                # Propose trade to all other players
+                other_players = [p.id for p in state.players if p.id != self.player_id]
+                if other_players:
+                    # Trade excess resources for needed resources
+                    # Give: 4 of excess resource, Receive: 1 of needed resource
+                    excess_resource = excess_resources[0][0]  # Use first excess resource
+                    needed_resource = needed[0]  # Use first needed resource
+                    
+                    # Check if we have enough to give
+                    if player.resources.get(excess_resource, 0) >= 4:
+                        propose_actions = [
+                            (a, p) for a, p in legal_actions_list 
+                            if a == Action.PROPOSE_TRADE
+                        ]
+                        if propose_actions:
+                            # Create a trade proposal
+                            # For now, propose to all other players
+                            # In a more sophisticated version, we could target specific players
+                            from engine import ProposeTradePayload
+                            return (Action.PROPOSE_TRADE, ProposeTradePayload(
+                                target_player_ids=other_players,
+                                give_resources={excess_resource: 4},
+                                receive_resources={needed_resource: 1}
+                            ))
         
         return None
     

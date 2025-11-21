@@ -30,16 +30,34 @@ class RandomAgent(BaseAgent):
             legal_actions_list: List of (Action, Optional[ActionPayload]) tuples
             
         Returns:
-            A randomly chosen action (never a trade)
+            A randomly chosen action (never proposes trades, but can accept/reject)
         """
         if not legal_actions_list:
             raise ValueError("No legal actions available")
         
-        # Filter out trade actions
+        # Handle pending trade responses (accept/reject)
+        accept_actions = [(a, p) for a, p in legal_actions_list if a == Action.ACCEPT_TRADE]
+        reject_actions = [(a, p) for a, p in legal_actions_list if a == Action.REJECT_TRADE]
+        if accept_actions or reject_actions:
+            # Randomly accept or reject
+            if accept_actions and random.random() < 0.5:
+                return accept_actions[0]
+            else:
+                return reject_actions[0] if reject_actions else accept_actions[0]
+        
+        # Handle selecting trade partner (if multiple players accepted)
+        select_partner_actions = [(a, p) for a, p in legal_actions_list if a == Action.SELECT_TRADE_PARTNER]
+        if select_partner_actions:
+            # Randomly choose one of the accepting players
+            return random.choice(select_partner_actions)
+        
+        # Filter out trade proposal actions (but allow accept/reject which are handled above)
         non_trade_actions = [
             (action, payload) 
             for action, payload in legal_actions_list
-            if action != Action.TRADE_BANK and action != Action.TRADE_PLAYER
+            if action != Action.TRADE_BANK 
+            and action != Action.TRADE_PLAYER 
+            and action != Action.PROPOSE_TRADE
         ]
         
         # If no non-trade actions available, fall back to all actions
