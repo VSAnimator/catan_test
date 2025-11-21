@@ -10,13 +10,16 @@ import {
   forkGame,
   runAgents,
   watchAgentsStep,
+  queryEvents,
   type GameState,
   type LegalAction,
   type Player,
-  type ReplayResponse
+  type ReplayResponse,
+  type GameEvent,
+  type QueryEventsResponse
 } from './api'
 
-type View = 'main' | 'game' | 'replay' | 'agent-watch'
+type View = 'main' | 'game' | 'replay' | 'agent-watch' | 'event-query'
 
 function App() {
   const [view, setView] = useState<View>('main')
@@ -1048,8 +1051,330 @@ function App() {
                 </div>
               </div>
             </div>
+
+            <div className="menu-section">
+              <h2>🔍 Event Query & Analysis</h2>
+              <div className="form-group">
+                <button 
+                  onClick={() => setView('event-query')}
+                  className="action-button"
+                  style={{ width: '100%' }}
+                >
+                  🔍 Query Game Events
+                </button>
+                <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
+                  Search and analyze specific events across multiple games (e.g., monopoly cards, 7-rolls).
+                </div>
+              </div>
+            </div>
           </div>
           {error && <div className="error">Error: {error}</div>}
+        </main>
+      </div>
+    )
+  }
+
+  // Event Query View
+  const [queryResults, setQueryResults] = useState<QueryEventsResponse | null>(null)
+  const [queryLoading, setQueryLoading] = useState(false)
+  const [queryParams, setQueryParams] = useState({
+    num_games: 100,
+    action_type: '',
+    card_type: '',
+    dice_roll: '',
+    player_id: '',
+    min_turn: '',
+    max_turn: '',
+    analyze: '',
+    limit: ''
+  })
+
+  if (view === 'event-query') {
+    const handleQuery = async () => {
+      setQueryLoading(true)
+      setError(null)
+      try {
+        const params: any = {
+          num_games: queryParams.num_games
+        }
+        if (queryParams.action_type) params.action_type = queryParams.action_type
+        if (queryParams.card_type) params.card_type = queryParams.card_type
+        if (queryParams.dice_roll) params.dice_roll = parseInt(queryParams.dice_roll)
+        if (queryParams.player_id) params.player_id = queryParams.player_id
+        if (queryParams.min_turn) params.min_turn = parseInt(queryParams.min_turn)
+        if (queryParams.max_turn) params.max_turn = parseInt(queryParams.max_turn)
+        if (queryParams.analyze) params.analyze = queryParams.analyze
+        if (queryParams.limit) params.limit = parseInt(queryParams.limit)
+
+        const results = await queryEvents(params)
+        setQueryResults(results)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to query events')
+      } finally {
+        setQueryLoading(false)
+      }
+    }
+
+    return (
+      <div className="app">
+        <header>
+          <h1>🔍 Event Query & Analysis</h1>
+          <button onClick={() => setView('main')} className="back-button">
+            Back to Menu
+          </button>
+        </header>
+        <main>
+          <div className="event-query-container" style={{ maxWidth: '1200px', margin: '0 auto', padding: '2rem' }}>
+            <div className="query-form" style={{ 
+              backgroundColor: '#f5f5f5', 
+              padding: '1.5rem', 
+              borderRadius: '8px',
+              marginBottom: '2rem'
+            }}>
+              <h2>Query Parameters</h2>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
+                <div className="form-group">
+                  <label>
+                    Number of Games:
+                    <input
+                      type="number"
+                      min="1"
+                      value={queryParams.num_games}
+                      onChange={(e) => setQueryParams({ ...queryParams, num_games: parseInt(e.target.value) || 100 })}
+                    />
+                  </label>
+                </div>
+                <div className="form-group">
+                  <label>
+                    Action Type (e.g., PLAY_DEV_CARD, BUILD_CITY):
+                    <input
+                      type="text"
+                      value={queryParams.action_type}
+                      onChange={(e) => setQueryParams({ ...queryParams, action_type: e.target.value })}
+                      placeholder="Optional"
+                    />
+                  </label>
+                </div>
+                <div className="form-group">
+                  <label>
+                    Card Type (for PLAY_DEV_CARD, e.g., monopoly, knight):
+                    <input
+                      type="text"
+                      value={queryParams.card_type}
+                      onChange={(e) => setQueryParams({ ...queryParams, card_type: e.target.value })}
+                      placeholder="Optional"
+                    />
+                  </label>
+                </div>
+                <div className="form-group">
+                  <label>
+                    Dice Roll (e.g., 7):
+                    <input
+                      type="number"
+                      min="2"
+                      max="12"
+                      value={queryParams.dice_roll}
+                      onChange={(e) => setQueryParams({ ...queryParams, dice_roll: e.target.value })}
+                      placeholder="Optional"
+                    />
+                  </label>
+                </div>
+                <div className="form-group">
+                  <label>
+                    Player ID:
+                    <input
+                      type="text"
+                      value={queryParams.player_id}
+                      onChange={(e) => setQueryParams({ ...queryParams, player_id: e.target.value })}
+                      placeholder="Optional"
+                    />
+                  </label>
+                </div>
+                <div className="form-group">
+                  <label>
+                    Min Turn:
+                    <input
+                      type="number"
+                      min="0"
+                      value={queryParams.min_turn}
+                      onChange={(e) => setQueryParams({ ...queryParams, min_turn: e.target.value })}
+                      placeholder="Optional"
+                    />
+                  </label>
+                </div>
+                <div className="form-group">
+                  <label>
+                    Max Turn:
+                    <input
+                      type="number"
+                      min="0"
+                      value={queryParams.max_turn}
+                      onChange={(e) => setQueryParams({ ...queryParams, max_turn: e.target.value })}
+                      placeholder="Optional"
+                    />
+                  </label>
+                </div>
+                <div className="form-group">
+                  <label>
+                    Analysis Type:
+                    <select
+                      value={queryParams.analyze}
+                      onChange={(e) => setQueryParams({ ...queryParams, analyze: e.target.value })}
+                    >
+                      <option value="">None</option>
+                      <option value="monopoly">Monopoly Card</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="form-group">
+                  <label>
+                    Limit Results:
+                    <input
+                      type="number"
+                      min="1"
+                      value={queryParams.limit}
+                      onChange={(e) => setQueryParams({ ...queryParams, limit: e.target.value })}
+                      placeholder="Optional"
+                    />
+                  </label>
+                </div>
+              </div>
+              <button
+                onClick={handleQuery}
+                disabled={queryLoading}
+                className="action-button"
+                style={{
+                  marginTop: '1rem',
+                  width: '100%',
+                  padding: '0.75rem',
+                  fontSize: '1rem',
+                  fontWeight: 'bold'
+                }}
+              >
+                {queryLoading ? 'Querying...' : '🔍 Run Query'}
+              </button>
+            </div>
+
+            {error && <div className="error">Error: {error}</div>}
+
+            {queryResults && (
+              <div className="query-results">
+                <h2>Results</h2>
+                
+                {/* Summary */}
+                {queryResults.summary && (
+                  <div style={{ 
+                    backgroundColor: '#e3f2fd', 
+                    padding: '1rem', 
+                    borderRadius: '8px',
+                    marginBottom: '1rem'
+                  }}>
+                    <h3>Summary</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem' }}>
+                      <div><strong>Total Events:</strong> {queryResults.summary.total_events}</div>
+                      <div><strong>Unique Games:</strong> {queryResults.summary.unique_games}</div>
+                    </div>
+                    {Object.keys(queryResults.summary.action_types).length > 0 && (
+                      <div style={{ marginTop: '1rem' }}>
+                        <strong>Action Types:</strong>
+                        <ul>
+                          {Object.entries(queryResults.summary.action_types).map(([action, count]) => (
+                            <li key={action}>{action}: {count}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Analysis */}
+                {queryResults.analysis && (
+                  <div style={{ 
+                    backgroundColor: '#fff3cd', 
+                    padding: '1rem', 
+                    borderRadius: '8px',
+                    marginBottom: '1rem'
+                  }}>
+                    <h3>Analysis</h3>
+                    {queryResults.analysis.error ? (
+                      <div style={{ color: '#d32f2f' }}>{queryResults.analysis.error}</div>
+                    ) : (
+                      <div>
+                        <div><strong>Total Plays:</strong> {queryResults.analysis.total_plays || 0}</div>
+                        <div><strong>Correct:</strong> {queryResults.analysis.correct || 0}</div>
+                        <div><strong>Incorrect:</strong> {queryResults.analysis.incorrect || 0}</div>
+                        {queryResults.analysis.issues && queryResults.analysis.issues.length > 0 && (
+                          <div style={{ marginTop: '1rem' }}>
+                            <strong>Issues ({queryResults.analysis.issues.length}):</strong>
+                            <ul>
+                              {queryResults.analysis.issues.slice(0, 10).map((issue: any, idx: number) => (
+                                <li key={idx}>
+                                  Game {issue.game_id?.substring(0, 8)}... Step {issue.step_idx}: {issue.issue}
+                                </li>
+                              ))}
+                              {queryResults.analysis.issues.length > 10 && (
+                                <li>... and {queryResults.analysis.issues.length - 10} more issues</li>
+                              )}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Events List */}
+                {queryResults.events && queryResults.events.length > 0 && (
+                  <div>
+                    <h3>Events ({queryResults.events.length})</h3>
+                    <div style={{ maxHeight: '600px', overflowY: 'auto', border: '1px solid #ccc', borderRadius: '4px', padding: '1rem' }}>
+                      {queryResults.events.map((event, idx) => (
+                        <div 
+                          key={idx} 
+                          style={{ 
+                            padding: '0.75rem', 
+                            marginBottom: '0.5rem', 
+                            backgroundColor: '#fff',
+                            border: '1px solid #ddd',
+                            borderRadius: '4px',
+                            cursor: 'pointer'
+                          }}
+                          onClick={async () => {
+                            setLoading(true)
+                            setError(null)
+                            try {
+                              const replayData = await getReplay(event.game_id)
+                              setReplayData(replayData)
+                              setReplayStepIndex(event.step_idx)
+                              setView('replay')
+                            } catch (err) {
+                              setError(err instanceof Error ? err.message : 'Failed to load replay')
+                            } finally {
+                              setLoading(false)
+                            }
+                          }}
+                        >
+                          <div><strong>Game:</strong> {event.game_id.substring(0, 12)}... | <strong>Step:</strong> {event.step_idx}</div>
+                          <div><strong>Player:</strong> {event.player_id} | <strong>Action:</strong> {event.action_type}</div>
+                          {event.action_payload && (
+                            <div style={{ fontSize: '0.9rem', color: '#666' }}>
+                              Payload: {JSON.stringify(event.action_payload)}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {queryResults.events && queryResults.events.length === 0 && (
+                  <div style={{ padding: '2rem', textAlign: 'center', color: '#666' }}>
+                    No events found matching the query criteria.
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </main>
       </div>
     )

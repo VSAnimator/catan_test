@@ -217,3 +217,47 @@ export async function watchAgentsStep(gameId: string): Promise<WatchAgentsRespon
   return handleResponse<WatchAgentsResponse>(response)
 }
 
+export interface QueryEventsRequest {
+  num_games?: number
+  action_type?: string
+  card_type?: string
+  dice_roll?: number
+  player_id?: string
+  min_turn?: number
+  max_turn?: number
+  analyze?: string
+  limit?: number
+}
+
+export interface GameEvent {
+  game_id: string
+  step_idx: number
+  player_id: string
+  action_type: string
+  action_payload: any
+  state_before: any
+  state_after: any
+  timestamp?: string
+}
+
+export interface QueryEventsResponse {
+  events: GameEvent[]
+  summary: {
+    total_events: number
+    unique_games: number
+    action_types: Record<string, number>
+    players: Record<string, number>
+    turn_distribution: Record<number, number>
+  }
+  analysis?: any
+}
+
+export async function queryEvents(request: QueryEventsRequest): Promise<QueryEventsResponse> {
+  const response = await fetch(`${API_BASE}/games/query_events`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  })
+  return handleResponse<QueryEventsResponse>(response)
+}
+

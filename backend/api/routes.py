@@ -715,3 +715,54 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
         new_state=new_state_json,
         player_id=player_id
     )
+
+
+class QueryEventsRequest(BaseModel):
+    """Request model for querying game events."""
+    num_games: int = 100
+    action_type: Optional[str] = None
+    card_type: Optional[str] = None
+    dice_roll: Optional[int] = None
+    player_id: Optional[str] = None
+    min_turn: Optional[int] = None
+    max_turn: Optional[int] = None
+    analyze: Optional[str] = None
+    limit: Optional[int] = None
+
+
+@router.post("/games/query_events")
+async def query_events(request: QueryEventsRequest):
+    """Query game events across multiple games.
+    
+    Allows searching for specific events (e.g., monopoly card plays, 7-rolls)
+    across multiple games and analyzing their correctness.
+    """
+    from scripts.query_game_events import GameEventQuery
+    
+    query = GameEventQuery()
+    events = query.query_games(
+        num_games=request.num_games,
+        action_type=request.action_type,
+        card_type=request.card_type,
+        dice_roll=request.dice_roll,
+        player_id=request.player_id,
+        min_turn=request.min_turn,
+        max_turn=request.max_turn,
+    )
+    
+    if request.limit:
+        events = events[:request.limit]
+    
+    # Get summary
+    summary = query.get_event_summary()
+    
+    # Run analysis if requested
+    analysis = None
+    if request.analyze == "monopoly":
+        analysis = query.analyze_monopoly_card()
+    
+    return {
+        "events": [e.to_dict() for e in events],
+        "summary": summary,
+        "analysis": analysis,
+    }
