@@ -116,37 +116,47 @@ class GameState:
         new_state = copy.deepcopy(self)
         
         if action == Action.ROLL_DICE:
-            return self._handle_roll_dice(new_state)
+            result = self._handle_roll_dice(new_state)
         elif action == Action.BUILD_ROAD:
-            return self._handle_build_road(new_state, payload)
+            result = self._handle_build_road(new_state, payload)
         elif action == Action.BUILD_SETTLEMENT:
-            return self._handle_build_settlement(new_state, payload)
+            result = self._handle_build_settlement(new_state, payload)
         elif action == Action.BUILD_CITY:
-            return self._handle_build_city(new_state, payload)
+            result = self._handle_build_city(new_state, payload)
         elif action == Action.BUY_DEV_CARD:
-            return self._handle_buy_dev_card(new_state)
+            result = self._handle_buy_dev_card(new_state)
         elif action == Action.PLAY_DEV_CARD:
-            return self._handle_play_dev_card(new_state, payload)
+            result = self._handle_play_dev_card(new_state, payload)
         elif action == Action.TRADE_BANK:
-            return self._handle_trade_bank(new_state, payload)
+            result = self._handle_trade_bank(new_state, payload)
         elif action == Action.TRADE_PLAYER:
-            return self._handle_trade_player(new_state, payload)
+            result = self._handle_trade_player(new_state, payload)
         elif action == Action.END_TURN:
-            return self._handle_end_turn(new_state)
+            result = self._handle_end_turn(new_state)
         elif action == Action.START_GAME:
-            return self._handle_start_game(new_state)
+            result = self._handle_start_game(new_state)
         elif action == Action.SETUP_PLACE_SETTLEMENT:
-            return self._handle_setup_place_settlement(new_state, payload)
+            result = self._handle_setup_place_settlement(new_state, payload)
         elif action == Action.SETUP_PLACE_ROAD:
-            return self._handle_setup_place_road(new_state, payload)
+            result = self._handle_setup_place_road(new_state, payload)
         elif action == Action.MOVE_ROBBER:
-            return self._handle_move_robber(new_state, payload)
+            result = self._handle_move_robber(new_state, payload)
         elif action == Action.STEAL_RESOURCE:
-            return self._handle_steal_resource(new_state, payload)
+            result = self._handle_steal_resource(new_state, payload)
         elif action == Action.DISCARD_RESOURCES:
-            return self._handle_discard_resources(new_state, payload, player_id)
+            result = self._handle_discard_resources(new_state, payload, player_id)
         else:
             raise ValueError(f"Unknown action: {action}")
+        
+        # Check for victory condition after any action (first player to reach 10 VPs wins)
+        # Only check during playing phase (can't reach 10 VPs during setup - max is 2 from 2 settlements)
+        if result.phase == "playing":
+            for player in result.players:
+                if player.victory_points >= 10:
+                    result.phase = "finished"
+                    break
+        
+        return result
     
     def _handle_roll_dice(self, new_state: 'GameState') -> 'GameState':
         """Handle dice roll - distribute resources based on number, or handle 7."""

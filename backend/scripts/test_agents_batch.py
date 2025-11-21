@@ -47,7 +47,23 @@ def run_single_game(args):
         agent_start = time.time()
         exit_code = run_agents_script(game_id, max_turns=max_turns, fast_mode=fast_mode)
         agent_time = time.time() - agent_start
-        print(f"[Game {game_num}] Agents finished (exit_code={exit_code}, took {agent_time:.2f}s)", flush=True)
+        
+        # Check the actual completion status by reading the final state
+        from api.database import get_latest_state
+        from engine import deserialize_game_state
+        final_state_json = get_latest_state(game_id)
+        if final_state_json:
+            final_state = deserialize_game_state(final_state_json)
+            # Check if game completed normally (phase == "finished" or someone has 10+ VPs)
+            game_completed = (final_state.phase == "finished" or 
+                            any(p.victory_points >= 10 for p in final_state.players))
+            # Check if we hit max turns (turn_count reached max_turns)
+            hit_max_turns = (final_state.turn_number >= max_turns and not game_completed)
+        else:
+            game_completed = False
+            hit_max_turns = False
+        
+        print(f"[Game {game_num}] Agents finished (exit_code={exit_code}, completed={game_completed}, max_turns={hit_max_turns}, took {agent_time:.2f}s)", flush=True)
         
         # Clean up database connection
         print(f"[Game {game_num}] Cleaning up...", flush=True)
@@ -56,12 +72,17 @@ def run_single_game(args):
         print(f"[Game {game_num}] Cleanup done", flush=True)
         
         total_time = time.time() - start_time
-        if exit_code == 0:
-            print(f"[Game {game_num}] ✓ PASSED (total: {total_time:.2f}s)", flush=True)
+        
+        # Determine result based on completion status
+        if game_completed:
+            print(f"[Game {game_num}] ✓ PASSED - Game completed normally (total: {total_time:.2f}s)", flush=True)
             return ("PASSED", game_id, None, game_num)
+        elif hit_max_turns:
+            print(f"[Game {game_num}] ⚠ MAX_TURNS - Reached {max_turns} turn limit (total: {total_time:.2f}s)", flush=True)
+            return ("MAX_TURNS", game_id, f"Reached maximum turn limit ({max_turns})", game_num)
         else:
-            print(f"[Game {game_num}] ✗ FAILED (total: {total_time:.2f}s)", flush=True)
-            return ("FAILED", game_id, "Non-zero exit code", game_num)
+            print(f"[Game {game_num}] ✗ FAILED - Non-zero exit code (total: {total_time:.2f}s)", flush=True)
+            return ("FAILED", game_id, f"Non-zero exit code: {exit_code}", game_num)
             
     except Exception as e:
         total_time = time.time() - start_time
@@ -77,6 +98,8 @@ def run_single_game(args):
 
 
 def test_agents_batch(num_games: int = 10, max_turns: int = 1000, fast_mode: bool = True, workers: int = None):
+    # Store max_turns for use in summary message
+    max_turns_arg = max_turns
     """Run multiple agent games and report results.
     
     Args:
@@ -149,6 +172,8 @@ def test_agents_batch(num_games: int = 10, max_turns: int = 1000, fast_mode: boo
                 
                 if status == "PASSED":
                     print(f"✓ Game {game_num}/{num_games} PASSED (completed: {completed}/{num_games}, rate: {rate:.2f} games/sec)", flush=True)
+                elif status == "MAX_TURNS":
+                    print(f"⚠ Game {game_num}/{num_games} MAX_TURNS (completed: {completed}/{num_games}, rate: {rate:.2f} games/sec)", flush=True)
                 else:
                     print(f"✗ Game {game_num}/{num_games} {status} (completed: {completed}/{num_games}, rate: {rate:.2f} games/sec)", flush=True)
                 
@@ -185,17 +210,22 @@ def test_agents_batch(num_games: int = 10, max_turns: int = 1000, fast_mode: boo
     print(f"Total games: {num_games}")
     
     passed = [r for r in results if r[0] == "PASSED"]
+    max_turns = [r for r in results if r[0] == "MAX_TURNS"]
     failed = [r for r in results if r[0] == "FAILED"]
     errors = [r for r in results if r[0] == "ERROR"]
     
     print(f"Passed: {len(passed)}")
+    print(f"Max Turns: {len(max_turns)}")
     print(f"Failed: {len(failed)}")
     print(f"Errors: {len(errors)}")
+    
+    if max_turns:
+        print(f"\n⚠ Note: {len(max_turns)} games hit the {max_turns_arg} turn limit (expected for random agents)")
     
     if failed or errors:
         print("\n=== Failed/Error Details ===")
         for status, game_id, error in results:
-            if status != "PASSED":
+            if status in ["FAILED", "ERROR"]:
                 print(f"\n{status}:")
                 if game_id:
                     print(f"  Game ID: {game_id}")
@@ -203,8 +233,8 @@ def test_agents_batch(num_games: int = 10, max_turns: int = 1000, fast_mode: boo
                 if error:
                     print(f"  Error: {error}")
     
-    # Return exit code based on results
-    return 0 if len(passed) == num_games else 1
+    # Return exit code based on results (only fail if there are actual failures, not max turns)
+    return 0 if len(failed) == 0 and len(errors) == 0 else 1
 
 
 if __name__ == "__main__":

@@ -364,28 +364,46 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
     
     if state.phase == "setup":
         # Setup phase actions
-        # Can place settlement if not placed yet in this round
-        for intersection in state.intersections:
-            if not intersection.owner:
-                # Check distance rule
-                can_build = True
-                for adj_id in intersection.adjacent_intersections:
-                    adj_inter = next((i for i in state.intersections if i.id == adj_id), None)
-                    if adj_inter and adj_inter.owner:
-                        can_build = False
-                        break
-                if can_build:
-                    legal.append((Action.SETUP_PLACE_SETTLEMENT, BuildSettlementPayload(intersection.id)))
+        # Only the current setup player can act
+        current_setup_player = state.players[state.setup_phase_player_index]
+        if player_id != current_setup_player.id:
+            return legal  # Not this player's turn in setup
         
-        # Can place road adjacent to settlement
-        player_settlements = [i for i in state.intersections if i.owner == player_id]
-        for settlement in player_settlements:
-            for road_edge in state.road_edges:
-                if not road_edge.owner:
-                    # Check if road is adjacent to settlement
-                    if (road_edge.intersection1_id == settlement.id or 
-                        road_edge.intersection2_id == settlement.id):
-                        legal.append((Action.SETUP_PLACE_ROAD, BuildRoadPayload(road_edge.id)))
+        # Count how many settlements and roads this player has placed
+        player_settlements = sum(1 for i in state.intersections if i.owner == player_id and i.building_type == "settlement")
+        player_roads = sum(1 for r in state.road_edges if r.owner == player_id)
+        
+        # In setup, each player places exactly 2 settlements (one per round)
+        # Round 0: players should have 0 settlements, 0 roads
+        # Round 1: players should have 1 settlement, 1 road
+        expected_settlements = state.setup_round
+        expected_roads = state.setup_round
+        
+        # Can place settlement if not placed yet in this round
+        if player_settlements == expected_settlements:
+            for intersection in state.intersections:
+                if not intersection.owner:
+                    # Check distance rule
+                    can_build = True
+                    for adj_id in intersection.adjacent_intersections:
+                        adj_inter = next((i for i in state.intersections if i.id == adj_id), None)
+                        if adj_inter and adj_inter.owner:
+                            can_build = False
+                            break
+                    if can_build:
+                        legal.append((Action.SETUP_PLACE_SETTLEMENT, BuildSettlementPayload(intersection.id)))
+        
+        # Can place road adjacent to settlement (only after placing settlement this round, and not yet placed road)
+        if player_settlements == expected_settlements + 1 and player_roads == expected_roads:
+            # Player has placed settlement for this round, can now place road
+            player_settlements_list = [i for i in state.intersections if i.owner == player_id]
+            for settlement in player_settlements_list:
+                for road_edge in state.road_edges:
+                    if not road_edge.owner:
+                        # Check if road is adjacent to settlement
+                        if (road_edge.intersection1_id == settlement.id or 
+                            road_edge.intersection2_id == settlement.id):
+                            legal.append((Action.SETUP_PLACE_ROAD, BuildRoadPayload(road_edge.id)))
         
         # Can start game if setup is complete (simplified - in real game, this is automatic)
         if state.setup_round == 1 and state.setup_phase_player_index == len(state.players) - 1:
