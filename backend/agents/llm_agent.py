@@ -33,7 +33,7 @@ class LLMAgent(BaseAgent):
         self,
         player_id: str,
         api_key: Optional[str] = None,
-        model: str = "gpt-4o-mini",
+        model: str = "gpt-5.1",
         temperature: float = 0.7,
         max_examples: int = 5,
         enable_retrieval: bool = True
@@ -62,6 +62,7 @@ class LLMAgent(BaseAgent):
         self.model = model
         self.temperature = temperature
         self.enable_retrieval = enable_retrieval
+        # Only create retriever if retrieval is enabled (for zero-shot, skip this)
         self.retriever = StateRetriever(max_examples=max_examples) if enable_retrieval else None
         
         # Set API key if provided, otherwise LiteLLM will use env vars
@@ -90,10 +91,19 @@ class LLMAgent(BaseAgent):
         try:
             import litellm
             
+            # GPT-5 models only support temperature=1
+            # Set drop_params to handle unsupported parameters gracefully
+            litellm.drop_params = True
+            
+            # Adjust temperature for GPT-5 models
+            temperature = self.temperature
+            if self.model.startswith("gpt-5"):
+                temperature = 1.0
+            
             response = litellm.completion(
                 model=self.model,
                 messages=messages,
-                temperature=self.temperature,
+                temperature=temperature,
                 max_tokens=2000
             )
             
@@ -120,7 +130,7 @@ class LLMAgent(BaseAgent):
         """
         context_parts = []
         
-        # Retrieve similar examples
+        # Retrieve similar examples (only if retrieval is enabled)
         if self.enable_retrieval and self.retriever:
             examples = self.retriever.retrieve_similar_states(state, self.player_id)
             
@@ -135,22 +145,23 @@ class LLMAgent(BaseAgent):
                     if example.action.get('payload'):
                         context_parts.append(f"Payload: {json.dumps(example.action['payload'], indent=2)}")
         
-        # Retrieve guidelines
-        guidelines = get_guidelines(player_id=self.player_id, active_only=True)
-        if guidelines:
-            context_parts.append("\n## Guidelines:")
-            for guideline in guidelines:
-                priority_str = " (HIGH PRIORITY)" if guideline['priority'] > 5 else ""
-                context_parts.append(f"- {guideline['guideline_text']}{priority_str}")
-                if guideline['context']:
-                    context_parts.append(f"  (Context: {guideline['context']})")
-        
-        # Retrieve recent feedback
-        feedback = get_feedback(player_id=self.player_id, limit=5)
-        if feedback:
-            context_parts.append("\n## Recent Feedback:")
-            for fb in feedback:
-                context_parts.append(f"- [{fb['feedback_type']}] {fb['feedback_text']}")
+        # Retrieve guidelines (only if retrieval is enabled)
+        if self.enable_retrieval:
+            guidelines = get_guidelines(player_id=self.player_id, active_only=True)
+            if guidelines:
+                context_parts.append("\n## Guidelines:")
+                for guideline in guidelines:
+                    priority_str = " (HIGH PRIORITY)" if guideline['priority'] > 5 else ""
+                    context_parts.append(f"- {guideline['guideline_text']}{priority_str}")
+                    if guideline['context']:
+                        context_parts.append(f"  (Context: {guideline['context']})")
+            
+            # Retrieve recent feedback
+            feedback = get_feedback(player_id=self.player_id, limit=5)
+            if feedback:
+                context_parts.append("\n## Recent Feedback:")
+                for fb in feedback:
+                    context_parts.append(f"- [{fb['feedback_type']}] {fb['feedback_text']}")
         
         return "\n".join(context_parts) if context_parts else "No additional context available."
     

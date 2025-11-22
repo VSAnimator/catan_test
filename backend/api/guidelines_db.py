@@ -5,54 +5,66 @@ import json
 import sqlite3
 from typing import List, Dict, Any, Optional
 from datetime import datetime
-from api.database import get_db_connection, init_db
+from api.database import get_db_connection
+# Note: Don't import init_db here to avoid circular import
 
+
+_guidelines_db_initialized = False
+_guidelines_db_lock = __import__('threading').Lock()
 
 def init_guidelines_db():
     """Initialize the guidelines database tables."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    global _guidelines_db_initialized
     
-    # Create guidelines table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS guidelines (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            player_id TEXT,
-            guideline_text TEXT NOT NULL,
-            context TEXT,
-            priority INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            active BOOLEAN DEFAULT 1
-        )
-    """)
-    
-    # Create feedback table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS feedback (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            game_id TEXT NOT NULL,
-            step_idx INTEGER,
-            player_id TEXT,
-            action_taken TEXT,
-            feedback_text TEXT NOT NULL,
-            feedback_type TEXT DEFAULT 'general',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # Create index for faster queries
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_guidelines_player_active 
-        ON guidelines(player_id, active)
-    """)
-    
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_feedback_game_step 
-        ON feedback(game_id, step_idx)
-    """)
-    
-    conn.commit()
+    # Use a lock to ensure thread-safe initialization
+    with _guidelines_db_lock:
+        if _guidelines_db_initialized:
+            return
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Create guidelines table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS guidelines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                player_id TEXT,
+                guideline_text TEXT NOT NULL,
+                context TEXT,
+                priority INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                active BOOLEAN DEFAULT 1
+            )
+        """)
+        
+        # Create feedback table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id TEXT NOT NULL,
+                step_idx INTEGER,
+                player_id TEXT,
+                action_taken TEXT,
+                feedback_text TEXT NOT NULL,
+                feedback_type TEXT DEFAULT 'general',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Create index for faster queries
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_guidelines_player_active 
+            ON guidelines(player_id, active)
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_feedback_game_step 
+            ON feedback(game_id, step_idx)
+        """)
+        
+        conn.commit()
+        _guidelines_db_initialized = True
 
 
 def add_guideline(
@@ -73,6 +85,7 @@ def add_guideline(
     Returns:
         ID of the created guideline
     """
+    init_guidelines_db()  # Ensure tables exist
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -101,6 +114,7 @@ def get_guidelines(
     Returns:
         List of guideline dictionaries
     """
+    init_guidelines_db()  # Ensure tables exist
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -149,6 +163,7 @@ def update_guideline(guideline_id: int, **kwargs) -> bool:
     Returns:
         True if updated, False if not found
     """
+    init_guidelines_db()  # Ensure tables exist
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -211,6 +226,7 @@ def add_feedback(
     Returns:
         ID of the created feedback
     """
+    init_guidelines_db()  # Ensure tables exist
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -239,6 +255,7 @@ def get_feedback(
     Returns:
         List of feedback dictionaries
     """
+    init_guidelines_db()  # Ensure tables exist
     conn = get_db_connection()
     cursor = conn.cursor()
     

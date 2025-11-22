@@ -976,6 +976,7 @@ function App() {
                         style={{ flex: 1, padding: '0.25rem' }}
                       >
                         <option value="">Human Player</option>
+                        <option value="llm">LLM Agent (GPT-5.1)</option>
                         <option value="behavior_tree">Behavior Tree Agent</option>
                         <option value="balanced">Balanced Agent</option>
                         <option value="aggressive_builder">Aggressive Builder</option>

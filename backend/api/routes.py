@@ -660,6 +660,7 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
     # Import agent classes
     from agents import RandomAgent, BehaviorTreeAgent
     try:
+        from agents.llm_agent import LLMAgent
         from agents.variants import (
             BalancedAgent,
             AggressiveBuilderAgent,
@@ -677,18 +678,44 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
             "expansion": ExpansionAgent,
             "defensive": DefensiveAgent,
             "state_conditioned": StateConditionedAgent,
+            "llm": LLMAgent,
         }
     except ImportError:
         AGENT_CLASSES = {
             "random": RandomAgent,
             "behavior_tree": BehaviorTreeAgent,
         }
+        try:
+            from agents.llm_agent import LLMAgent
+            AGENT_CLASSES["llm"] = LLMAgent
+        except ImportError:
+            pass
     
     for player in current_state.players:
         if player.id in agent_mapping:
             agent_type = agent_mapping[player.id]
             agent_class = AGENT_CLASSES.get(agent_type, RandomAgent)
-            agents[player.id] = agent_class(player.id)
+            
+            # Special handling for LLM agent
+            if agent_type == "llm":
+                import os
+                # Get API key and model from env vars
+                api_key = (
+                    os.getenv("OPENAI_API_KEY") or
+                    os.getenv("ANTHROPIC_API_KEY") or
+                    os.getenv("GEMINI_API_KEY") or
+                    os.getenv("LLM_API_KEY")
+                )
+                model = os.getenv("LLM_MODEL", "gpt-5.1")  # Default to gpt-5.1 (latest model)
+                # Zero-shot mode: disable retrieval
+                agents[player.id] = agent_class(
+                    player.id,
+                    api_key=api_key,
+                    model=model,
+                    enable_retrieval=False  # Zero-shot mode
+                )
+            else:
+                agents[player.id] = agent_class(player.id)
     
     # Create agent runner
     runner = AgentRunner(current_state, agents, max_turns=1000)
