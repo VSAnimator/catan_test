@@ -272,3 +272,92 @@ export async function queryEvents(request: QueryEventsRequest): Promise<QueryEve
   return handleResponse<QueryEventsResponse>(response)
 }
 
+// Guidelines and Feedback API
+
+export interface Guideline {
+  id: number
+  player_id: string | null
+  guideline_text: string
+  context: string | null
+  priority: number
+  created_at: string
+  updated_at: string
+  active: boolean
+}
+
+export interface AddGuidelineRequest {
+  guideline_text: string
+  player_id?: string | null
+  context?: string | null
+  priority?: number
+}
+
+export interface Feedback {
+  id: number
+  game_id: string
+  step_idx: number | null
+  player_id: string | null
+  action_taken: string | null
+  feedback_text: string
+  feedback_type: string
+  created_at: string
+}
+
+export interface AddFeedbackRequest {
+  feedback_text: string
+  step_idx?: number | null
+  player_id?: string | null
+  action_taken?: string | null
+  feedback_type?: string
+}
+
+export async function addGuideline(request: AddGuidelineRequest): Promise<{ guideline_id: number; message: string }> {
+  const response = await fetch(`${API_BASE}/guidelines`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  })
+  return handleResponse<{ guideline_id: number; message: string }>(response)
+}
+
+export async function getGuidelines(playerId?: string | null, context?: string | null): Promise<{ guidelines: Guideline[] }> {
+  const params = new URLSearchParams()
+  if (playerId) params.append('player_id', playerId)
+  if (context) params.append('context', context)
+  const response = await fetch(`${API_BASE}/guidelines?${params.toString()}`)
+  return handleResponse<{ guidelines: Guideline[] }>(response)
+}
+
+export async function updateGuideline(guidelineId: number, request: Partial<AddGuidelineRequest & { active?: boolean }>): Promise<{ message: string }> {
+  const response = await fetch(`${API_BASE}/guidelines/${guidelineId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  })
+  return handleResponse<{ message: string }>(response)
+}
+
+export async function deleteGuideline(guidelineId: number): Promise<{ message: string }> {
+  const response = await fetch(`${API_BASE}/guidelines/${guidelineId}`, {
+    method: 'DELETE'
+  })
+  return handleResponse<{ message: string }>(response)
+}
+
+export async function addFeedback(gameId: string, request: AddFeedbackRequest): Promise<{ feedback_id: number; message: string }> {
+  const response = await fetch(`${API_BASE}/games/${gameId}/feedback`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  })
+  return handleResponse<{ feedback_id: number; message: string }>(response)
+}
+
+export async function getFeedback(gameId?: string, playerId?: string): Promise<{ feedback: Feedback[] }> {
+  const params = new URLSearchParams()
+  if (gameId) params.append('game_id', gameId)
+  if (playerId) params.append('player_id', playerId)
+  const response = await fetch(`${API_BASE}/feedback?${params.toString()}`)
+  return handleResponse<{ feedback: Feedback[] }>(response)
+}
+

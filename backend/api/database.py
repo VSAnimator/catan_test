@@ -117,6 +117,14 @@ def init_db():
     cursor.execute("PRAGMA journal_mode=WAL")
     
     conn.commit()
+    
+    # Initialize guidelines database (separate call to avoid circular import)
+    try:
+        from api.guidelines_db import init_guidelines_db
+        init_guidelines_db()
+    except ImportError:
+        pass  # Guidelines DB will be initialized when first used
+    
     # Don't close - keep connection for thread
 
 

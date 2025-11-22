@@ -24,7 +24,7 @@ from engine.serialization import (
     serialize_action,
     serialize_action_payload,
 )
-from agents import RandomAgent, BehaviorTreeAgent
+from agents import RandomAgent, BehaviorTreeAgent, LLMAgent
 from agents.agent_runner import AgentRunner
 
 # Import agent variants for tournament support
@@ -111,14 +111,33 @@ def run_agents_script(game_id: str, max_turns: int = 1000, fast_mode: bool = Fal
         if player_agent_type in AGENT_VARIANT_REGISTRY:
             agent_class = AGENT_VARIANT_REGISTRY[player_agent_type]
             agent_name = player_agent_type.replace('_', ' ').title() + "Agent"
+            agents[player.id] = agent_class(player.id)
         elif player_agent_type == "behavior_tree":
             agent_class = BehaviorTreeAgent
             agent_name = "BehaviorTreeAgent"
+            agents[player.id] = agent_class(player.id)
+        elif player_agent_type == "llm":
+            agent_class = LLMAgent
+            agent_name = "LLMAgent"
+            # LLM agent requires API key - check env vars (LiteLLM supports multiple providers)
+            import os
+            # Check for common API key env vars (LiteLLM will use the appropriate one based on model)
+            api_key = (
+                os.getenv("OPENAI_API_KEY") or
+                os.getenv("ANTHROPIC_API_KEY") or
+                os.getenv("GEMINI_API_KEY") or
+                os.getenv("LLM_API_KEY")  # Generic fallback
+            )
+            if not api_key:
+                print(f"Error: LLM API key required. Set one of: OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or LLM_API_KEY")
+                return 1
+            # Get model from env or use default
+            model = os.getenv("LLM_MODEL", "gpt-4o-mini")
+            agents[player.id] = agent_class(player.id, api_key=api_key, model=model)
         else:
             agent_class = RandomAgent
             agent_name = "RandomAgent"
-        
-        agents[player.id] = agent_class(player.id)
+            agents[player.id] = agent_class(player.id)
         if not fast_mode:
             print(f"  Created {agent_name} for {player.name} ({player.id})")
     if not fast_mode:

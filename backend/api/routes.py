@@ -1,5 +1,7 @@
 """API routes for the Catan game."""
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from typing import Optional, List, Dict, Any
 from typing import List, Dict, Optional, Any
 from pydantic import BaseModel
 from datetime import datetime
@@ -766,3 +768,112 @@ async def query_events(request: QueryEventsRequest):
         "summary": summary,
         "analysis": analysis,
     }
+
+
+# ============================================================================
+# Guidelines and Feedback API Endpoints
+# ============================================================================
+
+class AddGuidelineRequest(BaseModel):
+    guideline_text: str
+    player_id: Optional[str] = None
+    context: Optional[str] = None
+    priority: int = 0
+
+
+class UpdateGuidelineRequest(BaseModel):
+    guideline_text: Optional[str] = None
+    context: Optional[str] = None
+    priority: Optional[int] = None
+    active: Optional[bool] = None
+
+
+class AddFeedbackRequest(BaseModel):
+    feedback_text: str
+    step_idx: Optional[int] = None
+    player_id: Optional[str] = None
+    action_taken: Optional[str] = None
+    feedback_type: str = "general"
+
+
+@router.post("/guidelines")
+async def add_guideline(request: AddGuidelineRequest):
+    """Add a new guideline for LLM agents."""
+    from api.guidelines_db import add_guideline
+    guideline_id = add_guideline(
+        guideline_text=request.guideline_text,
+        player_id=request.player_id,
+        context=request.context,
+        priority=request.priority
+    )
+    return {"guideline_id": guideline_id, "message": "Guideline added successfully"}
+
+
+@router.get("/guidelines")
+async def get_guidelines_endpoint(
+    player_id: Optional[str] = None,
+    context: Optional[str] = None,
+    active_only: bool = True
+):
+    """Get guidelines."""
+    from api.guidelines_db import get_guidelines
+    guidelines = get_guidelines(
+        player_id=player_id,
+        context=context,
+        active_only=active_only
+    )
+    return {"guidelines": guidelines}
+
+
+@router.put("/guidelines/{guideline_id}")
+async def update_guideline_endpoint(guideline_id: int, request: UpdateGuidelineRequest):
+    """Update a guideline."""
+    from api.guidelines_db import update_guideline
+    updated = update_guideline(
+        guideline_id,
+        **request.dict(exclude_unset=True)
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Guideline not found")
+    return {"message": "Guideline updated successfully"}
+
+
+@router.delete("/guidelines/{guideline_id}")
+async def delete_guideline_endpoint(guideline_id: int):
+    """Delete (deactivate) a guideline."""
+    from api.guidelines_db import delete_guideline
+    deleted = delete_guideline(guideline_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Guideline not found")
+    return {"message": "Guideline deleted successfully"}
+
+
+@router.post("/games/{game_id}/feedback")
+async def add_feedback_endpoint(game_id: str, request: AddFeedbackRequest):
+    """Add feedback for a specific move in a game."""
+    from api.guidelines_db import add_feedback
+    feedback_id = add_feedback(
+        game_id=game_id,
+        feedback_text=request.feedback_text,
+        step_idx=request.step_idx,
+        player_id=request.player_id,
+        action_taken=request.action_taken,
+        feedback_type=request.feedback_type
+    )
+    return {"feedback_id": feedback_id, "message": "Feedback added successfully"}
+
+
+@router.get("/feedback")
+async def get_feedback_endpoint(
+    game_id: Optional[str] = None,
+    player_id: Optional[str] = None,
+    limit: int = 50
+):
+    """Get feedback."""
+    from api.guidelines_db import get_feedback
+    feedback = get_feedback(
+        game_id=game_id,
+        player_id=player_id,
+        limit=limit
+    )
+    return {"feedback": feedback}

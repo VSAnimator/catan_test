@@ -11,6 +11,7 @@ import {
   runAgents,
   watchAgentsStep,
   queryEvents,
+  addFeedback,
   type GameState,
   type LegalAction,
   type Player,
@@ -73,6 +74,13 @@ function App() {
     analyze: '',
     limit: ''
   })
+
+  // For feedback UI (LLM agent teaching)
+  const [showFeedbackPanel, setShowFeedbackPanel] = useState(false)
+  const [feedbackText, setFeedbackText] = useState('')
+  const [feedbackType, setFeedbackType] = useState('general')
+  const [lastAction, setLastAction] = useState<LegalAction | null>(null)
+  const [lastStepIdx, setLastStepIdx] = useState<number | null>(null)
 
   // Fetch legal actions when game state or player ID changes
   useEffect(() => {
@@ -1787,6 +1795,100 @@ function App() {
       </header>
       <main className="game-main">
         {error && <div className="error">Error: {error}</div>}
+        
+        {/* Feedback Panel for LLM Agent Teaching */}
+        {lastAction && (
+          <div className="trading-panel" style={{ marginBottom: '1rem', backgroundColor: '#e3f2fd', borderColor: '#2196F3' }}>
+            <h2>
+              💬 Provide Feedback (Teach LLM Agent)
+              <button
+                onClick={() => {
+                  setShowFeedbackPanel(!showFeedbackPanel)
+                  if (!showFeedbackPanel) {
+                    setFeedbackText('')
+                    setFeedbackType('general')
+                  }
+                }}
+                className="toggle-button"
+                style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}
+              >
+                {showFeedbackPanel ? '▼' : '▶'}
+              </button>
+            </h2>
+            {showFeedbackPanel && (
+              <div className="trading-content">
+                <p style={{ marginBottom: '0.5rem', fontSize: '0.9rem', color: '#666' }}>
+                  Last action: <strong>{formatActionName(lastAction)}</strong>
+                </p>
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.25rem', fontWeight: 'bold' }}>
+                    Feedback Type:
+                  </label>
+                  <select
+                    value={feedbackType}
+                    onChange={(e) => setFeedbackType(e.target.value)}
+                    style={{ width: '100%', padding: '0.5rem', fontSize: '0.9rem' }}
+                  >
+                    <option value="general">General</option>
+                    <option value="positive">Positive</option>
+                    <option value="negative">Negative</option>
+                    <option value="suggestion">Suggestion</option>
+                  </select>
+                </div>
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.25rem', fontWeight: 'bold' }}>
+                    Feedback:
+                  </label>
+                  <textarea
+                    value={feedbackText}
+                    onChange={(e) => setFeedbackText(e.target.value)}
+                    placeholder="E.g., 'Good move! Building a settlement here gives you access to wheat and ore.' or 'Consider trading with the bank first to get the resources you need.'"
+                    style={{ width: '100%', padding: '0.5rem', fontSize: '0.9rem', minHeight: '80px', resize: 'vertical' }}
+                  />
+                </div>
+                <button
+                  onClick={async () => {
+                    if (!feedbackText.trim() || !gameState) return
+                    setLoading(true)
+                    try {
+                      await addFeedback(gameState.game_id, {
+                        feedback_text: feedbackText,
+                        step_idx: lastStepIdx,
+                        player_id: playerId,
+                        action_taken: formatActionName(lastAction),
+                        feedback_type: feedbackType
+                      })
+                      setFeedbackText('')
+                      setLastAction(null)
+                      setShowFeedbackPanel(false)
+                      alert('Feedback submitted! The LLM agent will learn from this.')
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : 'Failed to submit feedback')
+                    } finally {
+                      setLoading(false)
+                    }
+                  }}
+                  disabled={loading || !feedbackText.trim()}
+                  className="action-button"
+                  style={{ width: '100%', backgroundColor: '#4CAF50', color: 'white' }}
+                >
+                  {loading ? 'Submitting...' : 'Submit Feedback'}
+                </button>
+                <button
+                  onClick={() => {
+                    setFeedbackText('')
+                    setLastAction(null)
+                    setShowFeedbackPanel(false)
+                  }}
+                  className="action-button"
+                  style={{ width: '100%', marginTop: '0.5rem', backgroundColor: '#999', color: 'white' }}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         
         <div className="game-info-bar">
           <div>
