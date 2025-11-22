@@ -37,6 +37,7 @@ function App() {
   const [gameIdInput, setGameIdInput] = useState('')
   const [playerNameInput, setPlayerNameInput] = useState('')
   const [numPlayers, setNumPlayers] = useState(2)
+  const [agentMapping, setAgentMapping] = useState<Record<string, string>>({})  // player_id -> agent_type
 
   // For replay view
   const [replayData, setReplayData] = useState<ReplayResponse | null>(null)
@@ -225,6 +226,41 @@ function App() {
     }
   }, [watchInterval])
 
+  // Auto-advance agent turns (must be before early returns)
+  useEffect(() => {
+    if (!gameState || loading || view !== 'game') return
+    
+    const activePlayer = getCurrentPlayer()
+    if (!activePlayer) return
+    
+    // Check if current player is an agent
+    const currentPlayerIsAgent = activePlayer.id in agentMapping
+    
+    if (currentPlayerIsAgent && activePlayer.id !== playerId) {
+      // It's an agent's turn (and not the human player)
+      // Auto-advance by calling watch_agents_step
+      const advanceAgentTurn = async () => {
+        try {
+          setLoading(true)
+          const result = await watchAgentsStep(gameState.game_id, agentMapping)
+          setGameState(result.new_state)
+          
+          if (result.error) {
+            setError(`Agent error: ${result.error}`)
+          }
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Failed to advance agent turn')
+        } finally {
+          setLoading(false)
+        }
+      }
+      
+      // Small delay to avoid race conditions
+      const timeout = setTimeout(advanceAgentTurn, 500)
+      return () => clearTimeout(timeout)
+    }
+  }, [gameState?.current_player_index, gameState?.setup_phase_player_index, gameState?.phase, gameState?.game_id, gameState, agentMapping, playerId, loading, view])
+
   const refreshGameState = async () => {
     if (!gameState) return
     
@@ -258,7 +294,12 @@ function App() {
       
       const response = await apiCreateGame({ player_names: playerNames })
       setGameState(response.initial_state)
-      setPlayerId(response.initial_state.players[0]?.id || '')
+      
+      // Set player ID to first non-agent player, or first player if all are agents
+      const firstNonAgentPlayer = response.initial_state.players.find(
+        p => !(p.id in agentMapping)
+      )
+      setPlayerId(firstNonAgentPlayer?.id || response.initial_state.players[0]?.id || '')
       setView('game')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
@@ -908,6 +949,48 @@ function App() {
                     placeholder="Leave empty for random names"
                   />
                 </label>
+              </div>
+              <div className="form-group">
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                  Configure Agents (leave empty for human players):
+                </label>
+                {Array.from({ length: numPlayers }).map((_, idx) => {
+                  const playerId = `player_${idx}`
+                  const isAgent = playerId in agentMapping
+                  return (
+                    <div key={idx} style={{ marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <label style={{ minWidth: '80px' }}>
+                        Player {idx + 1}:
+                      </label>
+                      <select
+                        value={isAgent ? agentMapping[playerId] : ''}
+                        onChange={(e) => {
+                          const newMapping = { ...agentMapping }
+                          if (e.target.value) {
+                            newMapping[playerId] = e.target.value
+                          } else {
+                            delete newMapping[playerId]
+                          }
+                          setAgentMapping(newMapping)
+                        }}
+                        style={{ flex: 1, padding: '0.25rem' }}
+                      >
+                        <option value="">Human Player</option>
+                        <option value="behavior_tree">Behavior Tree Agent</option>
+                        <option value="balanced">Balanced Agent</option>
+                        <option value="aggressive_builder">Aggressive Builder</option>
+                        <option value="dev_card_focused">Dev Card Focused</option>
+                        <option value="expansion">Expansion Agent</option>
+                        <option value="defensive">Defensive Agent</option>
+                        <option value="state_conditioned">State Conditioned</option>
+                        <option value="random">Random Agent</option>
+                      </select>
+                    </div>
+                  )
+                })}
+                <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.5rem' }}>
+                  💡 Tip: Set 3 players as "Behavior Tree Agent" to play against 3 bots!
+                </div>
               </div>
               <button onClick={handleCreateGame} disabled={loading}>
                 {loading ? 'Creating...' : 'Create Game'}

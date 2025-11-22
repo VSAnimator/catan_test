@@ -211,6 +211,10 @@ export async function runAgents(gameId: string, request: RunAgentsRequest = {}):
   return handleResponse<RunAgentsResponse>(response)
 }
 
+export interface WatchAgentsRequest {
+  agent_mapping?: Record<string, string>  // player_id -> agent_type
+}
+
 export interface WatchAgentsResponse {
   game_id: string
   game_continues: boolean
@@ -219,11 +223,11 @@ export interface WatchAgentsResponse {
   player_id?: string | null
 }
 
-export async function watchAgentsStep(gameId: string): Promise<WatchAgentsResponse> {
+export async function watchAgentsStep(gameId: string, agentMapping?: Record<string, string>): Promise<WatchAgentsResponse> {
   const response = await fetch(`${API_BASE}/games/${gameId}/watch_agents_step`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({})
+    body: JSON.stringify({ agent_mapping: agentMapping || {} })
   })
   return handleResponse<WatchAgentsResponse>(response)
 }

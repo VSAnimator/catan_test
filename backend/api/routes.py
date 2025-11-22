@@ -613,7 +613,8 @@ async def run_agents(game_id: str, request: RunAgentsRequest):
 
 class WatchAgentsRequest(BaseModel):
     """Request to watch agents play (step-by-step mode)."""
-    pass  # No parameters needed, just uses current game state
+    agent_mapping: Optional[Dict[str, str]] = None  # player_id -> agent_type (e.g., "behavior_tree", "random")
+    # If a player is not in agent_mapping, they are treated as human players
 
 
 class WatchAgentsResponse(BaseModel):
@@ -652,10 +653,42 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
     if game_row["rng_seed"] is not None:
         random.seed(game_row["rng_seed"])
     
-    # Create agents for all players
+    # Create agents only for players specified in agent_mapping
     agents = {}
+    agent_mapping = request.agent_mapping or {}
+    
+    # Import agent classes
+    from agents import RandomAgent, BehaviorTreeAgent
+    try:
+        from agents.variants import (
+            BalancedAgent,
+            AggressiveBuilderAgent,
+            DevCardFocusedAgent,
+            ExpansionAgent,
+            DefensiveAgent,
+            StateConditionedAgent,
+        )
+        AGENT_CLASSES = {
+            "random": RandomAgent,
+            "behavior_tree": BehaviorTreeAgent,
+            "balanced": BalancedAgent,
+            "aggressive_builder": AggressiveBuilderAgent,
+            "dev_card_focused": DevCardFocusedAgent,
+            "expansion": ExpansionAgent,
+            "defensive": DefensiveAgent,
+            "state_conditioned": StateConditionedAgent,
+        }
+    except ImportError:
+        AGENT_CLASSES = {
+            "random": RandomAgent,
+            "behavior_tree": BehaviorTreeAgent,
+        }
+    
     for player in current_state.players:
-        agents[player.id] = RandomAgent(player.id)
+        if player.id in agent_mapping:
+            agent_type = agent_mapping[player.id]
+            agent_class = AGENT_CLASSES.get(agent_type, RandomAgent)
+            agents[player.id] = agent_class(player.id)
     
     # Create agent runner
     runner = AgentRunner(current_state, agents, max_turns=1000)
@@ -704,7 +737,33 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
             chosen_action_text=chosen_action_text,
         )
     
-    # Run a single step
+    # Get current player to check if they have an agent
+    if current_state.phase == "setup":
+        current_player = current_state.players[current_state.setup_phase_player_index]
+    elif current_state.phase == "playing":
+        current_player = current_state.players[current_state.current_player_index]
+    else:
+        # Game finished
+        return WatchAgentsResponse(
+            game_id=game_id,
+            game_continues=False,
+            error=None,
+            new_state=state_json,
+            player_id=None
+        )
+    
+    # Only run step if current player has an agent
+    if current_player.id not in agents:
+        # Current player is human - don't auto-advance
+        return WatchAgentsResponse(
+            game_id=game_id,
+            game_continues=True,
+            error=None,
+            new_state=state_json,
+            player_id=None
+        )
+    
+    # Run a single step (agent's turn)
     new_state, game_continues, error, player_id = runner.run_step(save_state_callback=save_state_callback)
     
     # Serialize new state
