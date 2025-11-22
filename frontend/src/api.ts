@@ -57,6 +57,15 @@ export interface GameState {
   players_discarded?: string[]  // Players who have already discarded this turn (when 7 is rolled)
   robber_initial_tile_id?: number | null  // Robber position when 7 was rolled (to detect if it's been moved)
   roads_from_road_building?: Record<string, number>  // Player ID -> number of free roads remaining from road building card
+  // Trade state
+  pending_trade_offer?: {
+    proposer_id: string
+    target_player_ids: string[]
+    give_resources: Record<string, number>
+    receive_resources: Record<string, number>
+  } | null
+  pending_trade_responses?: Record<string, boolean>  // Player ID -> True if accepted, False if rejected
+  pending_trade_current_responder_index?: number  // Index into target_player_ids for current responder
 }
 
 export interface LegalAction {
@@ -74,6 +83,8 @@ export interface LegalAction {
     other_player_id?: string
     tile_id?: number
     resources?: Record<string, number>
+    selected_player_id?: string  // For SELECT_TRADE_PARTNER: which accepting player to trade with
+    target_player_ids?: string[]  // For PROPOSE_TRADE: which players to propose to
     // Legacy single-resource fields (for backward compatibility during transition)
     give_resource?: string
     give_amount?: number

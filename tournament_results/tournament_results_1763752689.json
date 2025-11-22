@@ -1,0 +1,612 @@
+{
+  "timestamp": 1763752689.611501,
+  "num_games_per_matchup": 1000,
+  "max_turns": 1000,
+  "agent_types": [
+    "balanced",
+    "aggressive_builder",
+    "dev_card_focused",
+    "expansion",
+    "defensive"
+  ],
+  "overall_stats": {
+    "aggressive_builder": 212,
+    "balanced": 238,
+    "dev_card_focused": 157,
+    "defensive": 145,
+    "expansion": 155
+  },
+  "overall_total": 1000,
+  "overall_max_turns": 93,
+  "matchup_stats": {
+    "('aggressive_builder', 'balanced', 'dev_card_focused', 'dev_card_focused')": {
+      "wins": {
+        "aggressive_builder": 4,
+        "balanced": 6,
+        "dev_card_focused": 6
+      },
+      "total": 16,
+      "max_turns": 0
+    },
+    "('aggressive_builder', 'aggressive_builder', 'aggressive_builder', 'dev_card_focused')": {
+      "wins": {
+        "aggressive_builder": 6,
+        "dev_card_focused": 2
+      },
+      "total": 9,
+      "max_turns": 1
+    },
+    "('aggressive_builder', 'defensive', 'dev_card_focused', 'dev_card_focused')": {
+      "wins": {
+        "aggressive_builder": 9,
+        "dev_card_focused": 4,
+        "defensive": 5
+      },
+      "total": 18,
+      "max_turns": 0
+    },
+    "('aggressive_builder', 'defensive', 'expansion', 'expansion')": {
+      "wins": {
+        "expansion": 14,
+        "aggressive_builder": 9,
+        "defensive": 3
+      },
+      "total": 30,
+      "max_turns": 4
+    },
+    "('aggressive_builder', 'aggressive_builder', 'defensive', 'dev_card_focused')": {
+      "wins": {
+        "aggressive_builder": 12,
+        "defensive": 1
+      },
+      "total": 14,
+      "max_turns": 1
+    },
+    "('balanced', 'balanced', 'balanced', 'dev_card_focused')": {
+      "wins": {
+        "balanced": 8,
+        "dev_card_focused": 2
+      },
+      "total": 10,
+      "max_turns": 0
+    },
+    "('balanced', 'dev_card_focused', 'expansion', 'expansion')": {
+      "wins": {
+        "balanced": 9,
+        "expansion": 5,
+        "dev_card_focused": 1
+      },
+      "total": 18,
+      "max_turns": 3
+    },
+    "('balanced', 'balanced', 'defensive', 'expansion')": {
+      "wins": {
+        "balanced": 14,
+        "expansion": 6,
+        "defensive": 3
+      },
+      "total": 24,
+      "max_turns": 1
+    },
+    "('aggressive_builder', 'aggressive_builder', 'defensive', 'expansion')": {
+      "wins": {
+        "expansion": 4,
+        "defensive": 7,
+        "aggressive_builder": 12
+      },
+      "total": 24,
+      "max_turns": 1
+    },
+    "('aggressive_builder', 'balanced', 'balanced', 'dev_card_focused')": {
+      "wins": {
+        "balanced": 10,
+        "dev_card_focused": 3,
+        "aggressive_builder": 2
+      },
+      "total": 20,
+      "max_turns": 5
+    },
+    "('aggressive_builder', 'balanced', 'balanced', 'defensive')": {
+      "wins": {
+        "balanced": 10,
+        "defensive": 3,
+        "aggressive_builder": 2
+      },
+      "total": 15,
+      "max_turns": 0
+    },
+    "('aggressive_builder', 'aggressive_builder', 'dev_card_focused', 'dev_card_focused')": {
+      "wins": {
+        "aggressive_builder": 4,
+        "dev_card_focused": 6
+      },
+      "total": 10,
+      "max_turns": 0
+    },
+    "('aggressive_builder', 'aggressive_builder', 'balanced', 'balanced')": {
+      "wins": {
+        "balanced": 4,
+        "aggressive_builder": 4
+      },
+      "total": 8,
+      "max_turns": 0
+    },
+    "('aggressive_builder', 'aggressive_builder', 'dev_card_focused', 'expansion')": {
+      "wins": {
+        "aggressive_builder": 13,
+        "dev_card_focused": 4,
+        "expansion": 3
+      },
+      "total": 20,
+      "max_turns": 0
+    },
+    "('aggressive_builder', 'balanced', 'dev_card_focused', 'expansion')": {
+      "wins": {
+        "expansion": 6,
+        "aggressive_builder": 10,
+        "balanced": 9,
+        "dev_card_focused": 5
+      },
+      "total": 35,
+      "max_turns": 5
+    },
+    "('defensive', 'dev_card_focused', 'dev_card_focused', 'expansion')": {
+      "wins": {
+        "dev_card_focused": 11,
+        "defensive": 4,
+        "expansion": 3
+      },
+      "total": 22,
+      "max_turns": 4
+    },
+    "('aggressive_builder', 'dev_card_focused', 'dev_card_focused', 'expansion')": {
+      "wins": {
+        "dev_card_focused": 10,
+        "aggressive_builder": 6,
+        "expansion": 4
+      },
+      "total": 23,
+      "max_turns": 3
+    },
+    "('aggressive_builder', 'aggressive_builder', 'defensive', 'defensive')": {
+      "wins": {
+        "aggressive_builder": 3,
+        "defensive": 6
+      },
+      "total": 9,
+      "max_turns": 0
+    },
+    "('aggressive_builder', 'aggressive_builder', 'balanced', 'defensive')": {
+      "wins": {
+        "defensive": 3,
+        "aggressive_builder": 11,
+        "balanced": 4
+      },
+      "total": 20,
+      "max_turns": 2
+    },
+    "('aggressive_builder', 'balanced', 'defensive', 'expansion')": {
+      "wins": {
+        "balanced": 14,
+        "aggressive_builder": 10,
+        "expansion": 5,
+        "defensive": 13
+      },
+      "total": 47,
+      "max_turns": 5
+    },
+    "('aggressive_builder', 'defensive', 'dev_card_focused', 'expansion')": {
+      "wins": {
+        "expansion": 6,
+        "aggressive_builder": 14,
+        "dev_card_focused": 8,
+        "defensive": 8
+      },
+      "total": 41,
+      "max_turns": 5
+    },
+    "('dev_card_focused', 'dev_card_focused', 'dev_card_focused', 'expansion')": {
+      "wins": {
+        "dev_card_focused": 8,
+        "expansion": 1
+      },
+      "total": 9,
+      "max_turns": 0
+    },
+    "('aggressive_builder', 'defensive', 'defensive', 'expansion')": {
+      "wins": {
+        "aggressive_builder": 10,
+        "defensive": 8,
+        "expansion": 3
+      },
+      "total": 25,
+      "max_turns": 4
+    },
+    "('balanced', 'defensive', 'dev_card_focused', 'dev_card_focused')": {
+      "wins": {
+        "balanced": 6,
+        "dev_card_focused": 6,
+        "defensive": 1
+      },
+      "total": 16,
+      "max_turns": 3
+    },
+    "('balanced', 'balanced', 'defensive', 'defensive')": {
+      "wins": {
+        "balanced": 7,
+        "defensive": 3
+      },
+      "total": 10,
+      "max_turns": 0
+    },
+    "('aggressive_builder', 'dev_card_focused', 'dev_card_focused', 'dev_card_focused')": {
+      "wins": {
+        "dev_card_focused": 6,
+        "aggressive_builder": 1
+      },
+      "total": 8,
+      "max_turns": 1
+    },
+    "('balanced', 'balanced', 'balanced', 'expansion')": {
+      "wins": {
+        "expansion": 1,
+        "balanced": 3
+      },
+      "total": 4,
+      "max_turns": 0
+    },
+    "('aggressive_builder', 'defensive', 'defensive', 'dev_card_focused')": {
+      "wins": {
+        "aggressive_builder": 7,
+        "dev_card_focused": 5,
+        "defensive": 5
+      },
+      "total": 19,
+      "max_turns": 2
+    },
+    "('defensive', 'defensive', 'dev_card_focused', 'dev_card_focused')": {
+      "wins": {
+        "dev_card_focused": 5,
+        "defensive": 3
+      },
+      "total": 10,
+      "max_turns": 2
+    },
+    "('balanced', 'defensive', 'defensive', 'dev_card_focused')": {
+      "wins": {
+        "defensive": 6,
+        "dev_card_focused": 4,
+        "balanced": 3
+      },
+      "total": 17,
+      "max_turns": 4
+    },
+    "('aggressive_builder', 'balanced', 'expansion', 'expansion')": {
+      "wins": {
+        "balanced": 7,
+        "aggressive_builder": 10,
+        "expansion": 6
+      },
+      "total": 24,
+      "max_turns": 1
+    },
+    "('aggressive_builder', 'balanced', 'defensive', 'defensive')": {
+      "wins": {
+        "aggressive_builder": 6,
+        "defensive": 5,
+        "balanced": 3
+      },
+      "total": 14,
+      "max_turns": 0
+    },
+    "('balanced', 'defensive', 'dev_card_focused', 'expansion')": {
+      "wins": {
+        "dev_card_focused": 12,
+        "expansion": 8,
+        "balanced": 16,
+        "defensive": 8
+      },
+      "total": 47,
+      "max_turns": 3
+    },
+    "('aggressive_builder', 'balanced', 'defensive', 'dev_card_focused')": {
+      "wins": {
+        "dev_card_focused": 9,
+        "defensive": 5,
+        "aggressive_builder": 3,
+        "balanced": 12
+      },
+      "total": 31,
+      "max_turns": 2
+    },
+    "('balanced', 'balanced', 'dev_card_focused', 'expansion')": {
+      "wins": {
+        "balanced": 9,
+        "dev_card_focused": 2,
+        "expansion": 2
+      },
+      "total": 13,
+      "max_turns": 0
+    },
+    "('balanced', 'defensive', 'expansion', 'expansion')": {
+      "wins": {
+        "expansion": 8,
+        "balanced": 5,
+        "defensive": 3
+      },
+      "total": 19,
+      "max_turns": 3
+    },
+    "('defensive', 'dev_card_focused', 'dev_card_focused', 'dev_card_focused')": {
+      "wins": {
+        "dev_card_focused": 5
+      },
+      "total": 6,
+      "max_turns": 1
+    },
+    "('aggressive_builder', 'balanced', 'balanced', 'balanced')": {
+      "wins": {
+        "balanced": 9,
+        "aggressive_builder": 3
+      },
+      "total": 14,
+      "max_turns": 2
+    },
+    "('balanced', 'dev_card_focused', 'dev_card_focused', 'expansion')": {
+      "wins": {
+        "expansion": 4,
+        "dev_card_focused": 4,
+        "balanced": 5
+      },
+      "total": 14,
+      "max_turns": 1
+    },
+    "('aggressive_builder', 'aggressive_builder', 'balanced', 'expansion')": {
+      "wins": {
+        "aggressive_builder": 8,
+        "balanced": 8,
+        "expansion": 2
+      },
+      "total": 19,
+      "max_turns": 1
+    },
+    "('dev_card_focused', 'dev_card_focused', 'expansion', 'expansion')": {
+      "wins": {
+        "expansion": 5,
+        "dev_card_focused": 1
+      },
+      "total": 6,
+      "max_turns": 0
+    },
+    "('aggressive_builder', 'balanced', 'balanced', 'expansion')": {
+      "wins": {
+        "balanced": 10,
+        "aggressive_builder": 3,
+        "expansion": 1
+      },
+      "total": 14,
+      "max_turns": 0
+    },
+    "('balanced', 'balanced', 'defensive', 'dev_card_focused')": {
+      "wins": {
+        "balanced": 13,
+        "dev_card_focused": 3,
+        "defensive": 4
+      },
+      "total": 21,
+      "max_turns": 1
+    },
+    "('aggressive_builder', 'dev_card_focused', 'expansion', 'expansion')": {
+      "wins": {
+        "expansion": 10,
+        "aggressive_builder": 2,
+        "dev_card_focused": 2
+      },
+      "total": 15,
+      "max_turns": 1
+    },
+    "('defensive', 'defensive', 'dev_card_focused', 'expansion')": {
+      "wins": {
+        "defensive": 8,
+        "expansion": 3,
+        "dev_card_focused": 4
+      },
+      "total": 18,
+      "max_turns": 3
+    },
+    "('aggressive_builder', 'expansion', 'expansion', 'expansion')": {
+      "wins": {
+        "expansion": 4,
+        "aggressive_builder": 3
+      },
+      "total": 7,
+      "max_turns": 0
+    },
+    "('defensive', 'dev_card_focused', 'expansion', 'expansion')": {
+      "wins": {
+        "defensive": 5,
+        "expansion": 9,
+        "dev_card_focused": 2
+      },
+      "total": 19,
+      "max_turns": 3
+    },
+    "('aggressive_builder', 'aggressive_builder', 'aggressive_builder', 'balanced')": {
+      "wins": {
+        "aggressive_builder": 4,
+        "balanced": 2
+      },
+      "total": 7,
+      "max_turns": 1
+    },
+    "('balanced', 'balanced', 'dev_card_focused', 'dev_card_focused')": {
+      "wins": {
+        "balanced": 5,
+        "dev_card_focused": 5
+      },
+      "total": 11,
+      "max_turns": 1
+    },
+    "('defensive', 'defensive', 'defensive', 'dev_card_focused')": {
+      "wins": {
+        "defensive": 2,
+        "dev_card_focused": 2
+      },
+      "total": 5,
+      "max_turns": 1
+    },
+    "('aggressive_builder', 'aggressive_builder', 'expansion', 'expansion')": {
+      "wins": {
+        "aggressive_builder": 5
+      },
+      "total": 6,
+      "max_turns": 1
+    },
+    "('aggressive_builder', 'aggressive_builder', 'aggressive_builder', 'expansion')": {
+      "wins": {
+        "aggressive_builder": 6
+      },
+      "total": 6,
+      "max_turns": 0
+    },
+    "('aggressive_builder', 'defensive', 'defensive', 'defensive')": {
+      "wins": {
+        "aggressive_builder": 2,
+        "defensive": 2
+      },
+      "total": 4,
+      "max_turns": 0
+    },
+    "('defensive', 'defensive', 'expansion', 'expansion')": {
+      "wins": {
+        "defensive": 4,
+        "expansion": 5
+      },
+      "total": 9,
+      "max_turns": 0
+    },
+    "('defensive', 'defensive', 'defensive', 'defensive')": {
+      "wins": {
+        "defensive": 4
+      },
+      "total": 4,
+      "max_turns": 0
+    },
+    "('balanced', 'defensive', 'defensive', 'expansion')": {
+      "wins": {
+        "expansion": 4,
+        "balanced": 6,
+        "defensive": 7
+      },
+      "total": 19,
+      "max_turns": 2
+    },
+    "('balanced', 'defensive', 'defensive', 'defensive')": {
+      "wins": {
+        "defensive": 2,
+        "balanced": 3
+      },
+      "total": 5,
+      "max_turns": 0
+    },
+    "('balanced', 'balanced', 'expansion', 'expansion')": {
+      "wins": {
+        "expansion": 6,
+        "balanced": 5
+      },
+      "total": 12,
+      "max_turns": 1
+    },
+    "('balanced', 'dev_card_focused', 'dev_card_focused', 'dev_card_focused')": {
+      "wins": {
+        "balanced": 1,
+        "dev_card_focused": 4
+      },
+      "total": 6,
+      "max_turns": 1
+    },
+    "('balanced', 'expansion', 'expansion', 'expansion')": {
+      "wins": {
+        "expansion": 4,
+        "balanced": 1
+      },
+      "total": 5,
+      "max_turns": 0
+    },
+    "('dev_card_focused', 'dev_card_focused', 'dev_card_focused', 'dev_card_focused')": {
+      "wins": {
+        "dev_card_focused": 2
+      },
+      "total": 3,
+      "max_turns": 1
+    },
+    "('balanced', 'balanced', 'balanced', 'defensive')": {
+      "wins": {
+        "balanced": 5
+      },
+      "total": 5,
+      "max_turns": 0
+    },
+    "('dev_card_focused', 'expansion', 'expansion', 'expansion')": {
+      "wins": {
+        "expansion": 6,
+        "dev_card_focused": 2
+      },
+      "total": 10,
+      "max_turns": 2
+    },
+    "('defensive', 'expansion', 'expansion', 'expansion')": {
+      "wins": {
+        "defensive": 1,
+        "expansion": 3
+      },
+      "total": 4,
+      "max_turns": 0
+    },
+    "('expansion', 'expansion', 'expansion', 'expansion')": {
+      "wins": {
+        "expansion": 2
+      },
+      "total": 3,
+      "max_turns": 1
+    },
+    "('aggressive_builder', 'aggressive_builder', 'aggressive_builder', 'defensive')": {
+      "wins": {
+        "aggressive_builder": 3
+      },
+      "total": 3,
+      "max_turns": 0
+    },
+    "('defensive', 'defensive', 'defensive', 'expansion')": {
+      "wins": {
+        "defensive": 3,
+        "expansion": 2
+      },
+      "total": 6,
+      "max_turns": 1
+    },
+    "('aggressive_builder', 'aggressive_builder', 'aggressive_builder', 'aggressive_builder')": {
+      "wins": {
+        "aggressive_builder": 1
+      },
+      "total": 1,
+      "max_turns": 0
+    },
+    "('aggressive_builder', 'aggressive_builder', 'balanced', 'dev_card_focused')": {
+      "wins": {
+        "dev_card_focused": 2,
+        "aggressive_builder": 4,
+        "balanced": 3
+      },
+      "total": 11,
+      "max_turns": 2
+    },
+    "('balanced', 'balanced', 'balanced', 'balanced')": {
+      "wins": {
+        "balanced": 3
+      },
+      "total": 3,
+      "max_turns": 0
+    }
+  }
+}

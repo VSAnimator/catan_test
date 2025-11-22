@@ -36,7 +36,7 @@ def serialize_game_state(state: GameState) -> Dict[str, Any]:
     """
     Serialize GameState to a JSON-serializable dictionary.
     """
-    return {
+    result = {
         "game_id": state.game_id,
         "players": [serialize_player(p) for p in state.players],
         "current_player_index": state.current_player_index,
@@ -55,12 +55,45 @@ def serialize_game_state(state: GameState) -> Dict[str, Any]:
         "robber_initial_tile_id": state.robber_initial_tile_id,
         "roads_from_road_building": state.roads_from_road_building,
     }
+    # Add trade state fields
+    if state.pending_trade_offer:
+        # Convert ResourceType enums to strings for JSON serialization
+        result["pending_trade_offer"] = {
+            "proposer_id": state.pending_trade_offer["proposer_id"],
+            "target_player_ids": state.pending_trade_offer["target_player_ids"],
+            "give_resources": {rt.value: count for rt, count in state.pending_trade_offer["give_resources"].items()},
+            "receive_resources": {rt.value: count for rt, count in state.pending_trade_offer["receive_resources"].items()},
+        }
+    else:
+        result["pending_trade_offer"] = None
+    result["pending_trade_responses"] = state.pending_trade_responses
+    result["pending_trade_current_responder_index"] = state.pending_trade_current_responder_index
+    return result
 
 
 def deserialize_game_state(data: Dict[str, Any]) -> GameState:
     """
     Deserialize a dictionary to GameState.
     """
+    # Handle trade state fields - need to convert resource dicts from strings to ResourceType
+    pending_trade_offer = data.get("pending_trade_offer")
+    if pending_trade_offer:
+        # Convert resource type strings to ResourceType enums
+        give_resources = {
+            ResourceType(rt): count
+            for rt, count in pending_trade_offer.get("give_resources", {}).items()
+        }
+        receive_resources = {
+            ResourceType(rt): count
+            for rt, count in pending_trade_offer.get("receive_resources", {}).items()
+        }
+        pending_trade_offer = {
+            "proposer_id": pending_trade_offer["proposer_id"],
+            "target_player_ids": pending_trade_offer["target_player_ids"],
+            "give_resources": give_resources,
+            "receive_resources": receive_resources,
+        }
+    
     return GameState(
         game_id=data["game_id"],
         players=[deserialize_player(p) for p in data["players"]],
@@ -79,6 +112,9 @@ def deserialize_game_state(data: Dict[str, Any]) -> GameState:
         players_discarded=set(data.get("players_discarded", [])),
         robber_initial_tile_id=data.get("robber_initial_tile_id"),
         roads_from_road_building=dict(data.get("roads_from_road_building", {})),
+        pending_trade_offer=pending_trade_offer,
+        pending_trade_responses=dict(data.get("pending_trade_responses", {})),
+        pending_trade_current_responder_index=data.get("pending_trade_current_responder_index", 0),
     )
 
 

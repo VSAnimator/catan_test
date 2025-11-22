@@ -27,14 +27,37 @@ from engine.serialization import (
 from agents import RandomAgent, BehaviorTreeAgent
 from agents.agent_runner import AgentRunner
 
+# Import agent variants for tournament support
+try:
+    from agents.variants import (
+        BalancedAgent,
+        AggressiveBuilderAgent,
+        DevCardFocusedAgent,
+        ExpansionAgent,
+        DefensiveAgent,
+        StateConditionedAgent,
+    )
+    AGENT_VARIANT_REGISTRY = {
+        'balanced': BalancedAgent,
+        'aggressive_builder': AggressiveBuilderAgent,
+        'dev_card_focused': DevCardFocusedAgent,
+        'expansion': ExpansionAgent,
+        'defensive': DefensiveAgent,
+        'state_conditioned': StateConditionedAgent,
+    }
+except ImportError:
+    AGENT_VARIANT_REGISTRY = {}
 
-def run_agents_script(game_id: str, max_turns: int = 1000, fast_mode: bool = False, agent_type: str = "random"):
+
+def run_agents_script(game_id: str, max_turns: int = 1000, fast_mode: bool = False, agent_type: str = "random", agent_mapping: dict = None):
     """Run agents automatically on a game.
     
     Args:
         game_id: Game ID to run agents on
         max_turns: Maximum number of turns
         fast_mode: If True, skip expensive text serialization and use batched writes
+        agent_type: Default agent type for all players (used if agent_mapping is None)
+        agent_mapping: Optional dict mapping player_id to agent_type ("random" or "behavior_tree")
     """
     # Get game info
     game_row = get_game(game_id)
@@ -77,9 +100,24 @@ def run_agents_script(game_id: str, max_turns: int = 1000, fast_mode: bool = Fal
     
     # Create agents for all players
     agents = {}
-    agent_class = BehaviorTreeAgent if agent_type == "behavior_tree" else RandomAgent
-    agent_name = "BehaviorTreeAgent" if agent_type == "behavior_tree" else "RandomAgent"
     for player in current_state.players:
+        # Use agent_mapping if provided, otherwise use agent_type for all
+        if agent_mapping and player.id in agent_mapping:
+            player_agent_type = agent_mapping[player.id]
+        else:
+            player_agent_type = agent_type
+        
+        # Check if it's a variant agent type
+        if player_agent_type in AGENT_VARIANT_REGISTRY:
+            agent_class = AGENT_VARIANT_REGISTRY[player_agent_type]
+            agent_name = player_agent_type.replace('_', ' ').title() + "Agent"
+        elif player_agent_type == "behavior_tree":
+            agent_class = BehaviorTreeAgent
+            agent_name = "BehaviorTreeAgent"
+        else:
+            agent_class = RandomAgent
+            agent_name = "RandomAgent"
+        
         agents[player.id] = agent_class(player.id)
         if not fast_mode:
             print(f"  Created {agent_name} for {player.name} ({player.id})")

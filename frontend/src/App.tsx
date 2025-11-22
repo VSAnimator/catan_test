@@ -59,6 +59,21 @@ function App() {
   const [playerWhoRolled7, setPlayerWhoRolled7] = useState<string | null>(null)
   const [isAutoDiscarding, setIsAutoDiscarding] = useState(false)
 
+  // For event query view
+  const [queryResults, setQueryResults] = useState<QueryEventsResponse | null>(null)
+  const [queryLoading, setQueryLoading] = useState(false)
+  const [queryParams, setQueryParams] = useState({
+    num_games: 100,
+    action_type: '',
+    card_type: '',
+    dice_roll: '',
+    player_id: '',
+    min_turn: '',
+    max_turn: '',
+    analyze: '',
+    limit: ''
+  })
+
   // Fetch legal actions when game state or player ID changes
   useEffect(() => {
     if (gameState && playerId && view === 'game') {
@@ -1075,20 +1090,6 @@ function App() {
   }
 
   // Event Query View
-  const [queryResults, setQueryResults] = useState<QueryEventsResponse | null>(null)
-  const [queryLoading, setQueryLoading] = useState(false)
-  const [queryParams, setQueryParams] = useState({
-    num_games: 100,
-    action_type: '',
-    card_type: '',
-    dice_roll: '',
-    player_id: '',
-    min_turn: '',
-    max_turn: '',
-    analyze: '',
-    limit: ''
-  })
-
   if (view === 'event-query') {
     const handleQuery = async () => {
       setQueryLoading(true)
@@ -1536,7 +1537,11 @@ function App() {
     const currentStep = replayData && replayStepIndex >= 0 && replayStepIndex < maxSteps 
       ? replayData.steps[replayStepIndex] 
       : null
-    const displayState = currentStep?.state_after || null
+    // Use state_after from current step, or state_before from first step if at step 0, or null
+    const displayState = currentStep?.state_after || 
+                        (replayData && replayData.steps.length > 0 && replayStepIndex === 0 
+                          ? replayData.steps[0]?.state_before 
+                          : null)
 
     return (
       <div className="app">
