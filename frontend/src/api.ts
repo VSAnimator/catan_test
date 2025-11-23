@@ -51,12 +51,16 @@ export interface GameState {
   turn_number: number
   setup_round: number
   setup_phase_player_index: number
+  setup_last_settlement_id?: number | null  // Intersection ID of the last settlement placed in setup
+  setup_first_settlement_player_index?: number | null  // Index of player who placed first settlement
   robber_tile_id: number | null
   waiting_for_robber_move: boolean
   waiting_for_robber_steal: boolean
   players_discarded?: string[]  // Players who have already discarded this turn (when 7 is rolled)
   robber_initial_tile_id?: number | null  // Robber position when 7 was rolled (to detect if it's been moved)
   roads_from_road_building?: Record<string, number>  // Player ID -> number of free roads remaining from road building card
+  dev_cards_bought_this_turn?: string[]  // Player IDs who bought dev cards this turn
+  dev_cards_played_this_turn?: string[]  // Player IDs who played dev cards this turn
   // Trade state
   pending_trade_offer?: {
     proposer_id: string
@@ -221,6 +225,7 @@ export interface WatchAgentsResponse {
   error?: string | null
   new_state: GameState
   player_id?: string | null
+  reasoning?: string | null
 }
 
 export async function watchAgentsStep(gameId: string, agentMapping?: Record<string, string>): Promise<WatchAgentsResponse> {

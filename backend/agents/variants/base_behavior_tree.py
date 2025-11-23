@@ -22,7 +22,7 @@ class BaseBehaviorTreeAgent(BaseAgent):
         self,
         state: GameState,
         legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
-    ) -> Tuple[Action, Optional[ActionPayload]]:
+    ) -> Tuple[Action, Optional[ActionPayload], Optional[str]]:
         """Choose action using behavior tree logic."""
         if not legal_actions_list:
             raise ValueError("No legal actions available")
@@ -42,58 +42,70 @@ class BaseBehaviorTreeAgent(BaseAgent):
         if current_vp >= 9:
             vp_card_action = self._find_vp_card_action(legal_actions_list)
             if vp_card_action:
-                return vp_card_action
+                action, payload = vp_card_action
+                return (action, payload, f"Playing victory point card to win (current VP: {current_vp})")
             
             if current_vp == 9:
                 city_action = self._find_build_city_action(legal_actions_list)
                 if city_action:
-                    return city_action
+                    action, payload = city_action
+                    return (action, payload, f"Building city to reach 10 VPs and win")
                 
                 settlement_action = self._find_build_settlement_action(legal_actions_list)
                 if settlement_action:
-                    return settlement_action
+                    action, payload = settlement_action
+                    return (action, payload, f"Building settlement to reach 10 VPs and win")
         
         # 2. HANDLE PENDING TRADES
         trade_response = self._handle_pending_trade(state, player, legal_actions_list)
         if trade_response:
-            return trade_response
+            action, payload = trade_response
+            return (action, payload, "Handling pending trade")
         
         # 3. HANDLE REQUIRED ACTIONS
         required_action = self._handle_required_actions(state, legal_actions_list)
         if required_action:
-            return required_action
+            action, payload = required_action
+            return (action, payload, "Handling required action (discard/robber)")
         
         # 4. STRATEGIC ACTIONS (variant-specific priority)
         strategic_action = self._choose_strategic_action(state, player, legal_actions_list)
         if strategic_action:
-            return strategic_action
+            action, payload = strategic_action
+            return (action, payload, "Taking strategic action")
         
         # 5. DEFAULT: End turn
         end_turn_action = self._find_end_turn_action(legal_actions_list)
         if end_turn_action:
-            return end_turn_action
+            action, payload = end_turn_action
+            return (action, payload, "Ending turn (no other actions available)")
         
-        return legal_actions_list[0]
+        action, payload = legal_actions_list[0]
+        return (action, payload, "Fallback: taking first available action")
     
     def _handle_setup_phase(
         self,
         state: GameState,
         legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
-    ) -> Tuple[Action, Optional[ActionPayload]]:
+    ) -> Tuple[Action, Optional[ActionPayload], Optional[str]]:
         """Handle setup phase actions."""
         place_settlement_actions = [(a, p) for a, p in legal_actions_list if a == Action.SETUP_PLACE_SETTLEMENT]
         if place_settlement_actions:
-            return random.choice(place_settlement_actions)
+            action, payload = random.choice(place_settlement_actions)
+            return (action, payload, "Setup: placing settlement")
         
         place_road_actions = [(a, p) for a, p in legal_actions_list if a == Action.SETUP_PLACE_ROAD]
         if place_road_actions:
-            return random.choice(place_road_actions)
+            action, payload = random.choice(place_road_actions)
+            return (action, payload, "Setup: placing road")
         
         start_game_actions = [(a, p) for a, p in legal_actions_list if a == Action.START_GAME]
         if start_game_actions:
-            return start_game_actions[0]
+            action, payload = start_game_actions[0]
+            return (action, payload, "Starting game")
         
-        return legal_actions_list[0]
+        action, payload = legal_actions_list[0]
+        return (action, payload, "Setup fallback")
     
     def _choose_strategic_action(
         self,

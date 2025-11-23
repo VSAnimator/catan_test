@@ -16,7 +16,6 @@ import {
   type LegalAction,
   type Player,
   type ReplayResponse,
-  type GameEvent,
   type QueryEventsResponse
 } from './api'
 
@@ -48,6 +47,8 @@ function App() {
   const [agentWatchGameId, setAgentWatchGameId] = useState('')
   const [isWatchingAgents, setIsWatchingAgents] = useState(false)
   const [watchInterval, setWatchInterval] = useState<number | null>(null)
+  const [stepByStepMode, setStepByStepMode] = useState(false)  // Step-by-step mode (manual advance)
+  const [lastReasoning, setLastReasoning] = useState<string | null>(null)  // Last agent reasoning
   
   // For trading UI
   const [showTradingPanel, setShowTradingPanel] = useState(false)
@@ -81,7 +82,7 @@ function App() {
   const [feedbackText, setFeedbackText] = useState('')
   const [feedbackType, setFeedbackType] = useState('general')
   const [lastAction, setLastAction] = useState<LegalAction | null>(null)
-  const [lastStepIdx, setLastStepIdx] = useState<number | null>(null)
+  const [lastStepIdx] = useState<number | null>(null)  // Used in feedback submission
 
   // Fetch legal actions when game state or player ID changes
   useEffect(() => {
@@ -238,12 +239,22 @@ function App() {
     
     if (currentPlayerIsAgent && activePlayer.id !== playerId) {
       // It's an agent's turn (and not the human player)
-      // Auto-advance by calling watch_agents_step
+      // Auto-advance by calling watch_agents_step (unless in step-by-step mode)
+      if (stepByStepMode) {
+        // In step-by-step mode, don't auto-advance
+        return
+      }
+      
       const advanceAgentTurn = async () => {
         try {
           setLoading(true)
           const result = await watchAgentsStep(gameState.game_id, agentMapping)
           setGameState(result.new_state)
+          
+          // Store reasoning if available
+          if (result.reasoning) {
+            setLastReasoning(result.reasoning)
+          }
           
           if (result.error) {
             setError(`Agent error: ${result.error}`)
@@ -1474,33 +1485,53 @@ function App() {
   }
 
   if (view === 'agent-watch') {
+    const handleAdvanceStep = async () => {
+      if (!gameState || loading) return
+      try {
+        setLoading(true)
+        const result = await watchAgentsStep(gameState.game_id)
+        setGameState(result.new_state)
+        
+        // Store reasoning if available
+        if (result.reasoning) {
+          setLastReasoning(result.reasoning)
+        }
+        
+        if (!result.game_continues || result.error) {
+          setIsWatchingAgents(false)
+          if (watchInterval) {
+            clearInterval(watchInterval)
+            setWatchInterval(null)
+          }
+          if (result.error) {
+            setError(`Agent watching stopped: ${result.error}`)
+          } else {
+            setError('Game finished or stopped')
+          }
+        }
+      } catch (err) {
+        setIsWatchingAgents(false)
+        if (watchInterval) {
+          clearInterval(watchInterval)
+          setWatchInterval(null)
+        }
+        setError(err instanceof Error ? err.message : 'Failed to watch agents')
+      } finally {
+        setLoading(false)
+      }
+    }
+    
     const handleStartWatching = () => {
       if (!gameState) return
       setIsWatchingAgents(true)
       
+      if (stepByStepMode) {
+        // Step-by-step mode: don't start interval, just enable manual advance
+        return
+      }
+      
       const interval = setInterval(async () => {
-        try {
-          const result = await watchAgentsStep(gameState.game_id)
-          setGameState(result.new_state)
-          
-          if (!result.game_continues || result.error) {
-            setIsWatchingAgents(false)
-            if (watchInterval) {
-              clearInterval(watchInterval)
-            }
-            if (result.error) {
-              setError(`Agent watching stopped: ${result.error}`)
-            } else {
-              setError('Game finished or stopped')
-            }
-          }
-        } catch (err) {
-          setIsWatchingAgents(false)
-          if (watchInterval) {
-            clearInterval(watchInterval)
-          }
-          setError(err instanceof Error ? err.message : 'Failed to watch agents')
-        }
+        await handleAdvanceStep()
       }, 1000) // 1 second delay
       
       setWatchInterval(interval)
@@ -1519,17 +1550,71 @@ function App() {
         <header>
           <h1>🤖 Agent Watching Mode</h1>
           <div className="header-actions">
-            <button 
-              onClick={isWatchingAgents ? handleStopWatching : handleStartWatching}
-              disabled={loading || !gameState}
-              className="action-button"
-              style={{ 
-                backgroundColor: isWatchingAgents ? '#d32f2f' : '#4CAF50',
-                color: 'white'
-              }}
-            >
-              {isWatchingAgents ? '⏸ Stop Watching' : '▶ Start Watching'}
-            </button>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginRight: '1rem' }}>
+              <input
+                type="checkbox"
+                checked={stepByStepMode}
+                onChange={(e) => {
+                  setStepByStepMode(e.target.checked)
+                  if (e.target.checked && isWatchingAgents) {
+                    handleStopWatching()
+                  }
+                }}
+              />
+              <span>Step-by-Step Mode</span>
+            </label>
+            {stepByStepMode ? (
+              <>
+                {!isWatchingAgents ? (
+                  <button 
+                    onClick={handleStartWatching}
+                    disabled={loading || !gameState}
+                    className="action-button"
+                    style={{ 
+                      backgroundColor: '#4CAF50',
+                      color: 'white'
+                    }}
+                  >
+                    ▶ Start Watching
+                  </button>
+                ) : (
+                  <button 
+                    onClick={handleAdvanceStep}
+                    disabled={loading || !gameState}
+                    className="action-button"
+                    style={{ 
+                      backgroundColor: '#4CAF50',
+                      color: 'white'
+                    }}
+                  >
+                    {loading ? '⏳ Processing...' : '⏭️ Next Step'}
+                  </button>
+                )}
+                <button 
+                  onClick={handleStopWatching}
+                  disabled={loading || !gameState || !isWatchingAgents}
+                  className="action-button"
+                  style={{ 
+                    backgroundColor: '#d32f2f',
+                    color: 'white'
+                  }}
+                >
+                  ⏸ Stop
+                </button>
+              </>
+            ) : (
+              <button 
+                onClick={isWatchingAgents ? handleStopWatching : handleStartWatching}
+                disabled={loading || !gameState}
+                className="action-button"
+                style={{ 
+                  backgroundColor: isWatchingAgents ? '#d32f2f' : '#4CAF50',
+                  color: 'white'
+                }}
+              >
+                {isWatchingAgents ? '⏸ Stop Watching' : '▶ Start Watching'}
+              </button>
+            )}
             <button onClick={() => {
               handleStopWatching()
               setView('main')
@@ -1549,7 +1634,22 @@ function App() {
               borderRadius: '4px',
               marginBottom: '1rem'
             }}>
-              <strong>👁️ Watching agents play...</strong> Actions execute every 1 second.
+              <strong>👁️ Watching agents play...</strong> {stepByStepMode ? 'Click "Next Step" to advance.' : 'Actions execute every 1 second.'}
+            </div>
+          )}
+          
+          {lastReasoning && (
+            <div style={{ 
+              padding: '1rem', 
+              backgroundColor: '#fff3cd', 
+              border: '1px solid #ffc107',
+              borderRadius: '4px',
+              marginBottom: '1rem'
+            }}>
+              <strong>🤔 Agent Reasoning:</strong>
+              <div style={{ marginTop: '0.5rem', fontStyle: 'italic', color: '#666', whiteSpace: 'pre-wrap' }}>
+                {lastReasoning}
+              </div>
             </div>
           )}
           
@@ -2334,62 +2434,46 @@ function App() {
                                     }
                                   }
                                   
-                                  // Execute trades with all selected players (auto-accept)
+                                  // Propose trade to selected players
                                   setLoading(true)
                                   setError(null)
                                   
                                   try {
-                                    for (const targetPlayerId of selectedTradePlayers) {
-                                      // Check if target player can afford the trade
-                                      const targetPlayer = gameState?.players.find(p => p.id === targetPlayerId)
-                                      if (!targetPlayer) continue
-                                      
-                                      const canAfford = Object.entries(receiveResources).every(([res, amt]) => 
-                                        amt === 0 || (targetPlayer.resources[res] || 0) >= amt
-                                      )
-                                      
-                                      if (!canAfford) {
-                                        console.warn(`Player ${targetPlayer.name} cannot afford this trade, skipping`)
-                                        continue
+                                    // Filter out zero amounts from resources
+                                    const filteredGiveResources: Record<string, number> = {}
+                                    const filteredReceiveResources: Record<string, number> = {}
+                                    
+                                    for (const [resource, amount] of Object.entries(giveResources)) {
+                                      if (amount > 0) {
+                                        filteredGiveResources[resource] = amount
                                       }
-                                      
-                                      // Execute the trade
-                                      // Filter out zero amounts from resources
-                                      const filteredGiveResources: Record<string, number> = {}
-                                      const filteredReceiveResources: Record<string, number> = {}
-                                      
-                                      for (const [resource, amount] of Object.entries(giveResources)) {
-                                        if (amount > 0) {
-                                          filteredGiveResources[resource] = amount
-                                        }
-                                      }
-                                      
-                                      for (const [resource, amount] of Object.entries(receiveResources)) {
-                                        if (amount > 0) {
-                                          filteredReceiveResources[resource] = amount
-                                        }
-                                      }
-                                      
-                                      const tradeAction: LegalAction = {
-                                        type: 'trade_player',
-                                        payload: {
-                                          type: 'TradePlayerPayload',
-                                          other_player_id: targetPlayerId,
-                                          give_resources: filteredGiveResources,
-                                          receive_resources: filteredReceiveResources
-                                        }
-                                      }
-                                      
-                                      const newState = await postAction(gameState!.game_id, playerId, tradeAction)
-                                      setGameState(newState)
                                     }
+                                    
+                                    for (const [resource, amount] of Object.entries(receiveResources)) {
+                                      if (amount > 0) {
+                                        filteredReceiveResources[resource] = amount
+                                      }
+                                    }
+                                    
+                                    const tradeAction: LegalAction = {
+                                      type: 'propose_trade',
+                                      payload: {
+                                        type: 'ProposeTradePayload',
+                                        target_player_ids: Array.from(selectedTradePlayers),
+                                        give_resources: filteredGiveResources,
+                                        receive_resources: filteredReceiveResources
+                                      }
+                                    }
+                                    
+                                    const newState = await postAction(gameState!.game_id, playerId, tradeAction)
+                                    setGameState(newState)
                                     
                                     // Clear the trade form
                                     setGiveResources({})
                                     setReceiveResources({})
                                     setSelectedTradePlayers(new Set())
                                   } catch (err) {
-                                    setError(err instanceof Error ? err.message : 'Failed to execute trade')
+                                    setError(err instanceof Error ? err.message : 'Failed to propose trade')
                                   } finally {
                                     setLoading(false)
                                   }
@@ -2405,11 +2489,8 @@ function App() {
                                   color: 'white'
                                 }}
                               >
-                                {loading ? 'Executing Trade...' : 'Execute Trade (Auto-Accept)'}
+                                {loading ? 'Proposing Trade...' : 'Propose Trade'}
                               </button>
-                              <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: '#666' }}>
-                                Trades are automatically accepted and executed immediately.
-                              </div>
                             </div>
                           </div>
                         )

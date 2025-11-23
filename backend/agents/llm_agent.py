@@ -193,7 +193,7 @@ class LLMAgent(BaseAgent):
         self,
         state: GameState,
         legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
-    ) -> Tuple[Action, Optional[ActionPayload]]:
+    ) -> Tuple[Action, Optional[ActionPayload], Optional[str]]:
         """
         Choose an action using ReAct pattern with RAG.
         
@@ -279,6 +279,7 @@ Now reason about the best action and respond in JSON format as specified."""
             
             action_type_str = response_json.get("action_type", "").lower()
             action_payload_dict = response_json.get("action_payload", {})
+            reasoning = response_json.get("reasoning", None)  # Extract reasoning
             
             # Find matching action
             action_type_map = {
@@ -341,19 +342,23 @@ Now reason about the best action and respond in JSON format as specified."""
             if not matching_action:
                 raise ValueError(f"Could not find matching legal action for {action_type_str}")
             
-            return matching_action
+            # Return action, payload, and reasoning
+            action, payload = matching_action
+            return (action, payload, reasoning)
             
         except json.JSONDecodeError as e:
             # Fallback: try to extract action from text
             print(f"Warning: Failed to parse LLM response as JSON: {e}")
             print(f"Response: {response_text[:500]}")
             # Fallback to first legal action
-            return legal_actions_list[0]
+            action, payload = legal_actions_list[0]
+            return (action, payload, f"Failed to parse LLM response: {e}")
         except Exception as e:
             print(f"Warning: Error processing LLM response: {e}")
             print(f"Response: {response_text[:500]}")
             # Fallback to first legal action
-            return legal_actions_list[0]
+            action, payload = legal_actions_list[0]
+            return (action, payload, f"Error processing LLM response: {e}")
     
     def _payload_to_dict(self, payload: ActionPayload) -> Dict[str, Any]:
         """Convert action payload to dictionary."""

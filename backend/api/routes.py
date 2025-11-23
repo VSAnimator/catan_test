@@ -624,6 +624,7 @@ class WatchAgentsResponse(BaseModel):
     error: Optional[str] = None  # Error message if stopped
     new_state: Dict[str, Any]  # New game state after action
     player_id: Optional[str] = None  # Player who took the action
+    reasoning: Optional[str] = None  # Agent's reasoning for the action
 
 
 @router.post("/games/{game_id}/watch_agents_step", response_model=WatchAgentsResponse)
@@ -750,6 +751,9 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
                 elif "card_type" in payload_dict:
                     chosen_action_text += f" ({payload_dict['card_type']})"
         
+        # Extract reasoning if present
+        reasoning = action.get("reasoning", None)
+        
         # Save step to database
         add_step(
             game_id=game_id,
@@ -762,6 +766,7 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
             state_text=state_text,
             legal_actions_text=legal_actions_text,
             chosen_action_text=chosen_action_text,
+            reasoning=reasoning,  # Store reasoning in database
         )
     
     # Get current player to check if they have an agent
@@ -793,6 +798,19 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
     # Run a single step (agent's turn)
     new_state, game_continues, error, player_id = runner.run_step(save_state_callback=save_state_callback)
     
+    # Extract reasoning from the last saved action (if available)
+    reasoning = None
+    if player_id:
+        # Get the last step to extract reasoning
+        steps = get_steps(game_id)
+        if steps:
+            last_step = steps[-1]
+            # sqlite3.Row objects use bracket notation, not .get()
+            action_json_str = last_step['action_json'] if 'action_json' in last_step.keys() else None
+            if action_json_str:
+                action_json = json.loads(action_json_str) if isinstance(action_json_str, str) else action_json_str
+                reasoning = action_json.get("reasoning") if isinstance(action_json, dict) else None
+    
     # Serialize new state
     new_state_json = serialize_game_state(new_state)
     
@@ -801,7 +819,8 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
         game_continues=game_continues,
         error=error,
         new_state=new_state_json,
-        player_id=player_id
+        player_id=player_id,
+        reasoning=reasoning
     )
 
 

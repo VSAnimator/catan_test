@@ -48,12 +48,16 @@ def serialize_game_state(state: GameState) -> Dict[str, Any]:
         "turn_number": state.turn_number,
         "setup_round": state.setup_round,
         "setup_phase_player_index": state.setup_phase_player_index,
+        "setup_last_settlement_id": state.setup_last_settlement_id,
+        "setup_first_settlement_player_index": state.setup_first_settlement_player_index,
         "robber_tile_id": state.robber_tile_id,
         "waiting_for_robber_move": state.waiting_for_robber_move,
         "waiting_for_robber_steal": state.waiting_for_robber_steal,
         "players_discarded": list(state.players_discarded),
         "robber_initial_tile_id": state.robber_initial_tile_id,
         "roads_from_road_building": state.roads_from_road_building,
+        "dev_cards_bought_this_turn": list(state.dev_cards_bought_this_turn),
+        "dev_cards_played_this_turn": list(state.dev_cards_played_this_turn),
     }
     # Add trade state fields
     if state.pending_trade_offer:
@@ -106,12 +110,16 @@ def deserialize_game_state(data: Dict[str, Any]) -> GameState:
         turn_number=data.get("turn_number", 0),
         setup_round=data.get("setup_round", 0),
         setup_phase_player_index=data.get("setup_phase_player_index", 0),
+        setup_last_settlement_id=data.get("setup_last_settlement_id"),
+        setup_first_settlement_player_index=data.get("setup_first_settlement_player_index"),
         robber_tile_id=data.get("robber_tile_id"),
         waiting_for_robber_move=data.get("waiting_for_robber_move", False),
         waiting_for_robber_steal=data.get("waiting_for_robber_steal", False),
         players_discarded=set(data.get("players_discarded", [])),
         robber_initial_tile_id=data.get("robber_initial_tile_id"),
         roads_from_road_building=dict(data.get("roads_from_road_building", {})),
+        dev_cards_bought_this_turn=set(data.get("dev_cards_bought_this_turn", [])),
+        dev_cards_played_this_turn=set(data.get("dev_cards_played_this_turn", [])),
         pending_trade_offer=pending_trade_offer,
         pending_trade_responses=dict(data.get("pending_trade_responses", {})),
         pending_trade_current_responder_index=data.get("pending_trade_current_responder_index", 0),
@@ -462,15 +470,16 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
                         legal.append((Action.SETUP_PLACE_SETTLEMENT, BuildSettlementPayload(intersection.id)))
         
         # Can place road adjacent to settlement (only after placing settlement this round, and not yet placed road)
+        # Road must be adjacent to the settlement just placed (setup_last_settlement_id)
         if player_settlements == expected_settlements + 1 and player_roads == expected_roads:
             # Player has placed settlement for this round, can now place road
-            player_settlements_list = [i for i in state.intersections if i.owner == player_id]
-            for settlement in player_settlements_list:
+            # Road must attach to the settlement just placed
+            if state.setup_last_settlement_id is not None:
                 for road_edge in state.road_edges:
                     if not road_edge.owner:
-                        # Check if road is adjacent to settlement
-                        if (road_edge.intersection1_id == settlement.id or 
-                            road_edge.intersection2_id == settlement.id):
+                        # Check if road is adjacent to the last settlement placed
+                        if (road_edge.intersection1_id == state.setup_last_settlement_id or 
+                            road_edge.intersection2_id == state.setup_last_settlement_id):
                             legal.append((Action.SETUP_PLACE_ROAD, BuildRoadPayload(road_edge.id)))
         
         # Can start game if setup is complete (simplified - in real game, this is automatic)
@@ -571,35 +580,40 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
             # Players can discard even if it's not their turn, and even if the robber phase has started
             # (though ideally the robber shouldn't move until all discards are done)
             
+            # Check if discard phase is still active
+            # Discard phase is over if:
+            # 1. Robber has been moved (robber_tile_id != robber_initial_tile_id), OR
+            # 2. Both waiting_for_robber_move and waiting_for_robber_steal are False (robber phase complete)
+            robber_has_been_moved = (state.robber_initial_tile_id is not None and 
+                                     state.robber_tile_id != state.robber_initial_tile_id)
+            discard_phase_complete = robber_has_been_moved or (
+                not state.waiting_for_robber_move and not state.waiting_for_robber_steal
+            )
+            
             # Check if this player needs to discard (has 8+ resources and hasn't discarded yet)
+            # BUT only if the discard phase hasn't completed yet
             total_resources = sum(player.resources.values())
-            if total_resources >= 8 and player_id not in state.players_discarded:
-                # Player must discard - allow this even if robber phase has started
-                # (This handles edge cases where the game state might be inconsistent)
+            if total_resources >= 8 and player_id not in state.players_discarded and not discard_phase_complete:
+                # Player must discard - but only if discard phase is still active
                 legal.append((Action.DISCARD_RESOURCES, None))  # Payload will be provided by frontend
                 # Don't show other actions while this player needs to discard
                 return legal
             
             # Check if we're still in discard phase (other players need to discard)
-            # Discard phase is over if:
-            # 1. waiting_for_robber_move is True (all discards done, waiting to move robber), OR
-            # 2. waiting_for_robber_steal is True (robber moved, waiting to steal), OR
-            # 3. Robber has been moved (robber_tile_id != robber_initial_tile_id)
-            robber_has_been_moved = (state.robber_initial_tile_id is not None and 
-                                     state.robber_tile_id != state.robber_initial_tile_id)
-            
-            # Check if any other players still need to discard
-            any_player_needs_discard = False
-            for p in state.players:
-                if p.id not in state.players_discarded and sum(p.resources.values()) >= 8:
-                    any_player_needs_discard = True
-                    break
-            
-            # If other players need to discard and we're not in robber phase yet, don't show other actions
-            if any_player_needs_discard and not state.waiting_for_robber_move and not state.waiting_for_robber_steal and not robber_has_been_moved:
-                # Other players still need to discard, and we're not in robber phase
-                # This player can't do anything else until all discards are done
-                return legal
+            # Only check if discard phase hasn't completed yet
+            if not discard_phase_complete:
+                # Check if any other players still need to discard
+                any_player_needs_discard = False
+                for p in state.players:
+                    if p.id not in state.players_discarded and sum(p.resources.values()) >= 8:
+                        any_player_needs_discard = True
+                        break
+                
+                # If other players need to discard and we're not in robber phase yet, don't show other actions
+                if any_player_needs_discard and not state.waiting_for_robber_move and not state.waiting_for_robber_steal:
+                    # Other players still need to discard, and we're not in robber phase
+                    # This player can't do anything else until all discards are done
+                    return legal
             
             # All discards done, handle robber phase (for 7 roll only)
             # Note: waiting_for_robber_move from knight cards is handled above
@@ -762,8 +776,17 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
                 player.resources[ResourceType.ORE] >= 1):
                 legal.append((Action.BUY_DEV_CARD, None))
             
-            # Can play dev cards
+            # Can play dev cards (with restrictions)
+            # Cannot play if bought this turn (unless VP)
+            # Cannot play if already played one this turn (unless VP)
             for card_type in player.dev_cards:
+                # Skip if restrictions apply (unless VP)
+                if card_type != "victory_point":
+                    if player_id in state.dev_cards_bought_this_turn:
+                        continue  # Cannot play same turn as buying
+                    if player_id in state.dev_cards_played_this_turn:
+                        continue  # Cannot play two in one turn
+                
                 if card_type == "year_of_plenty":
                     # Year of plenty: player can choose 2 resources
                     # Generate actions for all valid combinations:
@@ -867,14 +890,24 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
                 # Cannot end turn while waiting for robber actions
                 pass
             elif state.dice_roll == 7:
-                # Check if anyone still needs to discard (and hasn't discarded yet)
-                any_player_needs_discard = False
-                for p in state.players:
-                    if p.id not in state.players_discarded and sum(p.resources.values()) >= 8:
-                        any_player_needs_discard = True
-                        break
+                # Check if discard phase is still active
+                # Discard phase is over if robber has been moved or robber phase is complete
+                robber_has_been_moved = (state.robber_initial_tile_id is not None and 
+                                         state.robber_tile_id != state.robber_initial_tile_id)
+                discard_phase_complete = robber_has_been_moved or (
+                    not state.waiting_for_robber_move and not state.waiting_for_robber_steal
+                )
                 
-                # Can only end turn if no one needs to discard
+                # Check if anyone still needs to discard (and hasn't discarded yet)
+                # BUT only if the discard phase hasn't completed yet
+                any_player_needs_discard = False
+                if not discard_phase_complete:
+                    for p in state.players:
+                        if p.id not in state.players_discarded and sum(p.resources.values()) >= 8:
+                            any_player_needs_discard = True
+                            break
+                
+                # Can only end turn if no one needs to discard (or discard phase is complete)
                 if not any_player_needs_discard:
                     legal.append((Action.END_TURN, None))
             else:
@@ -887,6 +920,7 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
 def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, Optional[ActionPayload]]] = None) -> str:
     """
     Convert game state to LLM-friendly text description from a player's perspective.
+    Enhanced with spatial relationships, production analysis, and strategic information.
     """
     if history is None:
         history = []
@@ -897,6 +931,13 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
     player = next((p for p in state.players if p.id == player_id), None)
     if not player:
         return f"Player {player_id} not found in game"
+    
+    # Dice probability table (for reference)
+    dice_probs = {
+        2: 1/36, 3: 2/36, 4: 3/36, 5: 4/36, 6: 5/36,
+        7: 6/36,  # 7 doesn't produce resources
+        8: 5/36, 9: 4/36, 10: 3/36, 11: 2/36, 12: 1/36
+    }
     
     # Game overview
     lines.append(f"=== Catan Game State ===")
@@ -936,37 +977,214 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
     
     lines.append("")
     
-    # Other players
+    # Other players (with more detail)
     lines.append("=== Other Players ===")
     for p in state.players:
         if p.id != player_id:
-            lines.append(f"{p.name}: {p.victory_points} VP, "
-                        f"{sum(p.resources.values())} resources, "
-                        f"{p.settlements_built} settlements, {p.cities_built} cities")
+            lines.append(f"{p.name} ({p.id}):")
+            lines.append(f"  Victory Points: {p.victory_points}")
+            lines.append(f"  Total Resources: {sum(p.resources.values())}")
+            lines.append(f"  Buildings: {p.settlements_built} settlements, {p.cities_built} cities")
+            lines.append(f"  Roads: {p.roads_built}")
+            if p.longest_road:
+                lines.append("  * Has Longest Road")
+            if p.largest_army:
+                lines.append("  * Has Largest Army")
+            # Show opponent building locations
+            opponent_buildings = [i for i in state.intersections if i.owner == p.id]
+            if opponent_buildings:
+                lines.append(f"  Building Locations:")
+                for inter in opponent_buildings:
+                    port_info = f" (port: {inter.port_type})" if inter.port_type else ""
+                    lines.append(f"    Intersection {inter.id}: {inter.building_type}{port_info}")
     
     lines.append("")
     
-    # Board state
-    lines.append("=== Board ===")
-    lines.append(f"Tiles: {len(state.tiles)}")
+    # Board state with spatial information
+    lines.append("=== Board Layout ===")
+    
+    # Create tile lookup
+    tile_map = {t.id: t for t in state.tiles}
+    
+    # Dice probability reference
+    lines.append("Dice Roll Probabilities (for resource production):")
+    lines.append("  2: 2.8% | 3: 5.6% | 4: 8.3% | 5: 11.1% | 6: 13.9%")
+    lines.append("  8: 13.9% | 9: 11.1% | 10: 8.3% | 11: 5.6% | 12: 2.8%")
+    lines.append("  (7: 16.7% - triggers robber, no production)")
+    lines.append("  Best numbers: 6 and 8 (13.9% each)")
+    lines.append("")
+    
+    # Tiles with production value
+    lines.append("Tiles (with production value):")
     for tile in state.tiles:
         if tile.resource_type:
-            token_str = f" (token: {tile.number_token.value})" if tile.number_token else ""
-            lines.append(f"  Tile {tile.id}: {tile.resource_type.value}{token_str}")
+            token_value = tile.number_token.value if tile.number_token else None
+            if token_value:
+                prob = dice_probs[token_value] * 100
+                lines.append(f"  Tile {tile.id}: {tile.resource_type.value} (token: {token_value}, {prob:.1f}% roll probability)")
+            else:
+                lines.append(f"  Tile {tile.id}: {tile.resource_type.value} (no token)")
         else:
-            lines.append(f"  Tile {tile.id}: Desert")
+            lines.append(f"  Tile {tile.id}: Desert (robber location)" if tile.id == state.robber_tile_id else f"  Tile {tile.id}: Desert")
     
-    lines.append(f"Intersections: {len(state.intersections)}")
-    your_buildings = [i for i in state.intersections if i.owner == player_id]
-    if your_buildings:
-        lines.append("  Your buildings:")
-        for inter in your_buildings:
-            lines.append(f"    Intersection {inter.id}: {inter.building_type}")
+    lines.append("")
     
-    lines.append(f"Roads: {len(state.road_edges)}")
+    # Intersections with full spatial information
+    lines.append("=== Intersections (Spatial Information) ===")
+    
+    # Group intersections by ownership
+    your_intersections = []
+    opponent_intersections = []
+    empty_intersections = []
+    
+    for inter in state.intersections:
+        if inter.owner == player_id:
+            your_intersections.append(inter)
+        elif inter.owner:
+            opponent_intersections.append(inter)
+        else:
+            empty_intersections.append(inter)
+    
+    # Your intersections
+    if your_intersections:
+        lines.append("Your Intersections:")
+        for inter in your_intersections:
+            lines.append(f"  Intersection {inter.id}: {inter.building_type or 'empty'}")
+            if inter.port_type:
+                lines.append(f"    Port: {inter.port_type}")
+            
+            # Adjacent tiles with production analysis
+            if inter.adjacent_tiles:
+                lines.append(f"    Adjacent Tiles:")
+                total_production_value = 0.0
+                resource_production = {}
+                for tile_id in inter.adjacent_tiles:
+                    tile = tile_map.get(tile_id)
+                    if tile and tile.resource_type and tile.number_token:
+                        token_value = tile.number_token.value
+                        prob = dice_probs[token_value]
+                        total_production_value += prob
+                        resource_type = tile.resource_type.value
+                        if resource_type not in resource_production:
+                            resource_production[resource_type] = 0.0
+                        resource_production[resource_type] += prob
+                        lines.append(f"      Tile {tile_id}: {tile.resource_type.value} (token {token_value}, {prob*100:.1f}% chance)")
+                
+                if total_production_value > 0:
+                    lines.append(f"    Expected Production: {total_production_value*100:.1f}% per roll")
+                    lines.append(f"    Resource Breakdown:")
+                    for res_type, prob in sorted(resource_production.items(), key=lambda x: -x[1]):
+                        lines.append(f"      {res_type}: {prob*100:.1f}% per roll")
+            
+            # Adjacent intersections
+            if inter.adjacent_intersections:
+                adj_intersections = []
+                for adj_id in inter.adjacent_intersections:
+                    adj_inter = next((i for i in state.intersections if i.id == adj_id), None)
+                    if adj_inter:
+                        owner_info = "you" if adj_inter.owner == player_id else (adj_inter.owner or "empty")
+                        building_info = f" ({adj_inter.building_type})" if adj_inter.building_type else ""
+                        adj_intersections.append(f"{adj_id} ({owner_info}{building_info})")
+                if adj_intersections:
+                    lines.append(f"    Adjacent Intersections: {', '.join(adj_intersections)}")
+    
+    # Opponent intersections (summary)
+    if opponent_intersections:
+        lines.append("")
+        lines.append("Opponent Intersections:")
+        for inter in opponent_intersections:
+            owner_name = next((p.name for p in state.players if p.id == inter.owner), inter.owner)
+            lines.append(f"  Intersection {inter.id}: {inter.building_type} (owned by {owner_name})")
+            if inter.port_type:
+                lines.append(f"    Port: {inter.port_type}")
+            if inter.adjacent_tiles:
+                tile_info = []
+                for tile_id in inter.adjacent_tiles:
+                    tile = tile_map.get(tile_id)
+                    if tile and tile.resource_type and tile.number_token:
+                        tile_info.append(f"T{tile_id}({tile.resource_type.value[0]}{tile.number_token.value})")
+                if tile_info:
+                    lines.append(f"    Tiles: {', '.join(tile_info)}")
+    
+    # Available intersections for building (with production analysis)
+    if empty_intersections and (state.phase == "setup" or state.phase == "playing"):
+        lines.append("")
+        lines.append("Available Intersections (for building):")
+        # Show top candidates by production value
+        candidates = []
+        for inter in empty_intersections:
+            # Check distance rule (can't build adjacent to existing buildings)
+            can_build = True
+            for adj_id in inter.adjacent_intersections:
+                adj_inter = next((i for i in state.intersections if i.id == adj_id), None)
+                if adj_inter and adj_inter.owner:
+                    can_build = False
+                    break
+            
+            if can_build:
+                total_production = 0.0
+                resource_prod = {}
+                port_bonus = ""
+                if inter.port_type:
+                    port_bonus = f" [PORT: {inter.port_type}]"
+                
+                for tile_id in inter.adjacent_tiles:
+                    tile = tile_map.get(tile_id)
+                    if tile and tile.resource_type and tile.number_token:
+                        token_value = tile.number_token.value
+                        prob = dice_probs[token_value]
+                        total_production += prob
+                        res_type = tile.resource_type.value
+                        if res_type not in resource_prod:
+                            resource_prod[res_type] = 0.0
+                        resource_prod[res_type] += prob
+                
+                candidates.append((inter.id, total_production, resource_prod, port_bonus, inter.adjacent_intersections))
+        
+        # Sort by production value (descending)
+        candidates.sort(key=lambda x: -x[1])
+        
+        # Show top 15 candidates
+        for inter_id, prod, res_prod, port, adj_inters in candidates[:15]:
+            lines.append(f"  Intersection {inter_id}{port}:")
+            lines.append(f"    Production Value: {prod*100:.1f}% per roll")
+            if res_prod:
+                res_str = ", ".join([f"{k}: {v*100:.1f}%" for k, v in sorted(res_prod.items(), key=lambda x: -x[1])])
+                lines.append(f"    Resources: {res_str}")
+            if adj_inters:
+                adj_str = ", ".join([str(aid) for aid in sorted(adj_inters)])
+                lines.append(f"    Adjacent Intersections: {adj_str}")
+    
+    lines.append("")
+    
+    # Road network information
+    lines.append("=== Road Network ===")
     your_roads = [r for r in state.road_edges if r.owner == player_id]
     if your_roads:
-        lines.append(f"  Your roads: {len(your_roads)}")
+        lines.append(f"Your Roads ({len(your_roads)}):")
+        for road in your_roads:
+            lines.append(f"  Road {road.id}: connects intersections {road.intersection1_id} <-> {road.intersection2_id}")
+    
+    opponent_roads = [r for r in state.road_edges if r.owner and r.owner != player_id]
+    if opponent_roads:
+        lines.append(f"Opponent Roads ({len(opponent_roads)} total)")
+    
+    lines.append("")
+    
+    # Robber information
+    if state.robber_tile_id is not None:
+        robber_tile = tile_map.get(state.robber_tile_id)
+        if robber_tile:
+            lines.append(f"=== Robber ===")
+            lines.append(f"Robber is on Tile {state.robber_tile_id} ({robber_tile.resource_type.value if robber_tile.resource_type else 'Desert'})")
+            # Show players who would be affected if this tile produces
+            affected_players = set()
+            for inter in state.intersections:
+                if state.robber_tile_id in inter.adjacent_tiles and inter.owner:
+                    affected_players.add(inter.owner)
+            if affected_players:
+                player_names = [next((p.name for p in state.players if p.id == pid), pid) for pid in affected_players]
+                lines.append(f"  Blocks production for: {', '.join(player_names)}")
     
     lines.append("")
     

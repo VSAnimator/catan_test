@@ -96,12 +96,16 @@ class GameState:
     turn_number: int = 0
     setup_round: int = 0  # 0 = first round (clockwise), 1 = second round (counter-clockwise)
     setup_phase_player_index: int = 0  # Current player in setup phase
+    setup_last_settlement_id: Optional[int] = None  # Intersection ID of the last settlement placed in setup (for road placement)
+    setup_first_settlement_player_index: Optional[int] = None  # Index of player who placed first settlement (goes first after setup)
     robber_tile_id: Optional[int] = None  # Tile ID where robber is located (None = desert)
     waiting_for_robber_move: bool = False  # True if robber needs to be moved (after 7 or knight)
     waiting_for_robber_steal: bool = False  # True if resource needs to be stolen (after moving robber)
     players_discarded: Set[str] = field(default_factory=set)  # Players who have already discarded this turn (when 7 is rolled)
     robber_initial_tile_id: Optional[int] = None  # Robber position when 7 was rolled (to detect if it's been moved)
     roads_from_road_building: Dict[str, int] = field(default_factory=dict)  # Player ID -> number of free roads remaining from road building card
+    dev_cards_bought_this_turn: Set[str] = field(default_factory=set)  # Player IDs who bought dev cards this turn
+    dev_cards_played_this_turn: Set[str] = field(default_factory=set)  # Player IDs who played dev cards this turn
     
     # Trade state
     pending_trade_offer: Optional[Dict] = None  # Current trade offer: {proposer_id, target_player_ids, give_resources, receive_resources}
@@ -409,6 +413,9 @@ class GameState:
         card_type = random.choice(dev_card_types)
         current_player.dev_cards.append(card_type)
         
+        # Track that this player bought a dev card this turn
+        new_state.dev_cards_bought_this_turn.add(current_player.id)
+        
         return new_state
     
     def _handle_play_dev_card(self, new_state: 'GameState', payload: Optional['ActionPayload']) -> 'GameState':
@@ -422,8 +429,19 @@ class GameState:
         if payload.card_type not in current_player.dev_cards:
             raise ValueError(f"Player does not have {payload.card_type} card")
         
+        # Check if player bought a dev card this turn (cannot play same turn as buying, unless VP)
+        if current_player.id in new_state.dev_cards_bought_this_turn and payload.card_type != "victory_point":
+            raise ValueError("Cannot play a development card the same turn it was bought (except victory point cards)")
+        
+        # Check if player already played a dev card this turn (cannot play two, unless VPs)
+        if current_player.id in new_state.dev_cards_played_this_turn and payload.card_type != "victory_point":
+            raise ValueError("Cannot play two development cards in one turn (except victory point cards)")
+        
         # Remove card from hand
         current_player.dev_cards.remove(payload.card_type)
+        
+        # Track that this player played a dev card this turn
+        new_state.dev_cards_played_this_turn.add(current_player.id)
         
         # Handle card effects
         if payload.card_type == "victory_point":
@@ -1183,6 +1201,9 @@ class GameState:
         new_state.waiting_for_robber_steal = False
         new_state.players_discarded = set()  # Clear discarded players set for next turn
         new_state.robber_initial_tile_id = None  # Clear initial robber position
+        # Clear dev card tracking for next turn
+        new_state.dev_cards_bought_this_turn = set()
+        new_state.dev_cards_played_this_turn = set()
         # Note: roads_from_road_building persists across turns until used (player can build roads on later turns)
         
         return new_state
@@ -1764,6 +1785,13 @@ class GameState:
         current_player.settlements_built += 1
         current_player.victory_points += 1
         
+        # Track the last settlement placed for road placement requirement
+        new_state.setup_last_settlement_id = payload.intersection_id
+        
+        # Track first player who placed settlement (in first round, first player)
+        if new_state.setup_round == 0 and new_state.setup_phase_player_index == 0:
+            new_state.setup_first_settlement_player_index = 0
+        
         # In second round of setup, give resources from adjacent hexes
         if new_state.setup_round == 1:
             for tile_id in intersection.adjacent_tiles:
@@ -1790,6 +1818,13 @@ class GameState:
         if road_edge.owner:
             raise ValueError(f"Road edge {payload.road_edge_id} already owned")
         
+        # Check that road is adjacent to the settlement just placed
+        if new_state.setup_last_settlement_id is None:
+            raise ValueError("Cannot place road: no settlement was placed yet")
+        if (road_edge.intersection1_id != new_state.setup_last_settlement_id and 
+            road_edge.intersection2_id != new_state.setup_last_settlement_id):
+            raise ValueError(f"Road must be adjacent to the settlement just placed (intersection {new_state.setup_last_settlement_id})")
+        
         # Place road (no resource cost in setup)
         road_index = next(i for i, r in enumerate(new_state.road_edges) if r.id == payload.road_edge_id)
         new_state.road_edges[road_index] = RoadEdge(
@@ -1799,6 +1834,9 @@ class GameState:
             owner=current_player.id
         )
         current_player.roads_built += 1
+        
+        # Clear the last settlement ID since road has been placed
+        new_state.setup_last_settlement_id = None
         
         # Check for longest road (though unlikely in setup)
         self._check_longest_road(new_state, current_player)
@@ -1821,7 +1859,8 @@ class GameState:
                     if desert_tile:
                         new_state.robber_tile_id = desert_tile.id
                 new_state.phase = "playing"
-                new_state.current_player_index = len(new_state.players) - 1  # Last player goes first
+                # First player (who placed first settlement) goes first
+                new_state.current_player_index = new_state.setup_first_settlement_player_index if new_state.setup_first_settlement_player_index is not None else 0
         
         return new_state
 

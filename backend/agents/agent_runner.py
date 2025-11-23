@@ -158,11 +158,26 @@ class AgentRunner:
                 # Store state before action
                 state_before = copy.deepcopy(self.state)
                 
-                # Agent chooses an action
-                try:
-                    action, payload = agent.choose_action(self.state, legal_actions_list)
-                except Exception as e:
-                    return self.state, False, f"Agent error for player {current_player.id}: {str(e)}"
+                # Automate action if there's only one option
+                if len(legal_actions_list) == 1:
+                    action, payload = legal_actions_list[0]
+                    reasoning = f"Automated: only one legal action available"
+                else:
+                    # Agent chooses an action
+                    try:
+                        result = agent.choose_action(self.state, legal_actions_list)
+                        if len(result) == 3:
+                            action, payload, reasoning = result
+                        else:
+                            # Backward compatibility: old agents return 2-tuple
+                            action, payload = result
+                            reasoning = None
+                    except Exception as e:
+                        return self.state, False, f"Agent error for player {current_player.id}: {str(e)}"
+                
+                # Print reasoning if available
+                if reasoning:
+                    print(f"[{current_player.name}] Reasoning: {reasoning}")
                 
                 # Apply the action
                 try:
@@ -177,6 +192,8 @@ class AgentRunner:
                     }
                     if payload:
                         action_dict["payload"] = serialize_action_payload(payload)
+                    if reasoning:
+                        action_dict["reasoning"] = reasoning
                     save_state_callback(
                         self.state.game_id,
                         state_before,
@@ -277,7 +294,17 @@ class AgentRunner:
                             state_before = copy.deepcopy(self.state)
                             
                             # Choose a discard action
-                            action, payload = discard_agent.choose_action(self.state, discard_actions)
+                            result = discard_agent.choose_action(self.state, discard_actions)
+                            if len(result) == 3:
+                                action, payload, reasoning = result
+                            else:
+                                # Backward compatibility
+                                action, payload = result
+                                reasoning = None
+                            
+                            # Print reasoning if available
+                            if reasoning:
+                                print(f"[{player.name}] Reasoning: {reasoning}")
                             
                             # Apply the action
                             self.state = self.state.step(action, payload, player_id=player.id)
@@ -289,6 +316,8 @@ class AgentRunner:
                                 }
                                 if payload:
                                     action_dict["payload"] = serialize_action_payload(payload)
+                                if reasoning:
+                                    action_dict["reasoning"] = reasoning
                                 save_state_callback(
                                     self.state.game_id,
                                     state_before,
@@ -315,11 +344,26 @@ class AgentRunner:
             # Store state before action
             state_before = copy.deepcopy(self.state)
             
-            # Agent chooses an action
-            try:
-                action, payload = agent.choose_action(self.state, legal_actions_list)
-            except Exception as e:
-                return self.state, False, f"Agent error for player {current_player.id}: {str(e)}", None
+            # Automate action if there's only one option
+            if len(legal_actions_list) == 1:
+                action, payload = legal_actions_list[0]
+                reasoning = f"Automated: only one legal action available"
+            else:
+                # Agent chooses an action
+                try:
+                    result = agent.choose_action(self.state, legal_actions_list)
+                    if len(result) == 3:
+                        action, payload, reasoning = result
+                    else:
+                        # Backward compatibility: old agents return 2-tuple
+                        action, payload = result
+                        reasoning = None
+                except Exception as e:
+                    return self.state, False, f"Agent error for player {current_player.id}: {str(e)}", None
+            
+            # Print reasoning if available
+            if reasoning:
+                print(f"[{current_player.name}] Reasoning: {reasoning}")
             
             # Apply the action
             try:
@@ -334,6 +378,8 @@ class AgentRunner:
                 }
                 if payload:
                     action_dict["payload"] = serialize_action_payload(payload)
+                if reasoning:
+                    action_dict["reasoning"] = reasoning
                 save_state_callback(
                     self.state.game_id,
                     state_before,

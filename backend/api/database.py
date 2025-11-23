@@ -99,9 +99,16 @@ def init_db():
             state_text TEXT,
             legal_actions_text TEXT,
             chosen_action_text TEXT,
+            reasoning TEXT,
             FOREIGN KEY (game_id) REFERENCES games(id)
         )
     """)
+    
+    # Add reasoning column if it doesn't exist (for existing databases)
+    try:
+        cursor.execute("ALTER TABLE steps ADD COLUMN reasoning TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
     
     # Create index on game_id for faster queries
     cursor.execute("""
@@ -185,6 +192,7 @@ def add_step(
     state_text: Optional[str] = None,
     legal_actions_text: Optional[str] = None,
     chosen_action_text: Optional[str] = None,
+    reasoning: Optional[str] = None,
     batch_write: bool = False,
 ) -> None:
     """
@@ -210,6 +218,7 @@ def add_step(
                 'state_text': state_text,
                 'legal_actions_text': legal_actions_text,
                 'chosen_action_text': chosen_action_text,
+                'reasoning': reasoning,
             })
             
             queue_size = len(_write_queue[game_id])
@@ -229,9 +238,9 @@ def add_step(
             INSERT INTO steps (
                 game_id, step_idx, player_id,
                 state_before_json, state_after_json, action_json,
-                dice_roll, state_text, legal_actions_text, chosen_action_text
+                dice_roll, state_text, legal_actions_text, chosen_action_text, reasoning
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             game_id,
             step_idx,
@@ -243,6 +252,7 @@ def add_step(
             state_text,
             legal_actions_text,
             chosen_action_text,
+            reasoning,
         ))
         
         conn.commit()
@@ -267,9 +277,9 @@ def _flush_write_queue(game_id: str) -> None:
             INSERT INTO steps (
                 game_id, step_idx, player_id,
                 state_before_json, state_after_json, action_json,
-                dice_roll, state_text, legal_actions_text, chosen_action_text
+                dice_roll, state_text, legal_actions_text, chosen_action_text, reasoning
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, [
             (
                 step['game_id'],
@@ -282,6 +292,7 @@ def _flush_write_queue(game_id: str) -> None:
                 step['state_text'],
                 step['legal_actions_text'],
                 step['chosen_action_text'],
+                step.get('reasoning'),  # Use .get() for backward compatibility
             )
             for step in steps
         ])

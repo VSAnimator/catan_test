@@ -29,7 +29,7 @@ class BaseAgent(ABC):
         self, 
         state: GameState, 
         legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
-    ) -> Tuple[Action, Optional[ActionPayload]]:
+    ) -> Tuple[Action, Optional[ActionPayload], Optional[str]]:
         """
         Choose an action from the list of legal actions.
         
@@ -38,7 +38,10 @@ class BaseAgent(ABC):
             legal_actions_list: List of (Action, Optional[ActionPayload]) tuples
             
         Returns:
-            A tuple of (Action, Optional[ActionPayload]) representing the chosen action
+            A tuple of (Action, Optional[ActionPayload], Optional[str]) representing:
+            - The chosen action
+            - The action payload (if any)
+            - The agent's reasoning (optional, can be None)
         """
         pass
     
