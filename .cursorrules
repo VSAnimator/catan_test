@@ -1,0 +1,12 @@
+# Cursor Rules for Catan Agent Project
+
+## Output Handling
+- **NEVER pipe command outputs** (e.g., `| tail`, `| head`, `| grep`, etc.) when running commands
+- Piping loses visibility and potentially loses information
+- Instead, use one of these alternatives:
+  - Write output to a log file and read the log file
+  - Run the command without piping and let full output display
+  - Use file redirection to a log file (e.g., `> logfile.txt 2>&1`) then read the file
+  - If output is too long, use pagination tools that preserve full output (like `less` or `more`)
+- When analyzing command output, read the full log file rather than piping
+

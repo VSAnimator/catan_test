@@ -38,6 +38,8 @@ class LLMAgent(BaseAgent):
         max_examples: int = 5,
         enable_retrieval: bool = True
     ):
+        # Token usage tracking
+        self.token_usage_history: List[Dict[str, int]] = []
         """
         Initialize the LLM agent.
         
@@ -106,6 +108,15 @@ class LLMAgent(BaseAgent):
                 temperature=temperature,
                 max_tokens=2000
             )
+            
+            # Track token usage
+            if hasattr(response, 'usage') and response.usage:
+                usage = {
+                    'prompt_tokens': getattr(response.usage, 'prompt_tokens', 0),
+                    'completion_tokens': getattr(response.usage, 'completion_tokens', 0),
+                    'total_tokens': getattr(response.usage, 'total_tokens', 0)
+                }
+                self.token_usage_history.append(usage)
             
             return response.choices[0].message.content
         except ImportError:
@@ -181,7 +192,7 @@ class LLMAgent(BaseAgent):
             Formatted string
         """
         state_text = state_to_text(state, self.player_id)
-        actions_text = legal_actions_to_text(legal_actions_list)
+        actions_text = legal_actions_to_text(legal_actions_list, state=state, player_id=self.player_id)
         
         return f"""## Current Game State:
 {state_text}
@@ -266,14 +277,41 @@ Now reason about the best action and respond in JSON format as specified."""
         # Call LLM
         response_text = self._call_llm(messages)
         
+        # Store response for debugging
+        self._last_llm_response = response_text
+        
         # Parse response
         try:
             # Try to extract JSON from response (might have markdown code blocks)
+            original_response = response_text
             response_text = response_text.strip()
+            
+            # Try multiple extraction methods
             if "```json" in response_text:
                 response_text = response_text.split("```json")[1].split("```")[0].strip()
             elif "```" in response_text:
-                response_text = response_text.split("```")[1].split("```")[0].strip()
+                # Try to find JSON block
+                parts = response_text.split("```")
+                for i, part in enumerate(parts):
+                    if i % 2 == 1:  # Odd indices are code blocks
+                        part = part.strip()
+                        if part.startswith("json"):
+                            part = part[4:].strip()
+                        # Try to parse this part as JSON
+                        try:
+                            json.loads(part)
+                            response_text = part
+                            break
+                        except:
+                            continue
+            
+            # Try to find JSON object in text if not already extracted
+            if not response_text.startswith("{"):
+                # Look for first { and last }
+                start_idx = response_text.find("{")
+                end_idx = response_text.rfind("}")
+                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                    response_text = response_text[start_idx:end_idx+1]
             
             response_json = json.loads(response_text)
             
@@ -311,7 +349,19 @@ Now reason about the best action and respond in JSON format as specified."""
                         break
             
             if not target_action:
-                raise ValueError(f"Could not map action type: {action_type_str}")
+                # Try harder to find a match
+                action_type_clean = action_type_str.replace("_", "").replace("-", "")
+                for action, _ in legal_actions_list:
+                    action_value_clean = action.value.replace("_", "").replace("-", "")
+                    if action_type_clean in action_value_clean or action_value_clean in action_type_clean:
+                        target_action = action
+                        print(f"  Matched action via fuzzy matching: {action_type_str} -> {action.value}", flush=True)
+                        break
+                
+                if not target_action:
+                    print(f"Warning: Could not map action type '{action_type_str}' to any legal action", flush=True)
+                    print(f"  Available actions: {[a.value for a, _ in legal_actions_list]}", flush=True)
+                    raise ValueError(f"Could not map action type: {action_type_str}")
             
             # Find the matching legal action with payload
             matching_action = None
@@ -340,22 +390,66 @@ Now reason about the best action and respond in JSON format as specified."""
                         break
             
             if not matching_action:
-                raise ValueError(f"Could not find matching legal action for {action_type_str}")
+                print(f"Warning: Could not find exact matching legal action for {action_type_str}", flush=True)
+                print(f"  Target action enum: {target_action.value if target_action else 'None'}", flush=True)
+                print(f"  Legal actions of this type: {[(a.value, type(p).__name__ if p else None) for a, p in legal_actions_list if a == target_action]}", flush=True)
+                print(f"  All available legal actions: {[a.value for a, _ in legal_actions_list]}", flush=True)
+                print(f"  LLM response JSON: {json.dumps(response_json, indent=2)[:500]}", flush=True)
+                
+                # Last resort: pick first matching action type
+                for action, payload in legal_actions_list:
+                    if action == target_action:
+                        matching_action = (action, payload)
+                        print(f"  Using first available action: {action.value}", flush=True)
+                        break
+                
+                if not matching_action:
+                    # The LLM returned an action that isn't legal. Try to find a similar legal action
+                    # For example, if LLM said "move_robber" but only "steal_resource" is legal,
+                    # that might mean the robber was already moved
+                    if target_action == Action.MOVE_ROBBER:
+                        # Check if STEAL_RESOURCE is available (robber already moved)
+                        for action, payload in legal_actions_list:
+                            if action == Action.STEAL_RESOURCE:
+                                print(f"  LLM wanted MOVE_ROBBER but it's not legal. Using STEAL_RESOURCE instead.", flush=True)
+                                matching_action = (action, payload)
+                                break
+                    
+                    if not matching_action:
+                        raise ValueError(f"Could not find matching legal action for {action_type_str}. Available: {[a.value for a, _ in legal_actions_list]}")
             
             # Return action, payload, and reasoning
             action, payload = matching_action
             return (action, payload, reasoning)
             
         except json.JSONDecodeError as e:
-            # Fallback: try to extract action from text
-            print(f"Warning: Failed to parse LLM response as JSON: {e}")
-            print(f"Response: {response_text[:500]}")
-            # Fallback to first legal action
+            # Fallback: try to extract action from text using regex
+            import re
+            print(f"Warning: Failed to parse LLM response as JSON: {e}", flush=True)
+            print(f"Response (first 500 chars): {response_text[:500]}", flush=True)
+            
+            # Try to extract action_type from text using regex
+            action_match = re.search(r'"action_type"\s*:\s*"([^"]+)"', response_text, re.IGNORECASE)
+            if not action_match:
+                action_match = re.search(r'action_type["\']?\s*[:=]\s*["\']?([a-z_]+)', response_text, re.IGNORECASE)
+            
+            if action_match:
+                action_type_str = action_match.group(1).lower()
+                # Try to find matching action
+                for action, payload in legal_actions_list:
+                    if action_type_str in action.value.lower() or action.value.lower() in action_type_str:
+                        print(f"  Extracted action from text: {action.value}", flush=True)
+                        return (action, payload, f"Parsed from text (JSON parse failed): {e}")
+            
+            # Last resort: fallback to first legal action
+            print(f"  Falling back to first legal action: {legal_actions_list[0][0].value}", flush=True)
             action, payload = legal_actions_list[0]
             return (action, payload, f"Failed to parse LLM response: {e}")
         except Exception as e:
-            print(f"Warning: Error processing LLM response: {e}")
-            print(f"Response: {response_text[:500]}")
+            print(f"Warning: Error processing LLM response: {e}", flush=True)
+            print(f"Response (first 500 chars): {response_text[:500]}", flush=True)
+            import traceback
+            traceback.print_exc()
             # Fallback to first legal action
             action, payload = legal_actions_list[0]
             return (action, payload, f"Error processing LLM response: {e}")

@@ -3,6 +3,7 @@ Serialization and LLM-friendly text conversion for the Catan game engine.
 """
 import json
 import re
+from collections import deque
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import asdict, field
 from enum import Enum
@@ -967,11 +968,15 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
         lines.append(f"  {rt.value.capitalize()}: {player.resources[rt]}")
     lines.append(f"Buildings: {player.settlements_built} settlements, {player.cities_built} cities")
     lines.append(f"Roads: {player.roads_built}")
+    # Calculate and show longest road length
+    longest_road_length = _calculate_longest_road_length(state, player_id)
+    if player.longest_road:
+        lines.append(f"  * Longest Road: {longest_road_length} segments")
+    elif longest_road_length > 0:
+        lines.append(f"  Longest Road: {longest_road_length} segments (needs 5+ for card)")
     lines.append(f"Dev Cards: {len(player.dev_cards)}")
     if player.dev_cards:
         lines.append(f"  Types: {', '.join(player.dev_cards)}")
-    if player.longest_road:
-        lines.append("  * Longest Road")
     if player.largest_army:
         lines.append("  * Largest Army")
     
@@ -984,12 +989,26 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
             lines.append(f"{p.name} ({p.id}):")
             lines.append(f"  Victory Points: {p.victory_points}")
             lines.append(f"  Total Resources: {sum(p.resources.values())}")
+            # Show resource breakdown (exact counts per type)
+            resource_breakdown = ", ".join([f"{rt.value}: {p.resources[rt]}" for rt in ResourceType if p.resources[rt] > 0])
+            if resource_breakdown:
+                lines.append(f"  Resources: {resource_breakdown}")
             lines.append(f"  Buildings: {p.settlements_built} settlements, {p.cities_built} cities")
             lines.append(f"  Roads: {p.roads_built}")
+            # Count development cards (visible count)
+            dev_card_count = len(p.dev_cards)
+            if dev_card_count > 0:
+                lines.append(f"  Development Cards: {dev_card_count} (hidden)")
+            # Longest road details - calculate actual longest road length
+            longest_road_length = _calculate_longest_road_length(state, p.id)
             if p.longest_road:
-                lines.append("  * Has Longest Road")
+                lines.append(f"  * Has Longest Road ({longest_road_length} road segments)")
+            elif longest_road_length > 0:
+                lines.append(f"  Longest Road: {longest_road_length} segments (needs 5+ for card)")
+            # Largest army details
             if p.largest_army:
-                lines.append("  * Has Largest Army")
+                knight_count = sum(1 for card in p.dev_cards if card == "knight")
+                lines.append(f"  * Has Largest Army ({knight_count} knights played)")
             # Show opponent building locations
             opponent_buildings = [i for i in state.intersections if i.owner == p.id]
             if opponent_buildings:
@@ -1005,6 +1024,23 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
     
     # Create tile lookup
     tile_map = {t.id: t for t in state.tiles}
+    
+    # Compact map representation
+    lines.append("=== Compact Map View ===")
+    map_lines = _generate_compact_map(state, player_id, tile_map)
+    lines.extend(map_lines)
+    lines.append("")
+    
+    # Resource scarcity analysis
+    resource_counts = {}
+    for tile in state.tiles:
+        if tile.resource_type:
+            resource_counts[tile.resource_type] = resource_counts.get(tile.resource_type, 0) + 1
+    if resource_counts:
+        lines.append("Resource Scarcity (tiles per resource type):")
+        scarcity_str = ", ".join([f"{rt.value}: {count} tiles" for rt, count in sorted(resource_counts.items(), key=lambda x: -x[1])])
+        lines.append(f"  {scarcity_str}")
+        lines.append("")
     
     # Dice probability reference
     lines.append("Dice Roll Probabilities (for resource production):")
@@ -1144,8 +1180,9 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
         # Sort by production value (descending)
         candidates.sort(key=lambda x: -x[1])
         
-        # Show top 15 candidates
-        for inter_id, prod, res_prod, port, adj_inters in candidates[:15]:
+        # Show ALL available candidates (not just top 15)
+        lines.append(f"  Total available: {len(candidates)} intersections")
+        for inter_id, prod, res_prod, port, adj_inters in candidates:
             lines.append(f"  Intersection {inter_id}{port}:")
             lines.append(f"    Production Value: {prod*100:.1f}% per roll")
             if res_prod:
@@ -1157,17 +1194,62 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
     
     lines.append("")
     
-    # Road network information
+    # Road network information - show ALL roads systematically
     lines.append("=== Road Network ===")
     your_roads = [r for r in state.road_edges if r.owner == player_id]
     if your_roads:
         lines.append(f"Your Roads ({len(your_roads)}):")
-        for road in your_roads:
-            lines.append(f"  Road {road.id}: connects intersections {road.intersection1_id} <-> {road.intersection2_id}")
+        for road in sorted(your_roads, key=lambda r: r.id):
+            inter1 = next((i for i in state.intersections if i.id == road.intersection1_id), None)
+            inter2 = next((i for i in state.intersections if i.id == road.intersection2_id), None)
+            tiles1 = sorted(inter1.adjacent_tiles)[:2] if inter1 and inter1.adjacent_tiles else []
+            tiles2 = sorted(inter2.adjacent_tiles)[:2] if inter2 and inter2.adjacent_tiles else []
+            tile_str1 = ",".join([f"T{tid}" for tid in tiles1])
+            tile_str2 = ",".join([f"T{tid}" for tid in tiles2])
+            lines.append(f"  Road {road.id}: I{road.intersection1_id}({tile_str1}) <-> I{road.intersection2_id}({tile_str2})")
     
     opponent_roads = [r for r in state.road_edges if r.owner and r.owner != player_id]
     if opponent_roads:
-        lines.append(f"Opponent Roads ({len(opponent_roads)} total)")
+        # Group by owner
+        roads_by_owner = {}
+        for road in opponent_roads:
+            if road.owner not in roads_by_owner:
+                roads_by_owner[road.owner] = []
+            roads_by_owner[road.owner].append(road)
+        
+        for owner_id, owner_roads in roads_by_owner.items():
+            owner_name = next((p.name for p in state.players if p.id == owner_id), owner_id)
+            lines.append(f"{owner_name}'s Roads ({len(owner_roads)}):")
+            for road in sorted(owner_roads, key=lambda r: r.id)[:10]:  # Limit to 10 per opponent
+                lines.append(f"  Road {road.id}: I{road.intersection1_id} <-> I{road.intersection2_id}")
+            if len(owner_roads) > 10:
+                lines.append(f"  ... and {len(owner_roads) - 10} more")
+    
+    # Show all unowned road edges (available for building)
+    unowned_roads = [r for r in state.road_edges if not r.owner]
+    if unowned_roads and state.phase == "playing":
+        lines.append(f"Available Roads ({len(unowned_roads)} total, showing first 20):")
+        for road in sorted(unowned_roads, key=lambda r: r.id)[:20]:
+            inter1 = next((i for i in state.intersections if i.id == road.intersection1_id), None)
+            inter2 = next((i for i in state.intersections if i.id == road.intersection2_id), None)
+            # Check if road can be built (must connect to your existing road or settlement)
+            can_build = False
+            if inter1 and inter1.owner == player_id:
+                can_build = True
+            if inter2 and inter2.owner == player_id:
+                can_build = True
+            # Also check if adjacent to your roads
+            if not can_build:
+                for your_road in your_roads:
+                    if (road.intersection1_id in [your_road.intersection1_id, your_road.intersection2_id] or
+                        road.intersection2_id in [your_road.intersection1_id, your_road.intersection2_id]):
+                        can_build = True
+                        break
+            
+            marker = " [CAN BUILD]" if can_build else ""
+            lines.append(f"  Road {road.id}: I{road.intersection1_id} <-> I{road.intersection2_id}{marker}")
+        if len(unowned_roads) > 20:
+            lines.append(f"  ... and {len(unowned_roads) - 20} more")
     
     lines.append("")
     
@@ -1188,6 +1270,47 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
     
     lines.append("")
     
+    # Pending trade information
+    if state.pending_trade_offer:
+        lines.append("=== Pending Trade Offer ===")
+        offer = state.pending_trade_offer
+        proposer = next((p for p in state.players if p.id == offer['proposer_id']), None)
+        proposer_name = proposer.name if proposer else offer['proposer_id']
+        
+        lines.append(f"Proposer: {proposer_name}")
+        lines.append(f"Target Players: {', '.join([next((p.name for p in state.players if p.id == pid), pid) for pid in offer['target_player_ids']])}")
+        
+        give_str = ", ".join([f"{count} {rt.value}" for rt, count in offer['give_resources'].items()])
+        receive_str = ", ".join([f"{count} {rt.value}" for rt, count in offer['receive_resources'].items()])
+        lines.append(f"Proposer gives: {give_str}")
+        lines.append(f"Proposer receives: {receive_str}")
+        
+        # Show responses so far
+        if state.pending_trade_responses:
+            lines.append("Responses so far:")
+            for pid, accepted in state.pending_trade_responses.items():
+                responder = next((p for p in state.players if p.id == pid), None)
+                responder_name = responder.name if responder else pid
+                status = "ACCEPTED" if accepted else "REJECTED"
+                lines.append(f"  {responder_name}: {status}")
+        
+        # Highlight if this player needs to respond
+        if player_id in offer['target_player_ids']:
+            if player_id not in state.pending_trade_responses:
+                lines.append(f"⚠️ YOU NEED TO RESPOND TO THIS TRADE (accept or reject)")
+            else:
+                lines.append(f"  You have already responded: {'ACCEPTED' if state.pending_trade_responses.get(player_id) else 'REJECTED'}")
+        elif player_id == offer['proposer_id']:
+            accepting_players = [pid for pid, accepted in state.pending_trade_responses.items() if accepted]
+            if len(accepting_players) > 1:
+                lines.append(f"⚠️ MULTIPLE PLAYERS ACCEPTED - YOU MUST SELECT A TRADE PARTNER")
+            elif len(accepting_players) == 1:
+                lines.append(f"  One player accepted - trade will execute automatically")
+            else:
+                lines.append(f"  Waiting for responses...")
+        
+        lines.append("")
+    
     # Recent history (last 3 actions)
     if history:
         lines.append("=== Recent Actions ===")
@@ -1206,15 +1329,282 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
     return "\n".join(lines)
 
 
-def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]]) -> str:
+def _calculate_longest_road_length(state: GameState, player_id: str) -> int:
+    """Calculate the longest continuous road for a player (same algorithm as engine)."""
+    player_roads = [r for r in state.road_edges if r.owner == player_id]
+    if not player_roads:
+        return 0
+    
+    # Build graph of connected roads
+    road_graph = {}
+    for road in player_roads:
+        inter1 = road.intersection1_id
+        inter2 = road.intersection2_id
+        if inter1 not in road_graph:
+            road_graph[inter1] = []
+        if inter2 not in road_graph:
+            road_graph[inter2] = []
+        road_graph[inter1].append(inter2)
+        road_graph[inter2].append(inter1)
+    
+    # Find longest path using DFS
+    max_length = 0
+    
+    def dfs_path_length(node: int, visited_nodes: set, visited_edges: set) -> int:
+        max_path = 0
+        for neighbor in road_graph.get(node, []):
+            edge_key = (min(node, neighbor), max(node, neighbor))
+            if edge_key not in visited_edges:
+                visited_edges.add(edge_key)
+                if neighbor not in visited_nodes:
+                    path_len = 1 + dfs_path_length(neighbor, visited_nodes | {neighbor}, visited_edges)
+                    max_path = max(max_path, path_len)
+                visited_edges.remove(edge_key)
+        return max_path
+    
+    for start_node in road_graph.keys():
+        path_len = dfs_path_length(start_node, {start_node}, set())
+        max_length = max(max_length, path_len)
+    
+    return max_length
+
+
+def _calculate_distance_between_intersections(state: GameState, inter1_id: int, inter2_id: int) -> Optional[int]:
+    """Calculate shortest path distance between two intersections using BFS."""
+    if inter1_id == inter2_id:
+        return 0
+    
+    # Build intersection graph
+    inter_graph = {}
+    for inter in state.intersections:
+        inter_graph[inter.id] = list(inter.adjacent_intersections)
+    
+    # BFS to find shortest path
+    from collections import deque
+    queue = deque([(inter1_id, 0)])
+    visited = {inter1_id}
+    
+    while queue:
+        current, distance = queue.popleft()
+        if current == inter2_id:
+            return distance
+        
+        for neighbor in inter_graph.get(current, []):
+            if neighbor not in visited:
+                visited.add(neighbor)
+                queue.append((neighbor, distance + 1))
+    
+    return None  # Not reachable
+
+
+def _generate_compact_map(state: GameState, player_id: str, tile_map: Dict[int, 'Tile']) -> List[str]:
     """
-    Convert a list of legal actions to LLM-friendly text.
+    Generate a compact ASCII map representation of the Catan board.
+    Shows tiles with resources/tokens, buildings, roads, and robber location.
+    """
+    lines = []
+    
+    # Create intersection ownership and building maps
+    inter_owner_map = {i.id: i.owner for i in state.intersections}
+    inter_building_map = {i.id: i.building_type for i in state.intersections}
+    inter_port_map = {i.id: i.port_type for i in state.intersections}
+    
+    # Create tile-to-intersections mapping
+    tile_to_intersections = {}
+    for inter in state.intersections:
+        for tile_id in inter.adjacent_tiles:
+            if tile_id not in tile_to_intersections:
+                tile_to_intersections[tile_id] = []
+            tile_to_intersections[tile_id].append(inter.id)
+    
+    # Get player names
+    player_names = {p.id: p.name for p in state.players}
+    
+    # Helper to format tile compactly
+    def format_tile_compact(tile_id: int) -> str:
+        if tile_id not in tile_map:
+            return "???"
+        tile = tile_map[tile_id]
+        if tile.resource_type is None:
+            robber = "🔴" if state.robber_tile_id == tile_id else " "
+            return f"{robber}DES"
+        
+        # Resource abbreviations: W=Wood, B=Brick, H=Wheat, S=Sheep, O=Ore
+        res_map = {"wood": "W", "brick": "B", "wheat": "H", "sheep": "S", "ore": "O"}
+        res_abbr = res_map.get(tile.resource_type.value, tile.resource_type.value[0].upper())
+        token = tile.number_token.value if tile.number_token else "?"
+        robber = "🔴" if state.robber_tile_id == tile_id else " "
+        return f"{robber}{res_abbr}{token:2d}"
+    
+    # Standard Catan hex layout (3-4-5-4-3 rows)
+    # Group tiles by row (r coordinate)
+    rows = {}
+    for tile in state.tiles:
+        q, r = tile.position
+        if r not in rows:
+            rows[r] = []
+        rows[r].append((q, tile.id))
+    
+    # Sort rows by r (top to bottom: -2, -1, 0, 1, 2)
+    sorted_rows = sorted(rows.items(), key=lambda x: x[0])
+    
+    lines.append("=== Compact Map (Hexagonal Layout) ===")
+    lines.append("Format: [🔴=Robber][Resource][Token], e.g., ' W 6' = Wood token 6")
+    lines.append("Buildings: 🏠=Your Settlement, 🏛️=Your City, S=Opp Settlement, C=Opp City")
+    lines.append("")
+    
+    # Display tiles in rows with indentation for hex layout
+    for r, tiles_in_row in sorted_rows:
+        tiles_in_row.sort(key=lambda x: x[0])  # Sort by q coordinate
+        
+        # Indent based on row (hexagonal pattern)
+        indent = abs(r) * 3  # More indent for outer rows
+        
+        # Format tiles
+        tile_strs = []
+        for q, tile_id in tiles_in_row:
+            tile_str = format_tile_compact(tile_id)
+            tile_strs.append(tile_str)
+        
+        lines.append(" " * indent + "  ".join(tile_strs))
+        
+        # Show buildings on intersections of tiles in this row (compact)
+        building_info = []
+        for q, tile_id in tiles_in_row:
+            intersections = tile_to_intersections.get(tile_id, [])
+            for inter_id in intersections[:2]:  # Limit to 2 per tile
+                owner = inter_owner_map.get(inter_id)
+                building = inter_building_map.get(inter_id)
+                port = inter_port_map.get(inter_id)
+                
+                if owner == player_id:
+                    symbol = "🏠" if building == "settlement" else "🏛️" if building == "city" else ""
+                elif owner:
+                    symbol = "S" if building == "settlement" else "C" if building == "city" else ""
+                else:
+                    symbol = ""
+                
+                if symbol:
+                    port_str = f"[{port}]" if port else ""
+                    building_info.append(f"I{inter_id}{symbol}{port_str}")
+        
+        if building_info:
+            lines.append(" " * indent + "  ".join(building_info[:6]))  # Limit length
+    
+    lines.append("")
+    
+    # Summary: Your buildings with tile locations
+    your_intersections = [i for i in state.intersections if i.owner == player_id]
+    if your_intersections:
+        lines.append("Your Buildings:")
+        for inter in your_intersections[:8]:  # Top 8
+            tiles = [f"T{tid}" for tid in sorted(inter.adjacent_tiles)[:3]]
+            port_str = f" [PORT:{inter.port_type}]" if inter.port_type else ""
+            lines.append(f"  I{inter.id}: {inter.building_type}{port_str} on {','.join(tiles)}")
+    
+    # Summary: Opponent buildings
+    opp_intersections = [i for i in state.intersections if i.owner and i.owner != player_id]
+    if opp_intersections:
+        lines.append("Opponent Buildings:")
+        for inter in opp_intersections[:8]:  # Top 8
+            owner_name = player_names.get(inter.owner, inter.owner)
+            tiles = [f"T{tid}" for tid in sorted(inter.adjacent_tiles)[:3]]
+            port_str = f" [PORT:{inter.port_type}]" if inter.port_type else ""
+            lines.append(f"  I{inter.id}: {inter.building_type} ({owner_name}){port_str} on {','.join(tiles)}")
+    
+    # Road network summary
+    your_roads = [r for r in state.road_edges if r.owner == player_id]
+    if your_roads:
+        road_connections = [f"I{r.intersection1_id}-I{r.intersection2_id}" for r in your_roads[:12]]
+        lines.append(f"Your Roads ({len(your_roads)}): {', '.join(road_connections)}")
+        if len(your_roads) > 12:
+            lines.append(f"  ... and {len(your_roads) - 12} more")
+    
+    return lines
+
+
+def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]], state: Optional[GameState] = None, player_id: Optional[str] = None) -> str:
+    """
+    Convert a list of legal actions to LLM-friendly text with spatial context.
     """
     if not actions:
         return "No legal actions available."
     
     lines = []
     lines.append("=== Legal Actions ===")
+    
+    # Create lookup maps if state is provided
+    inter_map = {}
+    road_map = {}
+    tile_map = {}
+    if state:
+        inter_map = {i.id: i for i in state.intersections}
+        road_map = {r.id: r for r in state.road_edges}
+        tile_map = {t.id: t for t in state.tiles}
+    
+    # Helper to get intersection context
+    def get_intersection_context(inter_id: int) -> str:
+        if not state or inter_id not in inter_map:
+            return ""
+        inter = inter_map[inter_id]
+        context_parts = []
+        
+        # Show adjacent tiles with resources
+        if inter.adjacent_tiles:
+            tile_info = []
+            for tile_id in sorted(inter.adjacent_tiles):
+                tile = tile_map.get(tile_id)
+                if tile:
+                    if tile.resource_type:
+                        res_abbr = tile.resource_type.value[0].upper()
+                        if tile.resource_type.value == "wheat":
+                            res_abbr = "H"
+                        token = tile.number_token.value if tile.number_token else "?"
+                        tile_info.append(f"T{tile_id}({res_abbr}{token})")
+                    else:
+                        tile_info.append(f"T{tile_id}(DES)")
+            if tile_info:
+                context_parts.append(f"tiles: {','.join(tile_info[:3])}")
+        
+        # Show port if exists
+        if inter.port_type:
+            context_parts.append(f"PORT:{inter.port_type}")
+        
+        # Show building if exists
+        if inter.owner:
+            owner_name = next((p.name for p in state.players if p.id == inter.owner), inter.owner) if state else inter.owner
+            building = inter.building_type or "empty"
+            if inter.owner == player_id:
+                context_parts.append(f"YOUR {building.upper()}")
+            else:
+                context_parts.append(f"{owner_name}'s {building}")
+        
+        if context_parts:
+            return f" ({'; '.join(context_parts)})"
+        return ""
+    
+    # Helper to get road context
+    def get_road_context(road_id: int) -> str:
+        if not state or road_id not in road_map:
+            return ""
+        road = road_map[road_id]
+        context_parts = []
+        
+        # Show which intersections it connects
+        inter1 = inter_map.get(road.intersection1_id)
+        inter2 = inter_map.get(road.intersection2_id)
+        
+        if inter1 and inter2:
+            # Show tile info for each intersection
+            tiles1 = sorted(inter1.adjacent_tiles)[:2] if inter1.adjacent_tiles else []
+            tiles2 = sorted(inter2.adjacent_tiles)[:2] if inter2.adjacent_tiles else []
+            tile_str1 = ",".join([f"T{tid}" for tid in tiles1])
+            tile_str2 = ",".join([f"T{tid}" for tid in tiles2])
+            context_parts.append(f"I{road.intersection1_id}({tile_str1})<->I{road.intersection2_id}({tile_str2})")
+        
+        if context_parts:
+            return f" ({'; '.join(context_parts)})"
+        return ""
     
     # Group actions by type
     action_groups = {}
@@ -1236,11 +1626,14 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]])
             # Single action with payload
             payload = group[0][1]
             if isinstance(payload, BuildSettlementPayload):
-                lines.append(f"- {action_name} at intersection {payload.intersection_id}")
+                context = get_intersection_context(payload.intersection_id)
+                lines.append(f"- {action_name} at intersection {payload.intersection_id}{context}")
             elif isinstance(payload, BuildRoadPayload):
-                lines.append(f"- {action_name} on road edge {payload.road_edge_id}")
+                context = get_road_context(payload.road_edge_id)
+                lines.append(f"- {action_name} on road edge {payload.road_edge_id}{context}")
             elif isinstance(payload, BuildCityPayload):
-                lines.append(f"- {action_name} at intersection {payload.intersection_id}")
+                context = get_intersection_context(payload.intersection_id)
+                lines.append(f"- {action_name} at intersection {payload.intersection_id}{context}")
             elif isinstance(payload, PlayDevCardPayload):
                 lines.append(f"- {action_name} ({payload.card_type})")
             elif isinstance(payload, TradeBankPayload):
@@ -1257,11 +1650,14 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]])
             lines.append(f"- {action_name}:")
             for action, payload in group:
                 if isinstance(payload, BuildSettlementPayload):
-                    lines.append(f"  * At intersection {payload.intersection_id}")
+                    context = get_intersection_context(payload.intersection_id)
+                    lines.append(f"  * At intersection {payload.intersection_id}{context}")
                 elif isinstance(payload, BuildRoadPayload):
-                    lines.append(f"  * On road edge {payload.road_edge_id}")
+                    context = get_road_context(payload.road_edge_id)
+                    lines.append(f"  * On road edge {payload.road_edge_id}{context}")
                 elif isinstance(payload, BuildCityPayload):
-                    lines.append(f"  * At intersection {payload.intersection_id}")
+                    context = get_intersection_context(payload.intersection_id)
+                    lines.append(f"  * At intersection {payload.intersection_id}{context}")
                 elif isinstance(payload, PlayDevCardPayload):
                     lines.append(f"  * Card: {payload.card_type}")
                 elif isinstance(payload, TradeBankPayload):

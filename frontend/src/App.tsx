@@ -234,6 +234,11 @@ function App() {
     const activePlayer = getCurrentPlayer()
     if (!activePlayer) return
     
+    // Don't auto-advance if there's a pending trade (wait for trade to complete)
+    if (gameState.pending_trade_offer) {
+      return
+    }
+    
     // Check if current player is an agent
     const currentPlayerIsAgent = activePlayer.id in agentMapping
     
@@ -270,7 +275,7 @@ function App() {
       const timeout = setTimeout(advanceAgentTurn, 500)
       return () => clearTimeout(timeout)
     }
-  }, [gameState?.current_player_index, gameState?.setup_phase_player_index, gameState?.phase, gameState?.game_id, gameState, agentMapping, playerId, loading, view])
+  }, [gameState?.current_player_index, gameState?.setup_phase_player_index, gameState?.phase, gameState?.game_id, gameState, agentMapping, playerId, loading, view, stepByStepMode])
 
   const refreshGameState = async () => {
     if (!gameState) return
@@ -2074,6 +2079,100 @@ function App() {
           </div>
         )}
         
+        {gameState?.pending_trade_offer && view === 'game' && (
+          <div style={{ 
+            padding: '1rem', 
+            backgroundColor: '#e3f2fd', 
+            border: '1px solid #2196F3',
+            borderRadius: '4px',
+            marginBottom: '1rem',
+            marginTop: '1rem'
+          }}>
+            <strong>💼 Trade Pending:</strong>
+            <div style={{ marginTop: '0.5rem', color: '#666' }}>
+              {gameState.pending_trade_offer.proposer_id === playerId ? (
+                <>You proposed a trade. Waiting for responses from other players...</>
+              ) : (
+                <>A trade has been proposed. {activePlayer?.id === playerId ? 'It\'s your turn to respond.' : 'Waiting for responses...'}</>
+              )}
+            </div>
+          </div>
+        )}
+        
+        {lastReasoning && view === 'game' && (
+          <div style={{ 
+            padding: '1rem', 
+            backgroundColor: '#fff3cd', 
+            border: '1px solid #ffc107',
+            borderRadius: '4px',
+            marginBottom: '1rem'
+          }}>
+            <strong>🤔 Last Agent Reasoning:</strong>
+            <div style={{ marginTop: '0.5rem', fontStyle: 'italic', color: '#666', whiteSpace: 'pre-wrap' }}>
+              {lastReasoning}
+            </div>
+          </div>
+        )}
+        
+        {/* Step-by-step mode controls for main game view */}
+        {view === 'game' && gameState && Object.keys(agentMapping).length > 0 && (
+          <div style={{ 
+            padding: '1rem', 
+            backgroundColor: '#f5f5f5', 
+            border: '1px solid #ddd',
+            borderRadius: '4px',
+            marginBottom: '1rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '1rem',
+            flexWrap: 'wrap'
+          }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={stepByStepMode}
+                onChange={(e) => setStepByStepMode(e.target.checked)}
+              />
+              <span>Step-by-Step Mode (read reasoning before advancing)</span>
+            </label>
+            
+            {stepByStepMode && activePlayer && activePlayer.id in agentMapping && activePlayer.id !== playerId && !gameState.pending_trade_offer && (
+              <button
+                onClick={async () => {
+                  if (!gameState || loading) return
+                  try {
+                    setLoading(true)
+                    const result = await watchAgentsStep(gameState.game_id, agentMapping)
+                    setGameState(result.new_state)
+                    
+                    // Store reasoning if available
+                    if (result.reasoning) {
+                      setLastReasoning(result.reasoning)
+                    }
+                    
+                    if (result.error) {
+                      setError(`Agent error: ${result.error}`)
+                    }
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Failed to advance agent turn')
+                  } finally {
+                    setLoading(false)
+                  }
+                }}
+                disabled={loading || !gameState}
+                className="action-button"
+                style={{ 
+                  backgroundColor: '#4CAF50',
+                  color: 'white',
+                  padding: '0.5rem 1rem'
+                }}
+              >
+                {loading ? '⏳ Processing...' : '⏭️ Next Step'}
+              </button>
+            )}
+          </div>
+        )}
+        
         <div className="game-info-bar">
           <div>
             <strong>Game ID:</strong> {gameState?.game_id}
@@ -2467,6 +2566,10 @@ function App() {
                                     
                                     const newState = await postAction(gameState!.game_id, playerId, tradeAction)
                                     setGameState(newState)
+                                    
+                                    // Refresh legal actions after proposing trade
+                                    // (current player may have changed to target player)
+                                    await fetchLegalActions()
                                     
                                     // Clear the trade form
                                     setGiveResources({})
