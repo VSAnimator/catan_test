@@ -319,19 +319,54 @@ Now reason about the best action and respond in JSON format as specified."""
             action_payload_dict = response_json.get("action_payload", {})
             reasoning = response_json.get("reasoning", None)  # Extract reasoning
             
-            # Find matching action
+            # Handle compound or invalid action names BEFORE normalization
+            # If the LLM returns a compound action, try to map it to the appropriate single action
+            if "move_robber" in action_type_str and "steal" in action_type_str:
+                # Compound action: move_robber_and_steal
+                # Check what's actually legal - if only steal is legal, use that
+                has_steal = any(a == Action.STEAL_RESOURCE for a, _ in legal_actions_list)
+                has_move = any(a == Action.MOVE_ROBBER for a, _ in legal_actions_list)
+                if has_steal and not has_move:
+                    action_type_str = "steal_resource"
+                elif has_move:
+                    action_type_str = "move_robber"
+                else:
+                    # Neither is legal, will be caught later
+                    action_type_str = "steal_resource"  # Default fallback
+            elif "pass" in action_type_str or "skip" in action_type_str:
+                # LLM trying to "pass" or "skip" - map to appropriate action based on what's legal
+                if any(a == Action.STEAL_RESOURCE for a, _ in legal_actions_list):
+                    # Must steal before passing/skipping
+                    action_type_str = "steal_resource"
+                elif any(a == Action.END_TURN for a, _ in legal_actions_list):
+                    action_type_str = "end_turn"
+                else:
+                    # Use first available action
+                    if legal_actions_list:
+                        # Map to the first legal action's type
+                        first_action = legal_actions_list[0][0]
+                        action_type_str = first_action.value
+            
+            # Normalize action type string: replace spaces/hyphens with underscores, remove extra chars
+            action_type_normalized = action_type_str.replace(" ", "_").replace("-", "_").strip()
+            
+            # Find matching action - try multiple matching strategies
             action_type_map = {
                 "build_settlement": Action.BUILD_SETTLEMENT,
                 "build_city": Action.BUILD_CITY,
                 "build_road": Action.BUILD_ROAD,
                 "buy_dev_card": Action.BUY_DEV_CARD,
+                "buy_devcard": Action.BUY_DEV_CARD,  # Alternative spelling
                 "play_dev_card": Action.PLAY_DEV_CARD,
+                "play_devcard": Action.PLAY_DEV_CARD,  # Alternative spelling
+                "play_development_card": Action.PLAY_DEV_CARD,  # Full name variant
                 "trade_bank": Action.TRADE_BANK,
                 "propose_trade": Action.PROPOSE_TRADE,
                 "accept_trade": Action.ACCEPT_TRADE,
                 "reject_trade": Action.REJECT_TRADE,
                 "select_trade_partner": Action.SELECT_TRADE_PARTNER,
                 "move_robber": Action.MOVE_ROBBER,
+                "robber_move": Action.MOVE_ROBBER,  # Alternative name
                 "steal_resource": Action.STEAL_RESOURCE,
                 "discard_resources": Action.DISCARD_RESOURCES,
                 "end_turn": Action.END_TURN,
@@ -340,12 +375,26 @@ Now reason about the best action and respond in JSON format as specified."""
                 "start_game": Action.START_GAME,
             }
             
-            target_action = action_type_map.get(action_type_str)
+            # Try exact match first (normalized)
+            target_action = action_type_map.get(action_type_normalized)
+            
+            # Try original string too
             if not target_action:
-                # Try to find by partial match
+                target_action = action_type_map.get(action_type_str)
+            
+            # Try matching against legal actions with fuzzy matching
+            if not target_action:
+                # Remove common words and normalize
+                action_clean = action_type_normalized.replace("dev", "dev_card").replace("card", "dev_card")
                 for action, _ in legal_actions_list:
-                    if action_type_str in action.value.lower() or action.value.lower() in action_type_str:
+                    action_value_lower = action.value.lower()
+                    # Check if normalized string matches action value
+                    if (action_type_normalized == action_value_lower or
+                        action_clean == action_value_lower or
+                        action_type_normalized in action_value_lower or
+                        action_value_lower in action_type_normalized):
                         target_action = action
+                        print(f"  Matched via fuzzy: '{action_type_str}' -> {action.value}", flush=True)
                         break
             
             if not target_action:
@@ -414,6 +463,26 @@ Now reason about the best action and respond in JSON format as specified."""
                                 print(f"  LLM wanted MOVE_ROBBER but it's not legal. Using STEAL_RESOURCE instead.", flush=True)
                                 matching_action = (action, payload)
                                 break
+                    elif target_action == Action.END_TURN:
+                        # Check if STEAL_RESOURCE is available (must steal before ending turn)
+                        for action, payload in legal_actions_list:
+                            if action == Action.STEAL_RESOURCE:
+                                print(f"  LLM wanted END_TURN but STEAL_RESOURCE is required first. Using STEAL_RESOURCE instead.", flush=True)
+                                matching_action = (action, payload)
+                                break
+                    else:
+                        # LLM returned an action that's not legal. Try to find the most appropriate legal action
+                        # Common case: LLM wants to build/trade but must steal first
+                        if any(a == Action.STEAL_RESOURCE for a, _ in legal_actions_list):
+                            for action, payload in legal_actions_list:
+                                if action == Action.STEAL_RESOURCE:
+                                    print(f"  LLM wanted {target_action.value if target_action else action_type_str} but STEAL_RESOURCE is required first. Using STEAL_RESOURCE instead.", flush=True)
+                                    matching_action = (action, payload)
+                                    break
+                        # If no special case matches, just use the first legal action
+                        if not matching_action and legal_actions_list:
+                            matching_action = legal_actions_list[0]
+                            print(f"  LLM wanted {target_action.value if target_action else action_type_str} but it's not legal. Using first available action: {matching_action[0].value}", flush=True)
                     
                     if not matching_action:
                         raise ValueError(f"Could not find matching legal action for {action_type_str}. Available: {[a.value for a, _ in legal_actions_list]}")
