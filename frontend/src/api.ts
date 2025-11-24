@@ -1,4 +1,4 @@
-const API_BASE = 'http://localhost:8001/api'  // Using 8001 to avoid conflict with main branch on 8000
+const API_BASE = 'http://localhost:8000/api'
 
 export interface Player {
   id: string
