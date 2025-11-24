@@ -12,7 +12,7 @@ dev: dev-backend dev-frontend
 
 dev-backend:
 	@echo "Starting backend server..."
-	cd backend && source .venv/bin/activate && uvicorn main:app --reload
+	source ~/.zshrc && cd backend && source .venv/bin/activate && uvicorn main:app --reload
 
 dev-frontend:
 	@echo "Starting frontend server..."

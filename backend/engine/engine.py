@@ -112,6 +112,10 @@ class GameState:
     pending_trade_responses: Dict[str, bool] = field(default_factory=dict)  # Player ID -> True if accepted, False if rejected
     pending_trade_current_responder_index: int = 0  # Index into target_player_ids for current responder
     
+    # Turn tracking
+    actions_taken_this_turn: List[Dict[str, Any]] = field(default_factory=list)  # List of actions taken this turn: [{"player_id": str, "action": str, "payload": dict}]
+    consecutive_rejected_trades: Dict[str, int] = field(default_factory=dict)  # Player ID -> count of consecutive rejected trades this turn
+    
     def step(self, action: 'Action', payload: Optional['ActionPayload'] = None, player_id: Optional[str] = None) -> 'GameState':
         """
         Pure function that takes an action and returns a new GameState.
@@ -123,6 +127,10 @@ class GameState:
             player_id: Optional player ID (used for actions like DISCARD_RESOURCES that can be done out of turn)
         """
         new_state = copy.deepcopy(self)
+        
+        # Track the current player BEFORE handlers potentially change it
+        # (e.g., propose_trade changes current_player_index to target player)
+        current_player_before = new_state.players[new_state.current_player_index] if new_state.phase == "playing" else None
         
         if action == Action.ROLL_DICE:
             result = self._handle_roll_dice(new_state)
@@ -164,6 +172,22 @@ class GameState:
             result = self._handle_discard_resources(new_state, payload, player_id)
         else:
             raise ValueError(f"Unknown action: {action}")
+        
+        # Track action taken this turn (only for playing phase, and only for current player's actions)
+        # Use current_player_before because handlers may change current_player_index (e.g., propose_trade)
+        if result.phase == "playing" and player_id is None and current_player_before:
+            # Convert payload to dict for storage
+            payload_dict = None
+            if payload:
+                payload_dict = {
+                    k: (v.value if hasattr(v, 'value') else v)
+                    for k, v in payload.__dict__.items()
+                }
+            result.actions_taken_this_turn.append({
+                "player_id": current_player_before.id,
+                "action": action.value,
+                "payload": payload_dict
+            })
         
         # Check for victory condition after any action (first player to reach 10 VPs wins)
         # Only check during playing phase (can't reach 10 VPs during setup - max is 2 from 2 settlements)
@@ -949,6 +973,13 @@ class GameState:
         
         current_player = new_state.players[new_state.current_player_index]
         
+        # Check if this player has had 3 consecutive rejected trades this turn
+        # If so, automatically end their turn instead of allowing another trade proposal
+        consecutive_rejections = new_state.consecutive_rejected_trades.get(current_player.id, 0)
+        if consecutive_rejections >= 3:
+            # Auto-end turn instead of proposing trade
+            return self._handle_end_turn(new_state)
+        
         # Validate proposer has enough resources
         for resource, amount in payload.give_resources.items():
             if current_player.resources[resource] < amount:
@@ -1032,10 +1063,14 @@ class GameState:
                 new_state.pending_trade_current_responder_index = 0
             elif len(accepting_players) == 1:
                 # Exactly one accepted - execute trade immediately
-                new_state = self._execute_trade(new_state, offer['proposer_id'], accepting_players[0], 
+                # Reset consecutive rejected trades counter for proposer (trade succeeded)
+                proposer_id = offer['proposer_id']
+                new_state.consecutive_rejected_trades[proposer_id] = 0
+                
+                new_state = self._execute_trade(new_state, proposer_id, accepting_players[0], 
                                                 offer['give_resources'], offer['receive_resources'])
                 # Clear trade state and return to proposer
-                proposer_index = next((i for i, p in enumerate(new_state.players) if p.id == offer['proposer_id']), None)
+                proposer_index = next((i for i, p in enumerate(new_state.players) if p.id == proposer_id), None)
                 if proposer_index is not None:
                     new_state.current_player_index = proposer_index
                 new_state.pending_trade_offer = None
@@ -1084,10 +1119,14 @@ class GameState:
         else:
             # All players have responded - check if any accepted
             accepting_players = [pid for pid, accepted in new_state.pending_trade_responses.items() if accepted]
+            proposer_id = offer['proposer_id']
             
             if len(accepting_players) == 0:
-                # No one accepted - clear trade and return to proposer
-                proposer_index = next((i for i, p in enumerate(new_state.players) if p.id == offer['proposer_id']), None)
+                # No one accepted - increment consecutive rejected trades counter for proposer
+                new_state.consecutive_rejected_trades[proposer_id] = new_state.consecutive_rejected_trades.get(proposer_id, 0) + 1
+                
+                # Clear trade and return to proposer
+                proposer_index = next((i for i, p in enumerate(new_state.players) if p.id == proposer_id), None)
                 if proposer_index is not None:
                     new_state.current_player_index = proposer_index
                 new_state.pending_trade_offer = None
@@ -1095,10 +1134,13 @@ class GameState:
                 new_state.pending_trade_current_responder_index = 0
             elif len(accepting_players) == 1:
                 # Exactly one accepted - execute trade immediately
-                new_state = self._execute_trade(new_state, offer['proposer_id'], accepting_players[0], 
+                # Reset consecutive rejected trades counter for proposer (trade succeeded)
+                new_state.consecutive_rejected_trades[proposer_id] = 0
+                
+                new_state = self._execute_trade(new_state, proposer_id, accepting_players[0], 
                                                 offer['give_resources'], offer['receive_resources'])
                 # Clear trade state and return to proposer
-                proposer_index = next((i for i, p in enumerate(new_state.players) if p.id == offer['proposer_id']), None)
+                proposer_index = next((i for i, p in enumerate(new_state.players) if p.id == proposer_id), None)
                 if proposer_index is not None:
                     new_state.current_player_index = proposer_index
                 new_state.pending_trade_offer = None
@@ -1106,7 +1148,7 @@ class GameState:
                 new_state.pending_trade_current_responder_index = 0
             else:
                 # Multiple accepted - proposer chooses
-                proposer_index = next((i for i, p in enumerate(new_state.players) if p.id == offer['proposer_id']), None)
+                proposer_index = next((i for i, p in enumerate(new_state.players) if p.id == proposer_id), None)
                 if proposer_index is not None:
                     new_state.current_player_index = proposer_index
         
@@ -1134,8 +1176,12 @@ class GameState:
         if not new_state.pending_trade_responses[payload.selected_player_id]:
             raise ValueError(f"Player {payload.selected_player_id} rejected the trade")
         
+        # Reset consecutive rejected trades counter for proposer (trade succeeded)
+        proposer_id = offer['proposer_id']
+        new_state.consecutive_rejected_trades[proposer_id] = 0
+        
         # Execute trade with selected player
-        new_state = self._execute_trade(new_state, offer['proposer_id'], payload.selected_player_id,
+        new_state = self._execute_trade(new_state, proposer_id, payload.selected_player_id,
                                         offer['give_resources'], offer['receive_resources'])
         
         # Clear trade state
@@ -1204,6 +1250,9 @@ class GameState:
         # Clear dev card tracking for next turn
         new_state.dev_cards_bought_this_turn = set()
         new_state.dev_cards_played_this_turn = set()
+        # Clear turn tracking for next player's turn
+        new_state.actions_taken_this_turn = []
+        new_state.consecutive_rejected_trades = {}
         # Note: roads_from_road_building persists across turns until used (player can build roads on later turns)
         
         return new_state

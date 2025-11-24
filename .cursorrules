@@ -1,5 +1,10 @@
 # Cursor Rules for Catan Agent Project
 
+## Backend Server Restart
+- **ALWAYS source ~/.zshrc before restarting the backend server**
+- When restarting the backend, use: `source ~/.zshrc && cd backend && source .venv/bin/activate && uvicorn main:app --reload --host 0.0.0.0 --port 8000`
+- This ensures all shell environment variables and PATH settings are loaded correctly
+
 ## Output Handling
 - **NEVER pipe command outputs** (e.g., `| tail`, `| head`, `| grep`, etc.) when running commands
 - Piping loses visibility and potentially loses information

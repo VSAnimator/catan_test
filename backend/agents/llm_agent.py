@@ -331,6 +331,27 @@ Respond in JSON format:
   "action_payload": { ... } // Optional payload, matching the action type
 }
 
+**CRITICAL: Action Payload Format**
+When you see actions like "On road edge 6" or "At intersection 44", use these EXACT field names:
+- For build_road: { "road_edge_id": 6 }  (NOT "road_id")
+- For build_settlement: { "intersection_id": 44 }  (NOT "intersection" or "intersectionId")
+- For build_city: { "intersection_id": 44 }
+- For move_robber: { "tile_id": 5 }
+- For steal_resource: { "other_player_id": "player_1" }
+- For trade_bank: { "give_resources": {"wood": 4}, "receive_resources": {"brick": 1} }
+- For propose_trade: { "give_resources": {"wood": 1}, "receive_resources": {"brick": 1}, "target_player_ids": ["player_1", "player_2"] }
+- For play_dev_card: { "card_type": "knight" } (or "year_of_plenty", "monopoly", "road_building", "victory_point")
+- For play_dev_card with year_of_plenty: { "card_type": "year_of_plenty", "year_of_plenty_resources": {"wood": 1, "brick": 1} }
+- For play_dev_card with monopoly: { "card_type": "monopoly", "monopoly_resource_type": "wood" }
+- For discard_resources: { "resources": {"wood": 2, "brick": 1} }
+- For select_trade_partner: { "selected_player_id": "player_1" }
+- Actions without payload: end_turn, buy_dev_card, accept_trade, reject_trade (use null or omit action_payload)
+
+Examples:
+- To build road on edge 34: {"action_type": "build_road", "action_payload": {"road_edge_id": 34}}
+- To build settlement at intersection 44: {"action_type": "build_settlement", "action_payload": {"intersection_id": 44}}
+- To end turn: {"action_type": "end_turn", "action_payload": null}
+
 Be strategic and consider:
 - Building settlements/cities for VPs
 - Building roads for expansion and longest road
@@ -403,6 +424,21 @@ Now reason about the best action and respond in JSON format as specified."""
             action_type_str = response_json.get("action_type", "").lower()
             action_payload_dict = response_json.get("action_payload", {})
             reasoning = response_json.get("reasoning", None)  # Extract reasoning
+            
+            # Special handling: During setup phase, map "build_settlement" to "setup_place_settlement"
+            # and "build_road" to "setup_place_road" if those are the legal actions
+            # This is critical because LLMs often use "build_settlement" even during setup
+            if state.phase == "setup":
+                if action_type_str == "build_settlement":
+                    # Check if setup_place_settlement is legal
+                    if any(a == Action.SETUP_PLACE_SETTLEMENT for a, _ in legal_actions_list):
+                        action_type_str = "setup_place_settlement"
+                        print(f"  Mapped 'build_settlement' to 'setup_place_settlement' during setup phase", flush=True)
+                elif action_type_str == "build_road":
+                    # Check if setup_place_road is legal
+                    if any(a == Action.SETUP_PLACE_ROAD for a, _ in legal_actions_list):
+                        action_type_str = "setup_place_road"
+                        print(f"  Mapped 'build_road' to 'setup_place_road' during setup phase", flush=True)
             
             # Handle compound or invalid action names BEFORE normalization
             # If the LLM returns a compound action, try to map it to the appropriate single action
@@ -555,6 +591,104 @@ Now reason about the best action and respond in JSON format as specified."""
                         print(f"Warning: LLM requested road_id {llm_road_id} but it's not in legal actions. Using first available.", flush=True)
                         matching_action = preferred_match
             
+            # For SETUP_PLACE_SETTLEMENT and BUILD_SETTLEMENT actions, match by intersection_id
+            elif target_action in (Action.SETUP_PLACE_SETTLEMENT, Action.BUILD_SETTLEMENT) and action_payload_dict:
+                # LLM might use "intersection" or "intersectionId" instead of "intersection_id"
+                llm_intersection_id = (action_payload_dict.get("intersection_id") or 
+                                      action_payload_dict.get("intersection") or
+                                      action_payload_dict.get("intersectionId"))
+                if llm_intersection_id is not None:
+                    # Try to find exact match first
+                    for action, payload in legal_actions_list:
+                        if action == target_action and payload and hasattr(payload, "intersection_id"):
+                            if payload.intersection_id == llm_intersection_id:
+                                exact_match = (action, payload)
+                                break
+                            # Also store first match as fallback
+                            if not preferred_match:
+                                preferred_match = (action, payload)
+                    
+                    if exact_match:
+                        matching_action = exact_match
+                    elif preferred_match:
+                        # LLM specified an intersection_id but it doesn't match any legal action
+                        print(f"Warning: LLM requested intersection_id {llm_intersection_id} but it's not in legal actions. Using first available.", flush=True)
+                        matching_action = preferred_match
+            
+            # For BUILD_CITY actions, match by intersection_id
+            elif target_action == Action.BUILD_CITY and action_payload_dict:
+                # LLM might use "intersection" or "intersectionId" instead of "intersection_id"
+                llm_intersection_id = (action_payload_dict.get("intersection_id") or 
+                                      action_payload_dict.get("intersection") or
+                                      action_payload_dict.get("intersectionId"))
+                if llm_intersection_id is not None:
+                    # Try to find exact match first
+                    for action, payload in legal_actions_list:
+                        if action == target_action and payload and hasattr(payload, "intersection_id"):
+                            if payload.intersection_id == llm_intersection_id:
+                                exact_match = (action, payload)
+                                break
+                            # Also store first match as fallback
+                            if not preferred_match:
+                                preferred_match = (action, payload)
+                    
+                    if exact_match:
+                        matching_action = exact_match
+                    elif preferred_match:
+                        # LLM specified an intersection_id but it doesn't match any legal action
+                        print(f"Warning: LLM requested intersection_id {llm_intersection_id} but it's not in legal actions. Using first available.", flush=True)
+                        matching_action = preferred_match
+            
+            # For PROPOSE_TRADE, require exact match BEFORE standard matching
+            # This prevents mismatches where LLM says "sheep" in reasoning but outputs "brick" in JSON
+            # CRITICAL: Check this FIRST before standard matching to avoid incorrect matches
+            if target_action == Action.PROPOSE_TRADE and action_payload_dict:
+                if "give_resources" in action_payload_dict and "receive_resources" in action_payload_dict:
+                    llm_give = action_payload_dict["give_resources"]
+                    llm_receive = action_payload_dict["receive_resources"]
+                    # Normalize LLM's resource dict (convert string keys to ResourceType if needed)
+                    def normalize_llm_resource_dict(d):
+                        """Normalize LLM's resource dict to match legal action format."""
+                        result = {}
+                        for k, v in d.items():
+                            # Convert string resource names to ResourceType enum if needed
+                            if isinstance(k, str):
+                                from engine import ResourceType
+                                try:
+                                    # Try to find matching ResourceType
+                                    for rt in ResourceType:
+                                        if rt.value == k.lower():
+                                            result[rt] = v
+                                            break
+                                    else:
+                                        # Keep as string if no match
+                                        result[k] = v
+                                except:
+                                    result[k] = v
+                            else:
+                                result[k] = v
+                        return result
+                    
+                    llm_give_normalized = normalize_llm_resource_dict(llm_give)
+                    llm_receive_normalized = normalize_llm_resource_dict(llm_receive)
+                    
+                    # Try to find exact match
+                    for action, payload in legal_actions_list:
+                        if action == target_action and payload:
+                            payload_dict = self._payload_to_dict(payload)
+                            legal_give = payload_dict.get("give_resources", {})
+                            legal_receive = payload_dict.get("receive_resources", {})
+                            # Check if give_resources and receive_resources match exactly
+                            if legal_give == llm_give_normalized and legal_receive == llm_receive_normalized:
+                                matching_action = (action, payload)
+                                break
+                    
+                    if not matching_action:
+                        print(f"Warning: LLM requested PROPOSE_TRADE with give_resources={llm_give}, receive_resources={llm_receive}, but no exact match found in legal actions", flush=True)
+                        print(f"  Available trades: {[(self._payload_to_dict(p).get('give_resources'), self._payload_to_dict(p).get('receive_resources')) for a, p in legal_actions_list if a == target_action][:5]}", flush=True)
+                        # Don't fallback - require exact match for PROPOSE_TRADE
+                        # This prevents executing wrong trades
+            
             # For other actions, use standard matching
             if not matching_action:
                 for action, payload in legal_actions_list:
@@ -570,9 +704,14 @@ Now reason about the best action and respond in JSON format as specified."""
                             # Both are None
                             matching_action = (action, payload)
                             break
-                        elif not matching_action:
-                            # Store first match as fallback
+                
+                # Fallback only if still no match (and not PROPOSE_TRADE which requires exact match)
+                if not matching_action and target_action != Action.PROPOSE_TRADE:
+                    # Store first match as fallback
+                    for action, payload in legal_actions_list:
+                        if action == target_action:
                             matching_action = (action, payload)
+                            break
             
             if not matching_action:
                 # Fallback: just pick the first matching action type
@@ -683,7 +822,29 @@ Now reason about the best action and respond in JSON format as specified."""
         payload2: Dict[str, Any]
     ) -> bool:
         """Check if two payloads match (simplified)."""
-        # Check if key fields match
+        # For PROPOSE_TRADE, require exact match of give_resources and receive_resources
+        if "give_resources" in payload1 and "give_resources" in payload2:
+            # Normalize resource dicts for comparison
+            def normalize_resource_dict(d):
+                result = {}
+                for k, v in d.items():
+                    # Convert ResourceType enum to string if needed
+                    if hasattr(k, 'value'):
+                        k = k.value
+                    result[k] = v
+                return result
+            
+            give1 = normalize_resource_dict(payload1["give_resources"])
+            give2 = normalize_resource_dict(payload2["give_resources"])
+            if give1 != give2:
+                return False
+            
+            receive1 = normalize_resource_dict(payload1.get("receive_resources", {}))
+            receive2 = normalize_resource_dict(payload2.get("receive_resources", {}))
+            if receive1 != receive2:
+                return False
+        
+        # Check if key fields match for other fields
         for key in payload1:
             if key in payload2:
                 val1 = payload1[key]
@@ -693,7 +854,11 @@ Now reason about the best action and respond in JSON format as specified."""
                     val1 = val1.value
                 if hasattr(val2, 'value'):
                     val2 = val2.value
-                if val1 != val2:
+                # Handle nested dicts (like for other action types)
+                if isinstance(val1, dict) and isinstance(val2, dict):
+                    if val1 != val2:
+                        return False
+                elif val1 != val2:
                     return False
         return True
 

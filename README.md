@@ -79,8 +79,9 @@ Terminal 1 - Backend:
 ```bash
 make dev-backend
 # or manually:
-cd backend && source .venv/bin/activate && uvicorn main:app --reload
+source ~/.zshrc && cd backend && source .venv/bin/activate && uvicorn main:app --reload
 ```
+**Note:** Always source `~/.zshrc` first to ensure environment variables are loaded.
 
 Terminal 2 - Frontend:
 ```bash

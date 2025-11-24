@@ -73,6 +73,9 @@ def serialize_game_state(state: GameState) -> Dict[str, Any]:
         result["pending_trade_offer"] = None
     result["pending_trade_responses"] = state.pending_trade_responses
     result["pending_trade_current_responder_index"] = state.pending_trade_current_responder_index
+    # Add turn tracking fields
+    result["actions_taken_this_turn"] = state.actions_taken_this_turn
+    result["consecutive_rejected_trades"] = state.consecutive_rejected_trades
     return result
 
 
@@ -124,6 +127,8 @@ def deserialize_game_state(data: Dict[str, Any]) -> GameState:
         pending_trade_offer=pending_trade_offer,
         pending_trade_responses=dict(data.get("pending_trade_responses", {})),
         pending_trade_current_responder_index=data.get("pending_trade_current_responder_index", 0),
+        actions_taken_this_turn=list(data.get("actions_taken_this_turn", [])),
+        consecutive_rejected_trades=dict(data.get("consecutive_rejected_trades", {})),
     )
 
 
@@ -1323,6 +1328,47 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
     
     lines.append("")
     
+    # Actions taken this turn (for current player)
+    if state.phase == "playing" and state.actions_taken_this_turn:
+        current_player = state.players[state.current_player_index]
+        player_actions = [a for a in state.actions_taken_this_turn if a["player_id"] == current_player.id]
+        if player_actions:
+            lines.append("=== Actions Taken This Turn ===")
+            for i, action_info in enumerate(player_actions, 1):
+                action_type = action_info["action"]
+                payload = action_info.get("payload")
+                if payload:
+                    # Format payload nicely
+                    payload_strs = []
+                    if "road_edge_id" in payload:
+                        payload_strs.append(f"road {payload['road_edge_id']}")
+                    if "intersection_id" in payload:
+                        payload_strs.append(f"intersection {payload['intersection_id']}")
+                    if "tile_id" in payload:
+                        payload_strs.append(f"tile {payload['tile_id']}")
+                    if "give_resources" in payload:
+                        give = payload["give_resources"]
+                        receive = payload.get("receive_resources", {})
+                        payload_strs.append(f"give {give}, receive {receive}")
+                    if "card_type" in payload:
+                        payload_strs.append(f"card: {payload['card_type']}")
+                    payload_str = f" ({', '.join(payload_strs)})" if payload_strs else ""
+                else:
+                    payload_str = ""
+                lines.append(f"  {i}. {action_type}{payload_str}")
+            
+            # Show warning if approaching trade rejection limit
+            consecutive_rejections = state.consecutive_rejected_trades.get(current_player.id, 0)
+            if consecutive_rejections >= 2:
+                lines.append(f"")
+                lines.append(f"⚠️ WARNING: You have had {consecutive_rejections} consecutive trade proposals rejected this turn.")
+                if consecutive_rejections >= 3:
+                    lines.append(f"   Your turn will automatically end if you propose another trade that gets rejected.")
+                else:
+                    lines.append(f"   If you propose one more trade that gets rejected, your turn will automatically end.")
+            
+            lines.append("")
+    
     # Pending trade information
     if state.pending_trade_offer:
         lines.append("=== Pending Trade Offer ===")
@@ -1351,6 +1397,14 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
         if player_id in offer['target_player_ids']:
             if player_id not in state.pending_trade_responses:
                 lines.append(f"⚠️ YOU NEED TO RESPOND TO THIS TRADE (accept or reject)")
+                # CRITICAL: Show what YOU will give and receive if you accept
+                # The proposer gives what you receive, and receives what you give
+                you_give_str = ", ".join([f"{count} {rt.value}" for rt, count in offer['receive_resources'].items()])
+                you_receive_str = ", ".join([f"{count} {rt.value}" for rt, count in offer['give_resources'].items()])
+                lines.append(f"")
+                lines.append(f"💡 IF YOU ACCEPT THIS TRADE:")
+                lines.append(f"  You will GIVE: {you_give_str}")
+                lines.append(f"  You will RECEIVE: {you_receive_str}")
             else:
                 lines.append(f"  You have already responded: {'ACCEPTED' if state.pending_trade_responses.get(player_id) else 'REJECTED'}")
         elif player_id == offer['proposer_id']:
@@ -1689,6 +1743,13 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
     
     lines = []
     lines.append("=== Legal Actions ===")
+    lines.append("IMPORTANT: When returning JSON, use these EXACT field names:")
+    lines.append("  - build_road: {\"road_edge_id\": <number>}  (NOT \"road_id\")")
+    lines.append("  - build_settlement: {\"intersection_id\": <number>}")
+    lines.append("  - build_city: {\"intersection_id\": <number>}")
+    lines.append("  - move_robber: {\"tile_id\": <number>}")
+    lines.append("  - See system prompt for full format examples")
+    lines.append("")
     
     # Check if there are trade actions and add a helpful note
     has_trade_actions = any(
@@ -1956,6 +2017,53 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
             return f" ({'; '.join(context_parts)})"
         return ""
     
+    # Helper to generate JSON format example for a payload
+    def get_json_example(action: Action, payload: Optional[ActionPayload]) -> str:
+        """Generate JSON format example for an action."""
+        action_type = action.value
+        if payload is None:
+            return f'{{"action_type": "{action_type}", "action_payload": null}}'
+        
+        if isinstance(payload, BuildSettlementPayload):
+            return f'{{"action_type": "build_settlement", "action_payload": {{"intersection_id": {payload.intersection_id}}}}}'
+        elif isinstance(payload, BuildRoadPayload):
+            return f'{{"action_type": "build_road", "action_payload": {{"road_edge_id": {payload.road_edge_id}}}}}'
+        elif isinstance(payload, BuildCityPayload):
+            return f'{{"action_type": "build_city", "action_payload": {{"intersection_id": {payload.intersection_id}}}}}'
+        elif isinstance(payload, PlayDevCardPayload):
+            json_parts = [f'"card_type": "{payload.card_type}"']
+            if payload.year_of_plenty_resources:
+                res_dict = {rt.value: count for rt, count in payload.year_of_plenty_resources.items()}
+                json_parts.append(f'"year_of_plenty_resources": {json.dumps(res_dict)}')
+            if payload.monopoly_resource_type:
+                json_parts.append(f'"monopoly_resource_type": "{payload.monopoly_resource_type.value}"')
+            return f'{{"action_type": "play_dev_card", "action_payload": {{{", ".join(json_parts)}}}}}'
+        elif isinstance(payload, TradeBankPayload):
+            give_dict = {rt.value: count for rt, count in payload.give_resources.items()}
+            receive_dict = {rt.value: count for rt, count in payload.receive_resources.items()}
+            json_parts = [
+                f'"give_resources": {json.dumps(give_dict)}',
+                f'"receive_resources": {json.dumps(receive_dict)}'
+            ]
+            if payload.port_intersection_id:
+                json_parts.append(f'"port_intersection_id": {payload.port_intersection_id}')
+            return f'{{"action_type": "trade_bank", "action_payload": {{{", ".join(json_parts)}}}}}'
+        elif isinstance(payload, ProposeTradePayload):
+            give_dict = {rt.value: count for rt, count in payload.give_resources.items()}
+            receive_dict = {rt.value: count for rt, count in payload.receive_resources.items()}
+            return f'{{"action_type": "propose_trade", "action_payload": {{"give_resources": {json.dumps(give_dict)}, "receive_resources": {json.dumps(receive_dict)}, "target_player_ids": {json.dumps(payload.target_player_ids)}}}}}'
+        elif isinstance(payload, MoveRobberPayload):
+            return f'{{"action_type": "move_robber", "action_payload": {{"tile_id": {payload.tile_id}}}}}'
+        elif isinstance(payload, StealResourcePayload):
+            return f'{{"action_type": "steal_resource", "action_payload": {{"other_player_id": "{payload.other_player_id}"}}}}'
+        elif isinstance(payload, DiscardResourcesPayload):
+            res_dict = {rt.value: count for rt, count in payload.resources.items()}
+            return f'{{"action_type": "discard_resources", "action_payload": {{"resources": {json.dumps(res_dict)}}}}}'
+        elif isinstance(payload, SelectTradePartnerPayload):
+            return f'{{"action_type": "select_trade_partner", "action_payload": {{"selected_player_id": "{payload.selected_player_id}"}}}}'
+        else:
+            return f'{{"action_type": "{action_type}", "action_payload": {{}}}}'
+    
     # Group actions by type
     action_groups = {}
     for action, payload in actions:
@@ -1963,6 +2071,9 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
         if action_key not in action_groups:
             action_groups[action_key] = []
         action_groups[action_key].append((action, payload))
+    
+    # Track which action types we've shown JSON examples for
+    shown_json_examples = set()
     
     # Format each group
     for action_key, group in sorted(action_groups.items()):
@@ -1972,25 +2083,37 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
         if len(group) == 1 and group[0][1] is None:
             # Simple action without payload
             lines.append(f"- {action_name}")
+            if action_key not in shown_json_examples:
+                lines.append(f"  → JSON: {get_json_example(action, None)}")
+                shown_json_examples.add(action_key)
         elif len(group) == 1:
             # Single action with payload
             payload = group[0][1]
             if isinstance(payload, BuildSettlementPayload):
                 context = get_intersection_context(payload.intersection_id)
                 lines.append(f"- {action_name} at intersection {payload.intersection_id}{context}")
+                lines.append(f"  → JSON: {{\"action_type\": \"build_settlement\", \"action_payload\": {{\"intersection_id\": {payload.intersection_id}}}}}")
             elif isinstance(payload, BuildRoadPayload):
                 context = get_road_context(payload.road_edge_id)
                 lines.append(f"- {action_name} on road edge {payload.road_edge_id}{context}")
+                lines.append(f"  → JSON: {{\"action_type\": \"build_road\", \"action_payload\": {{\"road_edge_id\": {payload.road_edge_id}}}}}")
             elif isinstance(payload, BuildCityPayload):
                 context = get_intersection_context(payload.intersection_id)
                 lines.append(f"- {action_name} at intersection {payload.intersection_id}{context}")
+                lines.append(f"  → JSON: {{\"action_type\": \"build_city\", \"action_payload\": {{\"intersection_id\": {payload.intersection_id}}}}}")
             elif isinstance(payload, PlayDevCardPayload):
                 lines.append(f"- {action_name} ({payload.card_type})")
+                if action_key not in shown_json_examples:
+                    lines.append(f"  → JSON: {get_json_example(action, payload)}")
+                    shown_json_examples.add(action_key)
             elif isinstance(payload, TradeBankPayload):
                 give_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.give_resources.items()])
                 receive_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.receive_resources.items()])
                 port_info = f" (via port at intersection {payload.port_intersection_id})" if payload.port_intersection_id else ""
                 lines.append(f"- {action_name}: Give {give_str}, receive {receive_str}{port_info}")
+                if action_key not in shown_json_examples:
+                    lines.append(f"  → JSON: {get_json_example(action, payload)}")
+                    shown_json_examples.add(action_key)
             elif isinstance(payload, TradePlayerPayload):
                 give_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.give_resources.items()])
                 receive_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.receive_resources.items()])
@@ -2005,26 +2128,85 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
                         target_names.append(player.name if player else pid)
                 targets_str = ", ".join(target_names) if target_names else ", ".join(payload.target_player_ids)
                 lines.append(f"- {action_name}: Give {give_str}, receive {receive_str} (to: {targets_str})")
+                if action_key not in shown_json_examples:
+                    lines.append(f"  → JSON: {get_json_example(action, payload)}")
+                    shown_json_examples.add(action_key)
+            elif isinstance(payload, MoveRobberPayload):
+                tile = tile_map.get(payload.tile_id) if state and tile_map else None
+                if tile:
+                    res_info = f"{tile.resource_type.value} {tile.number_token.value}" if tile.resource_type and tile.number_token else "Desert"
+                    players_on_tile = set()
+                    if state:
+                        for inter in state.intersections:
+                            if payload.tile_id in inter.adjacent_tiles and inter.owner and inter.building_type:
+                                players_on_tile.add(inter.owner)
+                    if players_on_tile:
+                        player_names = [next((p.name for p in state.players if p.id == pid), pid) for pid in players_on_tile] if state else []
+                        lines.append(f"- {action_name} to tile {payload.tile_id} ({res_info}) - players: {', '.join(player_names)}")
+                    else:
+                        lines.append(f"- {action_name} to tile {payload.tile_id} ({res_info})")
+                else:
+                    lines.append(f"- {action_name} to tile {payload.tile_id}")
+                if action_key not in shown_json_examples:
+                    lines.append(f"  → JSON: {get_json_example(action, payload)}")
+                    shown_json_examples.add(action_key)
+            elif isinstance(payload, StealResourcePayload):
+                other_player = next((p for p in state.players if p.id == payload.other_player_id), None) if state else None
+                player_name = other_player.name if other_player else payload.other_player_id
+                lines.append(f"- {action_name} from {player_name}")
+                if action_key not in shown_json_examples:
+                    lines.append(f"  → JSON: {get_json_example(action, payload)}")
+                    shown_json_examples.add(action_key)
+            elif isinstance(payload, DiscardResourcesPayload):
+                res_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.resources.items()])
+                lines.append(f"- {action_name}: {res_str}")
+                if action_key not in shown_json_examples:
+                    lines.append(f"  → JSON: {get_json_example(action, payload)}")
+                    shown_json_examples.add(action_key)
+            elif isinstance(payload, SelectTradePartnerPayload):
+                selected_player = next((p for p in state.players if p.id == payload.selected_player_id), None) if state else None
+                player_name = selected_player.name if selected_player else payload.selected_player_id
+                lines.append(f"- {action_name}: {player_name}")
+                if action_key not in shown_json_examples:
+                    lines.append(f"  → JSON: {get_json_example(action, payload)}")
+                    shown_json_examples.add(action_key)
         else:
             # Multiple actions of same type
             lines.append(f"- {action_name}:")
+            # Show JSON example only once for this action type (on first action)
+            json_shown_for_group = False
             for action, payload in group:
                 if isinstance(payload, BuildSettlementPayload):
                     context = get_intersection_context(payload.intersection_id)
                     lines.append(f"  * At intersection {payload.intersection_id}{context}")
+                    if not json_shown_for_group:
+                        lines.append(f"    → JSON: {get_json_example(action, payload)}")
+                        json_shown_for_group = True
                 elif isinstance(payload, BuildRoadPayload):
                     context = get_road_context(payload.road_edge_id)
                     lines.append(f"  * On road edge {payload.road_edge_id}{context}")
+                    if not json_shown_for_group:
+                        lines.append(f"    → JSON: {get_json_example(action, payload)}")
+                        json_shown_for_group = True
                 elif isinstance(payload, BuildCityPayload):
                     context = get_intersection_context(payload.intersection_id)
                     lines.append(f"  * At intersection {payload.intersection_id}{context}")
+                    if not json_shown_for_group:
+                        lines.append(f"    → JSON: {get_json_example(action, payload)}")
+                        json_shown_for_group = True
                 elif isinstance(payload, PlayDevCardPayload):
                     lines.append(f"  * Card: {payload.card_type}")
+                    if not json_shown_for_group:
+                        lines.append(f"    → JSON: {get_json_example(action, payload)}")
+                        json_shown_for_group = True
                 elif isinstance(payload, TradeBankPayload):
                     give_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.give_resources.items()])
                     receive_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.receive_resources.items()])
                     port_info = f" (port at {payload.port_intersection_id})" if payload.port_intersection_id else ""
                     lines.append(f"  * Give {give_str}, receive {receive_str}{port_info}")
+                    if not json_shown_for_group:
+                        lines.append(f"    → JSON: {get_json_example(action, payload)}")
+                        json_shown_for_group = True
                 elif isinstance(payload, TradePlayerPayload):
                     give_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.give_resources.items()])
                     receive_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.receive_resources.items()])
@@ -2039,6 +2221,9 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
                             target_names.append(player.name if player else pid)
                     targets_str = ", ".join(target_names) if target_names else ", ".join(payload.target_player_ids)
                     lines.append(f"  * Give {give_str}, receive {receive_str} (to: {targets_str})")
+                    if not json_shown_for_group:
+                        lines.append(f"    → JSON: {get_json_example(action, payload)}")
+                        json_shown_for_group = True
                 elif isinstance(payload, MoveRobberPayload):
                     # Show tile info and which players are on it
                     tile = tile_map.get(payload.tile_id) if state and tile_map else None
@@ -2063,6 +2248,29 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
                             lines.append(f"  * To tile {payload.tile_id} ({res_info}) - no players on tile{own_tile_note}")
                     else:
                         lines.append(f"  * To tile {payload.tile_id}")
+                    if not json_shown_for_group:
+                        lines.append(f"    → JSON: {get_json_example(action, payload)}")
+                        json_shown_for_group = True
+                elif isinstance(payload, StealResourcePayload):
+                    other_player = next((p for p in state.players if p.id == payload.other_player_id), None) if state else None
+                    player_name = other_player.name if other_player else payload.other_player_id
+                    lines.append(f"  * From {player_name}")
+                    if not json_shown_for_group:
+                        lines.append(f"    → JSON: {get_json_example(action, payload)}")
+                        json_shown_for_group = True
+                elif isinstance(payload, DiscardResourcesPayload):
+                    res_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.resources.items()])
+                    lines.append(f"  * Discard: {res_str}")
+                    if not json_shown_for_group:
+                        lines.append(f"    → JSON: {get_json_example(action, payload)}")
+                        json_shown_for_group = True
+                elif isinstance(payload, SelectTradePartnerPayload):
+                    selected_player = next((p for p in state.players if p.id == payload.selected_player_id), None) if state else None
+                    player_name = selected_player.name if selected_player else payload.selected_player_id
+                    lines.append(f"  * Select: {player_name}")
+                    if not json_shown_for_group:
+                        lines.append(f"    → JSON: {get_json_example(action, payload)}")
+                        json_shown_for_group = True
     
     return "\n".join(lines)
 
