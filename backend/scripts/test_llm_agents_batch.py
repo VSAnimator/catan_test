@@ -123,7 +123,16 @@ def run_single_llm_game(game_num: int, max_turns: int = 20):
                 
                 # Agent chooses action
                 try:
-                    action, payload, reasoning = agent.choose_action(state, legal_actions_list)
+                    result = agent.choose_action(state, legal_actions_list)
+                    if len(result) == 4:
+                        action, payload, reasoning, raw_llm_response = result
+                    elif len(result) == 3:
+                        action, payload, reasoning = result
+                        raw_llm_response = None
+                    else:
+                        action, payload = result
+                        reasoning = None
+                        raw_llm_response = None
                     
                     # Check for parsing errors
                     if "Failed to parse" in str(reasoning) or "Error processing" in str(reasoning):

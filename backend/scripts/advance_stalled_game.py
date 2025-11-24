@@ -69,7 +69,16 @@ def advance_game(game_id: str, player_id: str = None):
     
     # Agent chooses action
     print("\nAgent choosing action...")
-    action, payload, reasoning = agent.choose_action(state, legal_actions_list)
+    result = agent.choose_action(state, legal_actions_list)
+    if len(result) == 4:
+        action, payload, reasoning, raw_llm_response = result
+    elif len(result) == 3:
+        action, payload, reasoning = result
+        raw_llm_response = None
+    else:
+        action, payload = result
+        reasoning = None
+        raw_llm_response = None
     
     print(f"Action chosen: {action.value}")
     if reasoning:

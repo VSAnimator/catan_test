@@ -204,7 +204,7 @@ class LLMAgent(BaseAgent):
         self,
         state: GameState,
         legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
-    ) -> Tuple[Action, Optional[ActionPayload], Optional[str]]:
+    ) -> Tuple[Action, Optional[ActionPayload], Optional[str], Optional[str]]:
         """
         Choose an action using ReAct pattern with RAG.
         
@@ -291,6 +291,10 @@ class LLMAgent(BaseAgent):
 - **Monopoly**: All players give you all resources of one type
 - **Road Building**: Build 2 roads for free (must be legal placements)
 - **Victory Point**: Worth 1 VP, revealed at game end
+
+### Robber Rules:
+- **Must move robber**: When a 7 is rolled or you play a Knight card, you must move the robber to a different tile
+- **Steal after moving**: After moving the robber, you can steal one resource from a player who has buildings on that tile (if any)
 
 ### Trading:
 - **Bank trades**: 4:1 default, 3:1 with matching port, 2:1 with specific resource port
@@ -504,22 +508,48 @@ Now reason about the best action and respond in JSON format as specified."""
             
             # Find the matching legal action with payload
             matching_action = None
-            for action, payload in legal_actions_list:
-                if action == target_action:
-                    # If payload is provided, try to match it
-                    if action_payload_dict and payload:
-                        # Simple matching - check if keys match
-                        payload_dict = self._payload_to_dict(payload)
-                        if self._payloads_match(payload_dict, action_payload_dict):
+            exact_match = None
+            preferred_match = None
+            
+            # For actions with tile_id (like MOVE_ROBBER), try to match the LLM's preference
+            if target_action == Action.MOVE_ROBBER and action_payload_dict and "tile_id" in action_payload_dict:
+                llm_tile_id = action_payload_dict["tile_id"]
+                # Try to find exact match first
+                for action, payload in legal_actions_list:
+                    if action == target_action and payload and hasattr(payload, "tile_id"):
+                        if payload.tile_id == llm_tile_id:
+                            exact_match = (action, payload)
+                            break
+                        # Also store first match as fallback
+                        if not preferred_match:
+                            preferred_match = (action, payload)
+                
+                if exact_match:
+                    matching_action = exact_match
+                elif preferred_match:
+                    # LLM specified a tile_id but it doesn't match any legal action
+                    # This might be a parsing error - log it
+                    print(f"Warning: LLM requested tile_id {llm_tile_id} but it's not in legal actions. Using first available.", flush=True)
+                    matching_action = preferred_match
+            
+            # For other actions, use standard matching
+            if not matching_action:
+                for action, payload in legal_actions_list:
+                    if action == target_action:
+                        # If payload is provided, try to match it
+                        if action_payload_dict and payload:
+                            # Simple matching - check if keys match
+                            payload_dict = self._payload_to_dict(payload)
+                            if self._payloads_match(payload_dict, action_payload_dict):
+                                matching_action = (action, payload)
+                                break
+                        elif not action_payload_dict and not payload:
+                            # Both are None
                             matching_action = (action, payload)
                             break
-                    elif not action_payload_dict and not payload:
-                        # Both are None
-                        matching_action = (action, payload)
-                        break
-                    elif not matching_action:
-                        # Store first match as fallback
-                        matching_action = (action, payload)
+                        elif not matching_action:
+                            # Store first match as fallback
+                            matching_action = (action, payload)
             
             if not matching_action:
                 # Fallback: just pick the first matching action type
@@ -577,9 +607,9 @@ Now reason about the best action and respond in JSON format as specified."""
                     if not matching_action:
                         raise ValueError(f"Could not find matching legal action for {action_type_str}. Available: {[a.value for a, _ in legal_actions_list]}")
             
-            # Return action, payload, and reasoning
+            # Return action, payload, reasoning, and raw response
             action, payload = matching_action
-            return (action, payload, reasoning)
+            return (action, payload, reasoning, response_text)
             
         except json.JSONDecodeError as e:
             # Fallback: try to extract action from text using regex
@@ -598,20 +628,22 @@ Now reason about the best action and respond in JSON format as specified."""
                 for action, payload in legal_actions_list:
                     if action_type_str in action.value.lower() or action.value.lower() in action_type_str:
                         print(f"  Extracted action from text: {action.value}", flush=True)
-                        return (action, payload, f"Parsed from text (JSON parse failed): {e}")
+                        return (action, payload, f"Parsed from text (JSON parse failed): {e}", response_text)
             
             # Last resort: fallback to first legal action
             print(f"  Falling back to first legal action: {legal_actions_list[0][0].value}", flush=True)
             action, payload = legal_actions_list[0]
-            return (action, payload, f"Failed to parse LLM response: {e}")
+            return (action, payload, f"Failed to parse LLM response: {e}", response_text)
         except Exception as e:
             print(f"Warning: Error processing LLM response: {e}", flush=True)
-            print(f"Response (first 500 chars): {response_text[:500]}", flush=True)
+            if 'response_text' in locals():
+                print(f"Response (first 500 chars): {response_text[:500]}", flush=True)
             import traceback
             traceback.print_exc()
             # Fallback to first legal action
             action, payload = legal_actions_list[0]
-            return (action, payload, f"Error processing LLM response: {e}")
+            raw_response = response_text if 'response_text' in locals() else None
+            return (action, payload, f"Error processing LLM response: {e}", raw_response)
     
     def _payload_to_dict(self, payload: ActionPayload) -> Dict[str, Any]:
         """Convert action payload to dictionary."""

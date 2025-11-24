@@ -734,7 +734,7 @@ class GameState:
         if new_state.robber_tile_id == payload.tile_id:
             raise ValueError("Robber is already on this tile")
         
-        # Move the robber
+        # Move the robber (allowing strategic moves to own tiles if it also blocks opponents)
         new_state.robber_tile_id = payload.tile_id
         new_state.waiting_for_robber_move = False
         

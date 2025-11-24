@@ -125,7 +125,13 @@ class AgentRunner:
                                     state_before = copy.deepcopy(self.state)
                                     
                                     # Choose a discard action (random agent will pick one)
-                                    action, payload = discard_agent.choose_action(self.state, discard_actions)
+                                    result = discard_agent.choose_action(self.state, discard_actions)
+                                    if len(result) == 4:
+                                        action, payload, _, _ = result  # Ignore reasoning and raw_response for discard
+                                    elif len(result) == 3:
+                                        action, payload, _ = result  # Ignore reasoning for discard
+                                    else:
+                                        action, payload = result  # Backward compatibility
                                     
                                     # Apply the action
                                     self.state = self.state.step(action, payload, player_id=player.id)
@@ -166,12 +172,16 @@ class AgentRunner:
                     # Agent chooses an action
                     try:
                         result = agent.choose_action(self.state, legal_actions_list)
-                        if len(result) == 3:
+                        if len(result) == 4:
+                            action, payload, reasoning, raw_llm_response = result
+                        elif len(result) == 3:
                             action, payload, reasoning = result
+                            raw_llm_response = None
                         else:
                             # Backward compatibility: old agents return 2-tuple
                             action, payload = result
                             reasoning = None
+                            raw_llm_response = None
                     except Exception as e:
                         return self.state, False, f"Agent error for player {current_player.id}: {str(e)}"
                 
@@ -194,6 +204,9 @@ class AgentRunner:
                         action_dict["payload"] = serialize_action_payload(payload)
                     if reasoning:
                         action_dict["reasoning"] = reasoning
+                    # Store raw_llm_response if it was set (even if None, to track that we checked)
+                    if 'raw_llm_response' in locals():
+                        action_dict["raw_llm_response"] = raw_llm_response
                     save_state_callback(
                         self.state.game_id,
                         state_before,
@@ -295,8 +308,10 @@ class AgentRunner:
                             
                             # Choose a discard action
                             result = discard_agent.choose_action(self.state, discard_actions)
-                            if len(result) == 3:
-                                action, payload, reasoning = result
+                            if len(result) == 4:
+                                action, payload, _, _ = result  # Ignore reasoning and raw_response for discard
+                            elif len(result) == 3:
+                                action, payload, _ = result  # Ignore reasoning for discard
                             else:
                                 # Backward compatibility
                                 action, payload = result
@@ -352,11 +367,16 @@ class AgentRunner:
                 # Agent chooses an action
                 try:
                     result = agent.choose_action(self.state, legal_actions_list)
-                    if len(result) == 3:
+                    if len(result) == 4:
+                        action, payload, reasoning, raw_llm_response = result
+                    elif len(result) == 3:
                         action, payload, reasoning = result
+                        raw_llm_response = None
                     else:
                         # Backward compatibility: old agents return 2-tuple
                         action, payload = result
+                        reasoning = None
+                        raw_llm_response = None
                         reasoning = None
                 except Exception as e:
                     return self.state, False, f"Agent error for player {current_player.id}: {str(e)}", None
@@ -380,6 +400,9 @@ class AgentRunner:
                     action_dict["payload"] = serialize_action_payload(payload)
                 if reasoning:
                     action_dict["reasoning"] = reasoning
+                # Store raw_llm_response if it was set (even if None, to track that we checked)
+                if 'raw_llm_response' in locals():
+                    action_dict["raw_llm_response"] = raw_llm_response
                 save_state_callback(
                     self.state.game_id,
                     state_before,

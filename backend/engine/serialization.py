@@ -538,6 +538,7 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
             # Robber must be moved (either from 7 roll or knight card)
             if is_current_player:
                 # Can move robber to any tile except current
+                # (Moving to own tiles is allowed if it also blocks opponents - strategic decision)
                 for tile in state.tiles:
                     if tile.id != state.robber_tile_id:
                         legal.append((Action.MOVE_ROBBER, MoveRobberPayload(tile.id)))
@@ -631,6 +632,7 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
                     # All discards done, now ONLY the player who rolled the 7 can move robber
                     if is_current_player:
                         # Can move robber to any tile except current
+                        # (Moving to own tiles is allowed if it also blocks opponents - strategic decision)
                         for tile in state.tiles:
                             if tile.id != state.robber_tile_id:
                                 legal.append((Action.MOVE_ROBBER, MoveRobberPayload(tile.id)))
@@ -1692,10 +1694,17 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
     inter_map = {}
     road_map = {}
     tile_map = {}
+    player_tiles = set()  # Tiles where player has buildings (for informational purposes)
     if state:
         inter_map = {i.id: i for i in state.intersections}
         road_map = {r.id: r for r in state.road_edges}
         tile_map = {t.id: t for t in state.tiles}
+        
+        # Get tiles where player has buildings (for informational purposes)
+        if player_id:
+            player_buildings = [i for i in state.intersections if i.owner == player_id]
+            for inter in player_buildings:
+                player_tiles.update(inter.adjacent_tiles)
     
     # Helper to get intersection context
     def get_intersection_context(inter_id: int) -> str:
@@ -1756,6 +1765,183 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
             tile_str1 = ",".join([f"T{tid}" for tid in tiles1])
             tile_str2 = ",".join([f"T{tid}" for tid in tiles2])
             context_parts.append(f"I{road.intersection1_id}({tile_str1})<->I{road.intersection2_id}({tile_str2})")
+            
+            # Show reachable intersections (1-2 steps away) and their value
+            # Determine which intersection is the "destination" (the one you're building toward)
+            # In setup, the destination is the one that's NOT the last settlement
+            # In playing phase, the destination is the one further from your existing roads/buildings
+            destination_inter = None
+            if state.phase == "setup" and state.setup_last_settlement_id:
+                # Destination is the one that's NOT the last settlement
+                if road.intersection1_id == state.setup_last_settlement_id:
+                    destination_inter = inter2
+                elif road.intersection2_id == state.setup_last_settlement_id:
+                    destination_inter = inter1
+                else:
+                    # Neither is the last settlement - use the one with more adjacent intersections (more expansion options)
+                    destination_inter = inter1 if len(inter1.adjacent_intersections) >= len(inter2.adjacent_intersections) else inter2
+            else:
+                # In playing phase, determine destination based on player's existing roads/buildings
+                if player_id:
+                    player_buildings = [i.id for i in state.intersections if i.owner == player_id]
+                    player_roads = [r for r in state.road_edges if r.owner == player_id]
+                    connected_intersections = set(player_buildings)
+                    for r in player_roads:
+                        connected_intersections.add(r.intersection1_id)
+                        connected_intersections.add(r.intersection2_id)
+                    
+                    # Destination is the intersection further from player's existing network
+                    if road.intersection1_id in connected_intersections:
+                        destination_inter = inter2
+                    elif road.intersection2_id in connected_intersections:
+                        destination_inter = inter1
+                    else:
+                        # Neither is connected - use the one with more expansion options
+                        destination_inter = inter1 if len(inter1.adjacent_intersections) >= len(inter2.adjacent_intersections) else inter2
+            
+            if destination_inter:
+                # Find intersections reachable in 1-2 steps from destination
+                reachable_1_step = []
+                reachable_2_steps = []
+                high_value_reachable = []
+                
+                # 1-step reachable (adjacent to destination)
+                for neighbor_id in destination_inter.adjacent_intersections:
+                    neighbor = inter_map.get(neighbor_id)
+                    if neighbor and neighbor_id != road.intersection1_id and neighbor_id != road.intersection2_id:
+                        reachable_1_step.append(neighbor_id)
+                        
+                        # Check if this neighbor is on a high-value tile (6 or 8)
+                        high_value = False
+                        for tile_id in neighbor.adjacent_tiles:
+                            tile = tile_map.get(tile_id)
+                            if tile and tile.number_token and tile.number_token.value in [6, 8]:
+                                high_value = True
+                                break
+                        if high_value:
+                            high_value_reachable.append(neighbor_id)
+                
+                # 2-step reachable (through 1-step neighbors)
+                for neighbor_id in reachable_1_step:
+                    neighbor = inter_map.get(neighbor_id)
+                    if neighbor:
+                        for neighbor2_id in neighbor.adjacent_intersections:
+                            if (neighbor2_id not in reachable_1_step and 
+                                neighbor2_id != destination_inter.id and
+                                neighbor2_id != road.intersection1_id and 
+                                neighbor2_id != road.intersection2_id):
+                                if neighbor2_id not in reachable_2_steps:
+                                    reachable_2_steps.append(neighbor2_id)
+                                    
+                                    # Check if this 2-step neighbor is on a high-value tile
+                                    neighbor2 = inter_map.get(neighbor2_id)
+                                    if neighbor2:
+                                        for tile_id in neighbor2.adjacent_tiles:
+                                            tile = tile_map.get(tile_id)
+                                            if tile and tile.number_token and tile.number_token.value in [6, 8]:
+                                                if neighbor2_id not in high_value_reachable:
+                                                    high_value_reachable.append(neighbor2_id)
+                                                break
+                
+                # Build reachability info
+                if reachable_1_step or reachable_2_steps:
+                    reachable_info = []
+                    if reachable_1_step:
+                        reachable_info.append(f"1-step: I{','.join(map(str, sorted(reachable_1_step[:5])))}")
+                    if reachable_2_steps:
+                        reachable_info.append(f"2-step: I{','.join(map(str, sorted(reachable_2_steps[:5])))}")
+                    if reachable_info:
+                        context_parts.append(f"→{destination_inter.id} leads to: {'; '.join(reachable_info)}")
+                    
+                    # Highlight high-value intersections
+                    if high_value_reachable:
+                        context_parts.append(f"high-value(6/8): I{','.join(map(str, sorted(high_value_reachable[:3])))}")
+                    
+                    # Show ALL intersections on resource tiles (not just high-value ones)
+                    # But mark which are available vs occupied/illegal
+                    resource_intersections_available = {}
+                    resource_intersections_occupied = {}
+                    resource_intersections_illegal = {}
+                    
+                    for neighbor_id in reachable_1_step + reachable_2_steps:
+                        neighbor = inter_map.get(neighbor_id)
+                        if neighbor:
+                            # Check if available
+                            is_occupied = neighbor.owner is not None
+                            is_too_close = False
+                            for adj_id in neighbor.adjacent_intersections:
+                                adj_inter = inter_map.get(adj_id)
+                                if adj_inter and adj_inter.owner:
+                                    is_too_close = True
+                                    break
+                            
+                            for tile_id in neighbor.adjacent_tiles:
+                                tile = tile_map.get(tile_id)
+                                if tile and tile.resource_type and tile.number_token:
+                                    resource_key = f"{tile.resource_type.value}-{tile.number_token.value}"
+                                    if is_occupied:
+                                        if resource_key not in resource_intersections_occupied:
+                                            resource_intersections_occupied[resource_key] = []
+                                        if neighbor_id not in resource_intersections_occupied[resource_key]:
+                                            resource_intersections_occupied[resource_key].append(neighbor_id)
+                                    elif is_too_close:
+                                        if resource_key not in resource_intersections_illegal:
+                                            resource_intersections_illegal[resource_key] = []
+                                        if neighbor_id not in resource_intersections_illegal[resource_key]:
+                                            resource_intersections_illegal[resource_key].append(neighbor_id)
+                                    else:
+                                        if resource_key not in resource_intersections_available:
+                                            resource_intersections_available[resource_key] = []
+                                        if neighbor_id not in resource_intersections_available[resource_key]:
+                                            resource_intersections_available[resource_key].append(neighbor_id)
+                    
+                    # Show ALL resource types found, clearly marking availability
+                    # Sort by resource type, then by number (descending, so 8 comes before 6)
+                    all_resources = set(resource_intersections_available.keys()) | \
+                                   set(resource_intersections_occupied.keys()) | \
+                                   set(resource_intersections_illegal.keys())
+                    
+                    shown_resources = []
+                    for res_key in sorted(all_resources, key=lambda x: (x.split('-')[0], -int(x.split('-')[1]))):
+                        parts = []
+                        if res_key in resource_intersections_available:
+                            inter_list = sorted(resource_intersections_available[res_key])[:5]  # Show up to 5 available
+                            if inter_list:
+                                parts.append(f"AVAIL:I{','.join(map(str, inter_list))}")
+                        if res_key in resource_intersections_occupied:
+                            inter_list = sorted(resource_intersections_occupied[res_key])[:3]  # Show up to 3 occupied
+                            if inter_list:
+                                parts.append(f"OCCUPIED:I{','.join(map(str, inter_list))}")
+                        if res_key in resource_intersections_illegal:
+                            inter_list = sorted(resource_intersections_illegal[res_key])[:3]  # Show up to 3 too-close
+                            if inter_list:
+                                parts.append(f"TOO_CLOSE:I{','.join(map(str, inter_list))}")
+                        if parts:
+                            shown_resources.append(f"{res_key}({';'.join(parts)})")
+                    
+                    if shown_resources:
+                        context_parts.append(f"resources: {'; '.join(shown_resources)}")
+                    
+                    # Also show availability summary - count actually available intersections
+                    available_intersections = []
+                    for neighbor_id in reachable_1_step + reachable_2_steps:
+                        neighbor = inter_map.get(neighbor_id)
+                        if neighbor:
+                            is_occupied = neighbor.owner is not None
+                            is_too_close = False
+                            for adj_id in neighbor.adjacent_intersections:
+                                adj_inter = inter_map.get(adj_id)
+                                if adj_inter and adj_inter.owner:
+                                    is_too_close = True
+                                    break
+                            if not is_occupied and not is_too_close:
+                                available_intersections.append(neighbor_id)
+                    
+                    available_count = len(available_intersections)
+                    if available_count == 0 and (reachable_1_step or reachable_2_steps):
+                        context_parts.append("⚠️ NO_AVAILABLE_SPOTS")
+                    elif available_count < 3:
+                        context_parts.append(f"⚠️ ONLY_{available_count}_AVAILABLE")
         
         if context_parts:
             return f" ({'; '.join(context_parts)})"
@@ -1824,6 +2010,30 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
                     give_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.give_resources.items()])
                     receive_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.receive_resources.items()])
                     lines.append(f"  * With {payload.other_player_id}: Give {give_str}, receive {receive_str}")
+                elif isinstance(payload, MoveRobberPayload):
+                    # Show tile info and which players are on it
+                    tile = tile_map.get(payload.tile_id) if state and tile_map else None
+                    if tile:
+                        res_info = f"{tile.resource_type.value} {tile.number_token.value}" if tile.resource_type and tile.number_token else "Desert"
+                        # Check which players have buildings on this tile
+                        players_on_tile = set()
+                        if state:
+                            for inter in state.intersections:
+                                if payload.tile_id in inter.adjacent_tiles and inter.owner and inter.building_type:
+                                    players_on_tile.add(inter.owner)
+                        
+                        # Note if this is the player's own tile (for informational purposes only)
+                        own_tile_note = ""
+                        if player_id and payload.tile_id in player_tiles:
+                            own_tile_note = " (your buildings also on this tile)"
+                        
+                        if players_on_tile:
+                            player_names = [next((p.name for p in state.players if p.id == pid), pid) for pid in players_on_tile] if state else []
+                            lines.append(f"  * To tile {payload.tile_id} ({res_info}) - players on tile: {', '.join(player_names)}{own_tile_note}")
+                        else:
+                            lines.append(f"  * To tile {payload.tile_id} ({res_info}) - no players on tile{own_tile_note}")
+                    else:
+                        lines.append(f"  * To tile {payload.tile_id}")
     
     return "\n".join(lines)
 

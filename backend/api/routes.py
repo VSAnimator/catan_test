@@ -751,8 +751,9 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
                 elif "card_type" in payload_dict:
                     chosen_action_text += f" ({payload_dict['card_type']})"
         
-        # Extract reasoning if present
+        # Extract reasoning and raw LLM response if present
         reasoning = action.get("reasoning", None)
+        raw_llm_response = action.get("raw_llm_response", None)
         
         # Save step to database
         add_step(
@@ -767,6 +768,7 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
             legal_actions_text=legal_actions_text,
             chosen_action_text=chosen_action_text,
             reasoning=reasoning,  # Store reasoning in database
+            raw_llm_response=raw_llm_response,  # Store raw LLM response for parsing error analysis
         )
     
     # Get current player to check if they have an agent

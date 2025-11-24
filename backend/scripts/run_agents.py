@@ -154,7 +154,7 @@ def run_agents_script(game_id: str, max_turns: int = 1000, fast_mode: bool = Fal
     flush_interval = 2.0  # Flush every 2 seconds in fast mode
     
     # Callback to save state after each action
-    def save_state_callback(game_id: str, state_before, state_after, action: dict, player_id: str):
+    def save_state_callback(game_id: str, state_before, state_after, action: dict, player_id: str, raw_llm_response: Optional[str] = None):
         nonlocal last_flush_time
         
         # Serialize states
@@ -182,6 +182,8 @@ def run_agents_script(game_id: str, max_turns: int = 1000, fast_mode: bool = Fal
                 state_text=None,  # Skip expensive serialization
                 legal_actions_text=None,  # Skip expensive serialization
                 chosen_action_text=None,  # Skip expensive serialization
+                reasoning=action.get("reasoning"),
+                raw_llm_response=action.get("raw_llm_response"),
                 batch_write=True,  # Use batched writes
             )
             
@@ -223,6 +225,8 @@ def run_agents_script(game_id: str, max_turns: int = 1000, fast_mode: bool = Fal
                 state_text=state_text,
                 legal_actions_text=legal_actions_text,
                 chosen_action_text=chosen_action_text,
+                reasoning=action.get("reasoning"),
+                raw_llm_response=action.get("raw_llm_response"),
                 batch_write=False,  # Immediate write for full mode
             )
     

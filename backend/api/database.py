@@ -100,6 +100,7 @@ def init_db():
             legal_actions_text TEXT,
             chosen_action_text TEXT,
             reasoning TEXT,
+            raw_llm_response TEXT,
             FOREIGN KEY (game_id) REFERENCES games(id)
         )
     """)
@@ -107,6 +108,12 @@ def init_db():
     # Add reasoning column if it doesn't exist (for existing databases)
     try:
         cursor.execute("ALTER TABLE steps ADD COLUMN reasoning TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    
+    # Add raw_llm_response column if it doesn't exist (for existing databases)
+    try:
+        cursor.execute("ALTER TABLE steps ADD COLUMN raw_llm_response TEXT")
     except sqlite3.OperationalError:
         pass  # Column already exists
     
@@ -193,6 +200,7 @@ def add_step(
     legal_actions_text: Optional[str] = None,
     chosen_action_text: Optional[str] = None,
     reasoning: Optional[str] = None,
+    raw_llm_response: Optional[str] = None,
     batch_write: bool = False,
 ) -> None:
     """
@@ -219,6 +227,7 @@ def add_step(
                 'legal_actions_text': legal_actions_text,
                 'chosen_action_text': chosen_action_text,
                 'reasoning': reasoning,
+                'raw_llm_response': raw_llm_response,
             })
             
             queue_size = len(_write_queue[game_id])
@@ -238,9 +247,9 @@ def add_step(
             INSERT INTO steps (
                 game_id, step_idx, player_id,
                 state_before_json, state_after_json, action_json,
-                dice_roll, state_text, legal_actions_text, chosen_action_text, reasoning
+                dice_roll, state_text, legal_actions_text, chosen_action_text, reasoning, raw_llm_response
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             game_id,
             step_idx,
@@ -253,6 +262,7 @@ def add_step(
             legal_actions_text,
             chosen_action_text,
             reasoning,
+            raw_llm_response,
         ))
         
         conn.commit()
@@ -277,9 +287,9 @@ def _flush_write_queue(game_id: str) -> None:
             INSERT INTO steps (
                 game_id, step_idx, player_id,
                 state_before_json, state_after_json, action_json,
-                dice_roll, state_text, legal_actions_text, chosen_action_text, reasoning
+                dice_roll, state_text, legal_actions_text, chosen_action_text, reasoning, raw_llm_response
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, [
             (
                 step['game_id'],
@@ -293,6 +303,7 @@ def _flush_write_queue(game_id: str) -> None:
                 step['legal_actions_text'],
                 step['chosen_action_text'],
                 step.get('reasoning'),  # Use .get() for backward compatibility
+                step.get('raw_llm_response'),  # Use .get() for backward compatibility
             )
             for step in steps
         ])

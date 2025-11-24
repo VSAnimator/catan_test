@@ -145,7 +145,16 @@ def run_llm_game():
                 import contextlib
                 captured_output = io.StringIO()
                 with contextlib.redirect_stdout(captured_output), contextlib.redirect_stderr(captured_output):
-                    action, payload, reasoning = agent.choose_action(state, legal_actions_list)
+                    result = agent.choose_action(state, legal_actions_list)
+                    if len(result) == 4:
+                        action, payload, reasoning, raw_llm_response = result
+                    elif len(result) == 3:
+                        action, payload, reasoning = result
+                        raw_llm_response = None
+                    else:
+                        action, payload = result
+                        reasoning = None
+                        raw_llm_response = None
                 
                 # Check if there were any warnings in the output
                 output_text = captured_output.getvalue()
