@@ -216,7 +216,7 @@ button.secondary:hover:not(:disabled) {
 
 .board-container {
   position: relative;
-  min-height: 600px;
+  min-height: 900px;
   background-color: #e8f5e9;
   border-radius: 4px;
   overflow: auto;
@@ -227,14 +227,14 @@ button.secondary:hover:not(:disabled) {
   position: relative;
   width: 100%;
   height: 100%;
-  min-height: 600px;
-  min-width: 800px;
+  min-height: 900px;
+  min-width: 1200px;
 }
 
 .hex-tile {
   position: absolute;
-  width: 80px;
-  height: 92px;
+  width: 120px;
+  height: 138px;
   transform: translate(-50%, -50%);
   cursor: default;
   z-index: 1; /* Tiles behind intersections and roads */
@@ -270,9 +270,9 @@ button.secondary:hover:not(:disabled) {
   align-items: center;
   justify-content: center;
   border: 2px solid #333;
-  font-size: 0.7rem;
+  font-size: 1rem;
   text-align: center;
-  padding: 0.5rem;
+  padding: 0.75rem;
   box-sizing: border-box;
   position: relative;
 }
@@ -315,22 +315,22 @@ button.secondary:hover:not(:disabled) {
 .number-token {
   background-color: white;
   border-radius: 50%;
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: bold;
   margin-top: 0.25rem;
   color: #333;
-  font-size: 0.8rem;
+  font-size: 1rem;
 }
 
 .robber-icon {
   position: absolute;
-  top: 5px;
-  right: 5px;
-  font-size: 1.5rem;
+  top: 8px;
+  right: 8px;
+  font-size: 2rem;
   z-index: 20;
   filter: drop-shadow(2px 2px 4px rgba(0, 0, 0, 0.8));
   animation: pulse 2s infinite;
@@ -347,8 +347,8 @@ button.secondary:hover:not(:disabled) {
 
 .intersection {
   position: absolute;
-  width: 12px;
-  height: 12px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   background-color: #fff;
   border: 2px solid #333;
@@ -357,15 +357,15 @@ button.secondary:hover:not(:disabled) {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .intersection.clickable {
   cursor: pointer;
   border-color: #4CAF50;
   border-width: 3px;
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 24px;
   box-shadow: 0 0 8px rgba(76, 175, 80, 0.6);
 }
 
@@ -440,7 +440,7 @@ button.secondary:hover:not(:disabled) {
 
 .road {
   position: absolute;
-  height: 6px;
+  height: 8px;
   background-color: #ccc;
   z-index: 15; /* Roads above tiles but below intersections */
   transform-origin: 0 50%;
@@ -450,13 +450,13 @@ button.secondary:hover:not(:disabled) {
 .road.clickable {
   cursor: pointer;
   background-color: #4CAF50;
-  height: 8px;
+  height: 10px;
   box-shadow: 0 0 4px rgba(76, 175, 80, 0.8);
 }
 
 .road.clickable:hover {
   background-color: #66BB6A;
-  height: 10px;
+  height: 12px;
 }
 
 .road.owned {
@@ -488,6 +488,18 @@ button.secondary:hover:not(:disabled) {
   border: 1px solid #ddd;
   border-radius: 4px;
   padding: 1.5rem;
+}
+
+.legal-actions {
+  display: flex;
+  flex-direction: column;
+  height: 400px;
+}
+
+.legal-actions h2 {
+  margin-top: 0;
+  margin-bottom: 1rem;
+  flex-shrink: 0;
 }
 
 .dev-mode-controls {
@@ -540,8 +552,35 @@ button.secondary:hover:not(:disabled) {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  max-height: 400px;
+  height: 300px;
   overflow-y: auto;
+  padding-right: 0.5rem;
+}
+
+.reasoning-box {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background-color: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 4px;
+  height: 200px;
+  display: flex;
+  flex-direction: column;
+}
+
+.reasoning-box strong {
+  margin-bottom: 0.5rem;
+  color: #856404;
+}
+
+.reasoning-content {
+  flex: 1;
+  overflow-y: auto;
+  font-style: italic;
+  color: #666;
+  white-space: pre-wrap;
+  padding-right: 0.5rem;
+  line-height: 1.5;
 }
 
 .action-button {

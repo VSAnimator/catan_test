@@ -1690,6 +1690,15 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
     lines = []
     lines.append("=== Legal Actions ===")
     
+    # Check if there are trade actions and add a helpful note
+    has_trade_actions = any(
+        action.value in ['propose_trade', 'trade_bank', 'accept_trade', 'reject_trade'] 
+        for action, _ in actions
+    )
+    if has_trade_actions:
+        lines.append("Note: All trade actions shown below are fully functional with specific give/receive details. Trading is a concrete, actionable move.")
+        lines.append("")
+    
     # Create lookup maps if state is provided
     inter_map = {}
     road_map = {}
@@ -1986,6 +1995,16 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
                 give_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.give_resources.items()])
                 receive_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.receive_resources.items()])
                 lines.append(f"- {action_name} with {payload.other_player_id}: Give {give_str}, receive {receive_str}")
+            elif isinstance(payload, ProposeTradePayload):
+                give_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.give_resources.items()])
+                receive_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.receive_resources.items()])
+                target_names = []
+                if state:
+                    for pid in payload.target_player_ids:
+                        player = next((p for p in state.players if p.id == pid), None)
+                        target_names.append(player.name if player else pid)
+                targets_str = ", ".join(target_names) if target_names else ", ".join(payload.target_player_ids)
+                lines.append(f"- {action_name}: Give {give_str}, receive {receive_str} (to: {targets_str})")
         else:
             # Multiple actions of same type
             lines.append(f"- {action_name}:")
@@ -2010,6 +2029,16 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
                     give_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.give_resources.items()])
                     receive_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.receive_resources.items()])
                     lines.append(f"  * With {payload.other_player_id}: Give {give_str}, receive {receive_str}")
+                elif isinstance(payload, ProposeTradePayload):
+                    give_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.give_resources.items()])
+                    receive_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.receive_resources.items()])
+                    target_names = []
+                    if state:
+                        for pid in payload.target_player_ids:
+                            player = next((p for p in state.players if p.id == pid), None)
+                            target_names.append(player.name if player else pid)
+                    targets_str = ", ".join(target_names) if target_names else ", ".join(payload.target_player_ids)
+                    lines.append(f"  * Give {give_str}, receive {receive_str} (to: {targets_str})")
                 elif isinstance(payload, MoveRobberPayload):
                     # Show tile info and which players are on it
                     tile = tile_map.get(payload.tile_id) if state and tile_map else None

@@ -24,7 +24,7 @@ LAST_NAMES = [
     "Lewis", "Robinson", "Walker", "Young", "Allen", "King", "Wright", "Scott"
 ]
 
-PLAYER_COLORS = ["#FF6B6B", "#4ECDC4", "#45B7D1", "#FFA07A", "#98D8C8", "#F7DC6F"]
+PLAYER_COLORS = ["#FF0000", "#00AA00", "#2196F3", "#F5F5F5"]  # Red, Green, Blue, White
 
 def generate_random_name() -> str:
     """Generate a random player name."""

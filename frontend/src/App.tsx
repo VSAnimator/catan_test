@@ -576,12 +576,12 @@ function App() {
     // Hex coordinate to pixel conversion (pointy-top hexagons)
     // Using axial coordinates (q, r) to pixel conversion
     const hexToPixel = (q: number, r: number) => {
-      const hexSize = 45  // Size of hex (radius)
+      const hexSize = 70  // Size of hex (radius) - increased from 45
       const sqrt3 = Math.sqrt(3)
       // Pointy-top hex conversion
       const x = hexSize * (sqrt3 * q + sqrt3 / 2 * r)
       const y = hexSize * (3.0 / 2.0 * r)
-      return { x: x + 400, y: y + 300 }  // Center offset for 19-tile board
+      return { x: x + 600, y: y + 450 }  // Center offset for 19-tile board - increased
     }
 
     return (
@@ -804,14 +804,14 @@ function App() {
             const midY = (y1 + y2) / 2
             
             // Calculate direction from board center to midpoint (outward direction)
-            const boardCenterX = 400  // Center offset from hexToPixel
-            const boardCenterY = 300
+            const boardCenterX = 600  // Center offset from hexToPixel (updated for larger map)
+            const boardCenterY = 450
             const dx = midX - boardCenterX
             const dy = midY - boardCenterY
             const distance = Math.sqrt(dx * dx + dy * dy)
             
             // Offset port icon outward from the edge (away from board center)
-            const offsetDistance = 35  // Pixels to offset from edge
+            const offsetDistance = 55  // Pixels to offset from edge (increased for larger hexes)
             const offsetX = (dx / distance) * offsetDistance
             const offsetY = (dy / distance) * offsetDistance
             const portX = midX + offsetX
@@ -2128,21 +2128,6 @@ function App() {
           </div>
         )}
         
-        {lastReasoning && view === 'game' && (
-          <div style={{ 
-            padding: '1rem', 
-            backgroundColor: '#fff3cd', 
-            border: '1px solid #ffc107',
-            borderRadius: '4px',
-            marginBottom: '1rem'
-          }}>
-            <strong>🤔 Last Agent Reasoning:</strong>
-            <div style={{ marginTop: '0.5rem', fontStyle: 'italic', color: '#666', whiteSpace: 'pre-wrap' }}>
-              {lastReasoning}
-            </div>
-          </div>
-        )}
-        
         {/* Step-by-step mode controls for main game view */}
         {view === 'game' && gameState && Object.keys(agentMapping).length > 0 && (
           <div style={{ 
@@ -2241,6 +2226,14 @@ function App() {
             <div className="board-container">
               {renderBoard(gameState, playerId, legalActions, true)}
             </div>
+            {lastReasoning && view === 'game' && (
+              <div className="reasoning-box">
+                <strong>🤔 Agent Reasoning:</strong>
+                <div className="reasoning-content">
+                  {lastReasoning}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="game-sidebar">
@@ -2879,31 +2872,68 @@ function App() {
             <div className="legal-actions">
               <h2>Legal Actions</h2>
               {loading ? (
-                <div>Loading actions...</div>
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading actions...</div>
               ) : legalActions.length === 0 ? (
-                <div>No legal actions available</div>
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>No legal actions available</div>
               ) : (
-                <div className="actions-list">
-                  {legalActions
-                    .filter(a => 
-                      a.type !== 'trade_bank' && 
-                      a.type !== 'trade_player' &&
-                      a.type !== 'discard_resources'  // Hide discard from main list, show in discard panel
+                <>
+                  {/* Show trade offer details if accept/reject trade actions are present */}
+                  {gameState?.pending_trade_offer && legalActions.some(a => a.type === 'accept_trade' || a.type === 'reject_trade') && (() => {
+                    const offer = gameState.pending_trade_offer
+                    const proposer = gameState.players.find(p => p.id === offer.proposer_id)
+                    const proposerName = proposer?.name || offer.proposer_id
+                    const giveResources = Object.entries(offer.give_resources || {})
+                      .filter(([_, count]) => (count as number) > 0)
+                      .map(([resource, count]) => `${count} ${resource}`)
+                      .join(', ')
+                    const receiveResources = Object.entries(offer.receive_resources || {})
+                      .filter(([_, count]) => (count as number) > 0)
+                      .map(([resource, count]) => `${count} ${resource}`)
+                      .join(', ')
+                    
+                    return (
+                      <div style={{
+                        padding: '0.75rem',
+                        backgroundColor: '#e3f2fd',
+                        border: '1px solid #2196F3',
+                        borderRadius: '4px',
+                        marginBottom: '1rem',
+                        fontSize: '0.9rem'
+                      }}>
+                        <strong style={{ display: 'block', marginBottom: '0.5rem', color: '#1976D2' }}>
+                          💼 Trade Offer from {proposerName}
+                        </strong>
+                        <div style={{ marginBottom: '0.25rem' }}>
+                          <strong>You give:</strong> {receiveResources || 'Nothing'}
+                        </div>
+                        <div>
+                          <strong>You receive:</strong> {giveResources || 'Nothing'}
+                        </div>
+                      </div>
                     )
-                    .map((action, idx) => (
-                      <button
-                        key={idx}
-                        onClick={() => {
-                          console.log('Action button clicked:', action)
-                          handleExecuteAction(action)
-                        }}
-                        disabled={loading || (activePlayer?.id !== playerId && action.type !== 'discard_resources')}
-                        className="action-button"
-                      >
-                        {formatActionName(action)}
-                      </button>
-                    ))}
-                </div>
+                  })()}
+                  <div className="actions-list">
+                    {legalActions
+                      .filter(a => 
+                        a.type !== 'trade_bank' && 
+                        a.type !== 'trade_player' &&
+                        a.type !== 'discard_resources'  // Hide discard from main list, show in discard panel
+                      )
+                      .map((action, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => {
+                            console.log('Action button clicked:', action)
+                            handleExecuteAction(action)
+                          }}
+                          disabled={loading || (activePlayer?.id !== playerId && action.type !== 'discard_resources')}
+                          className="action-button"
+                        >
+                          {formatActionName(action)}
+                        </button>
+                      ))}
+                  </div>
+                </>
               )}
             </div>
 

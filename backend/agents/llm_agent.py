@@ -299,6 +299,7 @@ class LLMAgent(BaseAgent):
 ### Trading:
 - **Bank trades**: 4:1 default, 3:1 with matching port, 2:1 with specific resource port
 - **Player trades**: Propose to one or more players, they accept/reject, proposer selects if multiple accept
+- **IMPORTANT**: Trading is fully functional! When you see "propose_trade" actions, they include specific give/receive resource details. Each trade proposal is a concrete, actionable move that will be sent to other players for their response.
 
 ### Victory:
 - First player to reach 10+ victory points wins
@@ -531,6 +532,28 @@ Now reason about the best action and respond in JSON format as specified."""
                     # This might be a parsing error - log it
                     print(f"Warning: LLM requested tile_id {llm_tile_id} but it's not in legal actions. Using first available.", flush=True)
                     matching_action = preferred_match
+            
+            # For BUILD_ROAD actions, handle both "road_id" and "road_edge_id" field names
+            elif target_action == Action.BUILD_ROAD and action_payload_dict:
+                # LLM might use "road_id" instead of "road_edge_id"
+                llm_road_id = action_payload_dict.get("road_edge_id") or action_payload_dict.get("road_id")
+                if llm_road_id is not None:
+                    # Try to find exact match first
+                    for action, payload in legal_actions_list:
+                        if action == target_action and payload and hasattr(payload, "road_edge_id"):
+                            if payload.road_edge_id == llm_road_id:
+                                exact_match = (action, payload)
+                                break
+                            # Also store first match as fallback
+                            if not preferred_match:
+                                preferred_match = (action, payload)
+                    
+                    if exact_match:
+                        matching_action = exact_match
+                    elif preferred_match:
+                        # LLM specified a road_id but it doesn't match any legal action
+                        print(f"Warning: LLM requested road_id {llm_road_id} but it's not in legal actions. Using first available.", flush=True)
+                        matching_action = preferred_match
             
             # For other actions, use standard matching
             if not matching_action:
