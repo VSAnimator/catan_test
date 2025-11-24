@@ -234,13 +234,42 @@ function App() {
     const activePlayer = getCurrentPlayer()
     if (!activePlayer) return
     
-    // Don't auto-advance if there's a pending trade (wait for trade to complete)
-    if (gameState.pending_trade_offer) {
-      return
-    }
-    
     // Check if current player is an agent
     const currentPlayerIsAgent = activePlayer.id in agentMapping
+    
+    // If there's a pending trade, only block auto-advancement if:
+    // 1. The current player is the human player (they need to manually respond)
+    // 2. The current player is the proposer waiting for responses (not their turn yet)
+    // Otherwise, if it's an agent's turn to respond, allow auto-advancement
+    if (gameState.pending_trade_offer) {
+      const offer = gameState.pending_trade_offer
+      const isProposer = offer.proposer_id === activePlayer.id
+      const isTarget = offer.target_player_ids?.includes(activePlayer.id)
+      
+      // If current player is human and needs to respond, don't auto-advance
+      if (activePlayer.id === playerId && isTarget) {
+        return
+      }
+      
+      // If current player is proposer waiting for responses, don't auto-advance yet
+      // (unless multiple players accepted and they need to select)
+      if (isProposer && !isTarget) {
+        // Check if proposer needs to select a partner (multiple acceptances)
+        const responses = gameState.pending_trade_responses || {}
+        const acceptingPlayers = Object.keys(responses).filter(pid => responses[pid] === true)
+        if (acceptingPlayers.length <= 1) {
+          // Still waiting for responses, don't auto-advance
+          return
+        }
+        // Multiple accepted - proposer needs to select, so allow auto-advance if agent
+      }
+      
+      // If it's an agent's turn to respond to trade, allow auto-advancement
+      if (!currentPlayerIsAgent && isTarget && activePlayer.id !== playerId) {
+        // Not an agent but needs to respond - this shouldn't happen, but don't auto-advance
+        return
+      }
+    }
     
     if (currentPlayerIsAgent && activePlayer.id !== playerId) {
       // It's an agent's turn (and not the human player)
@@ -275,7 +304,7 @@ function App() {
       const timeout = setTimeout(advanceAgentTurn, 500)
       return () => clearTimeout(timeout)
     }
-  }, [gameState?.current_player_index, gameState?.setup_phase_player_index, gameState?.phase, gameState?.game_id, gameState, agentMapping, playerId, loading, view, stepByStepMode])
+  }, [gameState?.current_player_index, gameState?.setup_phase_player_index, gameState?.phase, gameState?.game_id, gameState?.pending_trade_offer, gameState?.pending_trade_responses, gameState, agentMapping, playerId, loading, view, stepByStepMode])
 
   const refreshGameState = async () => {
     if (!gameState) return
@@ -2136,7 +2165,18 @@ function App() {
               <span>Step-by-Step Mode (read reasoning before advancing)</span>
             </label>
             
-            {stepByStepMode && activePlayer && activePlayer.id in agentMapping && activePlayer.id !== playerId && !gameState.pending_trade_offer && (
+            {stepByStepMode && activePlayer && activePlayer.id in agentMapping && activePlayer.id !== playerId && (
+              // Show button if:
+              // 1. No pending trade, OR
+              // 2. Pending trade but current player is an agent who needs to respond (target), OR
+              // 3. Pending trade and current player is proposer who needs to select partner
+              (!gameState.pending_trade_offer || 
+               (gameState.pending_trade_offer && (
+                 gameState.pending_trade_offer.target_player_ids?.includes(activePlayer.id) ||
+                 (gameState.pending_trade_offer.proposer_id === activePlayer.id && 
+                  Object.keys(gameState.pending_trade_responses || {}).filter(pid => gameState.pending_trade_responses?.[pid] === true).length > 1)
+               ))
+              ) && (
               <button
                 onClick={async () => {
                   if (!gameState || loading) return
@@ -2169,7 +2209,7 @@ function App() {
               >
                 {loading ? '⏳ Processing...' : '⏭️ Next Step'}
               </button>
-            )}
+            ))}
           </div>
         )}
         

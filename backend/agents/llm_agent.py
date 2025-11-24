@@ -223,6 +223,43 @@ class LLMAgent(BaseAgent):
         if not legal_actions_list:
             raise ValueError("No legal actions available")
         
+        # Handle pending trade responses FIRST (must be done before other actions)
+        if state.pending_trade_offer is not None:
+            offer = state.pending_trade_offer
+            current_player = state.players[state.current_player_index]
+            
+            # Check if this player is a target of the trade and needs to respond
+            if current_player.id in offer['target_player_ids']:
+                if current_player.id not in state.pending_trade_responses:
+                    # Player needs to respond - prioritize this
+                    accept_actions = [(a, p) for a, p in legal_actions_list if a == Action.ACCEPT_TRADE]
+                    reject_actions = [(a, p) for a, p in legal_actions_list if a == Action.REJECT_TRADE]
+                    
+                    if accept_actions or reject_actions:
+                        # If only one option, use it immediately
+                        if accept_actions and not reject_actions:
+                            return (accept_actions[0][0], accept_actions[0][1], "Accepting trade (only option available)")
+                        elif reject_actions and not accept_actions:
+                            return (reject_actions[0][0], reject_actions[0][1], "Rejecting trade (cannot afford)")
+                        # If both available, let LLM decide but add urgent note to prompt
+                        # Continue to LLM call below, but we'll add a note in the prompt
+            
+            # Check if this player is the proposer and needs to select a partner
+            elif current_player.id == offer['proposer_id']:
+                accepting_players = [pid for pid, accepted in state.pending_trade_responses.items() if accepted]
+                if len(accepting_players) > 1:
+                    # Multiple accepted - must select partner
+                    select_actions = [(a, p) for a, p in legal_actions_list if a == Action.SELECT_TRADE_PARTNER]
+                    if select_actions:
+                        # Pick first accepting player (or could let LLM decide)
+                        from engine import SelectTradePartnerPayload
+                        return (Action.SELECT_TRADE_PARTNER, SelectTradePartnerPayload(selected_player_id=accepting_players[0]), 
+                                f"Selecting trade partner: {accepting_players[0]}")
+                elif len(accepting_players) == 1:
+                    # Only one accepted - trade will execute automatically, just need to wait
+                    # But we should still be able to continue, so let it fall through
+                    pass
+        
         # Step 1: Observe - Format current state
         state_and_actions = self._format_state_and_actions(state, legal_actions_list)
         
@@ -231,6 +268,39 @@ class LLMAgent(BaseAgent):
         
         # Step 3: Act - Build prompt and call LLM
         system_prompt = """You are an expert Catan player agent. Your goal is to win the game by reaching 10 victory points.
+
+## CRITICAL CATAN RULES:
+
+### Setup Phase:
+- **Two unconnected settlements**: In setup, you place TWO settlements that do NOT need to be connected by roads. They are placed independently.
+- **Setup order**: 
+  - Round 1: Each player places one settlement + one road (road must connect to that settlement)
+  - Round 2: Each player places one settlement + one road (road must connect to that settlement)
+  - The two settlements from setup are NOT connected to each other
+- **Distance rule**: Settlements and cities must be at least 2 edges apart (no adjacent intersections can both have buildings)
+
+### Playing Phase:
+- **One dev card per turn**: You can only play ONE development card per turn (except Victory Point cards, which are revealed at game end)
+- **Road building**: Roads must connect to your existing roads or settlements/cities
+- **Settlement placement**: Settlements must be at least 2 edges from any other settlement/city (distance rule)
+- **City placement**: Cities can only be built by upgrading existing settlements
+
+### Development Cards:
+- **Knight**: Move robber and steal one resource from a player on that tile
+- **Year of Plenty**: Take any 2 resources from the bank
+- **Monopoly**: All players give you all resources of one type
+- **Road Building**: Build 2 roads for free (must be legal placements)
+- **Victory Point**: Worth 1 VP, revealed at game end
+
+### Trading:
+- **Bank trades**: 4:1 default, 3:1 with matching port, 2:1 with specific resource port
+- **Player trades**: Propose to one or more players, they accept/reject, proposer selects if multiple accept
+
+### Victory:
+- First player to reach 10+ victory points wins
+- Victory points come from: Settlements (1 VP), Cities (2 VPs), Longest Road (2 VPs), Largest Army (2 VPs), VP cards (1 VP each)
+
+---
 
 You will receive:
 1. The current game state
@@ -246,6 +316,7 @@ Use the ReAct pattern:
   - Similar situations from past games
   - Guidelines and feedback
   - Strategic goals (winning conditions)
+  - **CRITICAL**: Follow the Catan rules above!
 - **Act**: Choose the best action from the legal actions
 
 Respond in JSON format:
@@ -263,9 +334,18 @@ Be strategic and consider:
 - Playing development cards at the right time
 - Blocking opponents when advantageous"""
         
+        # Add urgent note if trade response is needed
+        trade_urgency_note = ""
+        if state.pending_trade_offer is not None:
+            current_player = state.players[state.current_player_index]
+            offer = state.pending_trade_offer
+            if (current_player.id in offer['target_player_ids'] and 
+                current_player.id not in state.pending_trade_responses):
+                trade_urgency_note = "\n\n⚠️ URGENT: You MUST respond to the pending trade offer. You can only choose ACCEPT_TRADE or REJECT_TRADE. No other actions are available until you respond.\n"
+        
         user_prompt = f"""{state_and_actions}
 
-{context}
+{context}{trade_urgency_note}
 
 Now reason about the best action and respond in JSON format as specified."""
         
@@ -346,6 +426,12 @@ Now reason about the best action and respond in JSON format as specified."""
                         # Map to the first legal action's type
                         first_action = legal_actions_list[0][0]
                         action_type_str = first_action.value
+            elif "resolve" in action_type_str and "robber" in action_type_str:
+                # LLM trying to "resolve_robber" - map to appropriate robber action
+                if any(a == Action.STEAL_RESOURCE for a, _ in legal_actions_list):
+                    action_type_str = "steal_resource"
+                elif any(a == Action.MOVE_ROBBER for a, _ in legal_actions_list):
+                    action_type_str = "move_robber"
             
             # Normalize action type string: replace spaces/hyphens with underscores, remove extra chars
             action_type_normalized = action_type_str.replace(" ", "_").replace("-", "_").strip()
@@ -360,6 +446,10 @@ Now reason about the best action and respond in JSON format as specified."""
                 "play_dev_card": Action.PLAY_DEV_CARD,
                 "play_devcard": Action.PLAY_DEV_CARD,  # Alternative spelling
                 "play_development_card": Action.PLAY_DEV_CARD,  # Full name variant
+                "play_knight": Action.PLAY_DEV_CARD,  # Common variant (knight is a dev card)
+                "play_monopoly": Action.PLAY_DEV_CARD,  # Common variant
+                "play_year_of_plenty": Action.PLAY_DEV_CARD,  # Common variant
+                "play_road_building": Action.PLAY_DEV_CARD,  # Common variant
                 "trade_bank": Action.TRADE_BANK,
                 "propose_trade": Action.PROPOSE_TRADE,
                 "accept_trade": Action.ACCEPT_TRADE,

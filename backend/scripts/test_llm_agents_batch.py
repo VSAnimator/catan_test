@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import uuid
 import random
-from engine import GameState, Player
+from engine import GameState, Player, Action
 from agents import LLMAgent
 from api.database import init_db, create_game, get_latest_state, flush_all_write_queues
 from engine.serialization import deserialize_game_state, legal_actions, serialize_game_state
@@ -100,6 +100,7 @@ def run_single_llm_game(game_num: int, max_turns: int = 20):
         
         turn_count = 0
         parsing_errors = []
+        trade_proposals = []  # Track trade proposals
         
         try:
             while state.phase != "finished" and turn_count < max_turns:
@@ -135,6 +136,15 @@ def run_single_llm_game(game_num: int, max_turns: int = 20):
                             'action_taken': action.value if action else None,
                             'legal_actions': legal_action_types,
                             'llm_response': agent._last_llm_response if hasattr(agent, '_last_llm_response') else None
+                        })
+                    
+                    # Track trade proposals
+                    if action == Action.PROPOSE_TRADE:
+                        trade_proposals.append({
+                            'turn': turn_count,
+                            'player': current_player.name,
+                            'player_id': current_player.id,
+                            'payload': payload
                         })
                     
                     # Execute action
@@ -207,6 +217,7 @@ def run_single_llm_game(game_num: int, max_turns: int = 20):
             'turns_played': turn_count,
             'phase': state.phase,
             'parsing_errors': parsing_errors,
+            'trade_proposals': trade_proposals,
             'winner': max(state.players, key=lambda p: p.victory_points).name if state.phase == "finished" else None
         }
     
@@ -248,10 +259,13 @@ def main():
     
     total_errors = 0
     games_with_errors = 0
+    total_trade_proposals = 0
     
     for result in results:
         game_errors = len(result['parsing_errors'])
+        game_trades = len(result.get('trade_proposals', []))
         total_errors += game_errors
+        total_trade_proposals += game_trades
         
         if game_errors > 0:
             games_with_errors += 1
@@ -266,7 +280,8 @@ def main():
                 print(f"      Legal actions: {error.get('legal_actions', [])}")
                 print(f"      Reasoning: {error.get('reasoning', '')[:150]}...")
         else:
-            print(f"Game {result['game_num']}: ✅ No errors ({result['turns_played']} turns, {result['phase']})")
+            trade_info = f", {game_trades} trade proposal(s)" if game_trades > 0 else ""
+            print(f"Game {result['game_num']}: ✅ No errors ({result['turns_played']} turns, {result['phase']}{trade_info})")
     
     print("\n" + "="*60)
     print("OVERALL STATISTICS")
@@ -274,7 +289,23 @@ def main():
     print(f"Total games: {num_games}")
     print(f"Games with errors: {games_with_errors}")
     print(f"Total parsing errors: {total_errors}")
+    print(f"Total trade proposals: {total_trade_proposals}")
     print(f"Success rate: {(num_games - games_with_errors) / num_games * 100:.1f}%")
+    
+    if total_trade_proposals > 0:
+        print("\n" + "="*60)
+        print("TRADE PROPOSAL ANALYSIS")
+        print("="*60)
+        for result in results:
+            if result.get('trade_proposals'):
+                print(f"\nGame {result['game_num']} ({result['game_id']}):")
+                for i, trade in enumerate(result['trade_proposals'], 1):
+                    give_str = ", ".join([f"{count} {rt.value}" for rt, count in trade['payload'].give_resources.items()])
+                    receive_str = ", ".join([f"{count} {rt.value}" for rt, count in trade['payload'].receive_resources.items()])
+                    print(f"  Trade {i} (Turn {trade['turn']}, {trade['player']}): Give {give_str}, Receive {receive_str}")
+                    print(f"    Targets: {', '.join(trade['payload'].target_player_ids)}")
+    else:
+        print("\n⚠️  WARNING: No trade proposals found in any game!")
     
     if total_errors > 0:
         print("\n" + "="*60)

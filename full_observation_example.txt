@@ -1,0 +1,409 @@
+=== FULL OBSERVATION SPACE EXAMPLE ===
+
+=== GAME STATE ===
+=== Catan Game State ===
+Game ID: 4d01b384-a1ed-4511-8d4d-aa44fc74090c
+Phase: setup
+Turn: 0
+Setup player: Finley Wright (player_1)
+Setup round: 1
+Player order in setup: 1. Casey Rodriguez (player_0), 2. Finley Wright (player_1), 3. Lane Taylor (player_2), 4. Riley White (player_3)
+Your position: 2 of 4
+Players who have already placed this round: Casey Rodriguez (player_0)
+
+=== Your Status (Finley Wright) ===
+Victory Points: 0
+Resources:
+  Wood: 0
+  Brick: 0
+  Wheat: 0
+  Sheep: 0
+  Ore: 0
+Buildings: 0 settlements, 0 cities
+Roads: 0
+Dev Cards: 0
+
+=== Other Players ===
+Casey Rodriguez (player_0):
+  Victory Points: 1
+  Total Resources: 0
+  Buildings: 1 settlements, 0 cities
+  Roads: 1
+  Longest Road: 1 segments (needs 5+ for card)
+  Building Locations:
+    Intersection 19: settlement
+Lane Taylor (player_2):
+  Victory Points: 0
+  Total Resources: 0
+  Buildings: 0 settlements, 0 cities
+  Roads: 0
+Riley White (player_3):
+  Victory Points: 0
+  Total Resources: 0
+  Buildings: 0 settlements, 0 cities
+  Roads: 0
+
+=== Board Layout ===
+=== Compact Map View ===
+=== Compact Map (Hexagonal Layout) ===
+Format: [🔴=Robber][Resource][Token], e.g., ' W 6' = Wood token 6
+Buildings: 🏠=Your Settlement, 🏛️=Your City, S=Opp Settlement, C=Opp City
+
+      🔴DES   B11   H 6
+    W10   S 3   O10   H12
+ S 5   B 8   S 5   B 8   W 9
+    O 2   S 9   H11   W 3
+       O 6   W 4   H 4
+      I19S
+
+Opponent Buildings:
+  I19: settlement (Casey Rodriguez) on T5,T14,T15
+Casey Rodriguez's Roads (1): I19-I44
+
+Resource Scarcity (tiles per resource type):
+  sheep: 4 tiles, wheat: 4 tiles, wood: 4 tiles, ore: 3 tiles, brick: 3 tiles
+
+Dice Roll Probabilities (for resource production):
+  2: 2.8% | 3: 5.6% | 4: 8.3% | 5: 11.1% | 6: 13.9%
+  8: 13.9% | 9: 11.1% | 10: 8.3% | 11: 5.6% | 12: 2.8%
+  (7: 16.7% - triggers robber, no production)
+  Best numbers: 6 and 8 (13.9% each)
+
+Tiles (with production value):
+  Tile 0: sheep (token: 5, 11.1% roll probability)
+  Tile 1: sheep (token: 3, 5.6% roll probability)
+  Tile 2: ore (token: 10, 8.3% roll probability)
+  Tile 3: brick (token: 8, 13.9% roll probability)
+  Tile 4: wheat (token: 11, 5.6% roll probability)
+  Tile 5: sheep (token: 9, 11.1% roll probability)
+  Tile 6: brick (token: 8, 13.9% roll probability)
+  Tile 7: Desert (robber location)
+  Tile 8: brick (token: 11, 5.6% roll probability)
+  Tile 9: wheat (token: 6, 13.9% roll probability)
+  Tile 10: wheat (token: 12, 2.8% roll probability)
+  Tile 11: wood (token: 9, 11.1% roll probability)
+  Tile 12: wood (token: 3, 5.6% roll probability)
+  Tile 13: wheat (token: 4, 8.3% roll probability)
+  Tile 14: wood (token: 4, 8.3% roll probability)
+  Tile 15: ore (token: 6, 13.9% roll probability)
+  Tile 16: ore (token: 2, 2.8% roll probability)
+  Tile 17: sheep (token: 5, 11.1% roll probability)
+  Tile 18: wood (token: 10, 8.3% roll probability)
+
+=== Intersections (Spatial Information) ===
+
+Opponent Intersections:
+  Intersection 19: settlement (owned by Casey Rodriguez)
+    Tiles: T5(s9), T14(w4), T15(o6)
+
+Available Intersections (for building):
+  Total available: 50 intersections
+  Intersection 3:
+    Production Value: 36.1% per roll
+    Tiles: brick 8, sheep 5, sheep 9
+    Resource Production: sheep: 22.2%, brick: 13.9%
+    Adjacent Intersections: 2, 4, 21
+  Intersection 0:
+    Production Value: 33.3% per roll
+    Tiles: brick 8, ore 10, sheep 5
+    Resource Production: brick: 13.9%, sheep: 11.1%, ore: 8.3%
+    Adjacent Intersections: 1, 5, 11
+  Intersection 23:
+    Production Value: 33.3% per roll
+    Tiles: brick 8, sheep 5, wood 10
+    Resource Production: brick: 13.9%, sheep: 11.1%, wood: 8.3%
+    Adjacent Intersections: 7, 22, 52
+  Intersection 1:
+    Production Value: 30.6% per roll
+    Tiles: brick 8, sheep 5, wheat 11
+    Resource Production: brick: 13.9%, sheep: 11.1%, wheat: 5.6%
+    Adjacent Intersections: 0, 2, 15
+  Intersection 4:
+    Production Value: 30.6% per roll
+    Tiles: brick 8, sheep 3, sheep 5
+    Resource Production: sheep: 16.7%, brick: 13.9%
+    Adjacent Intersections: 3, 5, 7
+  Intersection 14:
+    Production Value: 30.6% per roll
+    Tiles: brick 8, wood 3, wood 9
+    Resource Production: wood: 16.7%, brick: 13.9%
+    Adjacent Intersections: 13, 15, 37
+  Intersection 2:
+    Production Value: 27.8% per roll
+    Tiles: sheep 5, sheep 9, wheat 11
+    Resource Production: sheep: 22.2%, wheat: 5.6%
+    Adjacent Intersections: 1, 3, 18
+  Intersection 7:
+    Production Value: 27.8% per roll
+    Tiles: brick 8, sheep 3, wood 10
+    Resource Production: brick: 13.9%, wood: 8.3%, sheep: 5.6%
+    Adjacent Intersections: 4, 8, 23
+  Intersection 12:
+    Production Value: 27.8% per roll
+    Tiles: brick 11, ore 10, wheat 6
+    Resource Production: wheat: 13.9%, ore: 8.3%, brick: 5.6%
+    Adjacent Intersections: 6, 10, 28
+  Intersection 13:
+    Production Value: 27.8% per roll
+    Tiles: brick 8, wheat 12, wood 9
+    Resource Production: brick: 13.9%, wood: 11.1%, wheat: 2.8%
+    Adjacent Intersections: 11, 14, 34
+  Intersection 21:
+    Production Value: 27.8% per roll
+    Tiles: brick 8, ore 2, sheep 9
+    Resource Production: brick: 13.9%, sheep: 11.1%, ore: 2.8%
+    Adjacent Intersections: 3, 20, 22
+  Intersection 22:
+    Production Value: 27.8% per roll
+    Tiles: brick 8, ore 2, sheep 5
+    Resource Production: brick: 13.9%, sheep: 11.1%, ore: 2.8%
+    Adjacent Intersections: 21, 23, 49
+  Intersection 5:
+    Production Value: 25.0% per roll
+    Tiles: ore 10, sheep 3, sheep 5
+    Resource Production: sheep: 16.7%, ore: 8.3%
+    Adjacent Intersections: 0, 4, 6
+  Intersection 10:
+    Production Value: 25.0% per roll
+    Tiles: ore 10, wheat 6, wheat 12
+    Resource Production: wheat: 16.7%, ore: 8.3%
+    Adjacent Intersections: 11, 12, 31
+  Intersection 11:
+    Production Value: 25.0% per roll
+    Tiles: brick 8, ore 10, wheat 12
+    Resource Production: brick: 13.9%, ore: 8.3%, wheat: 2.8%
+    Adjacent Intersections: 0, 10, 13
+  Intersection 15:
+    Production Value: 25.0% per roll
+    Tiles: brick 8, wheat 11, wood 3
+    Resource Production: brick: 13.9%, wheat: 5.6%, wood: 5.6%
+    Adjacent Intersections: 1, 14, 16
+  Intersection 17:
+    Production Value: 22.2% per roll
+    Tiles: wheat 4, wheat 11, wood 4
+    Resource Production: wheat: 13.9%, wood: 8.3%
+    Adjacent Intersections: 16, 18, 42
+  Intersection 28 [PORT: ore]:
+    Production Value: 19.4% per roll
+    Tiles: brick 11, wheat 6
+    Resource Production: wheat: 13.9%, brick: 5.6%
+    Adjacent Intersections: 12, 29, 32
+  Intersection 6:
+    Production Value: 19.4% per roll
+    Tiles: brick 11, ore 10, sheep 3
+    Resource Production: ore: 8.3%, brick: 5.6%, sheep: 5.6%
+    Adjacent Intersections: 5, 9, 12
+  Intersection 16:
+    Production Value: 19.4% per roll
+    Tiles: wheat 4, wheat 11, wood 3
+    Resource Production: wheat: 13.9%, wood: 5.6%
+    Adjacent Intersections: 15, 17, 39
+  Intersection 52 [PORT: brick]:
+    Production Value: 19.4% per roll
+    Tiles: sheep 5, wood 10
+    Resource Production: sheep: 11.1%, wood: 8.3%
+    Adjacent Intersections: 23, 51, 53
+  Intersection 31 [PORT: 3:1]:
+    Production Value: 16.7% per roll
+    Tiles: wheat 6, wheat 12
+    Resource Production: wheat: 16.7%
+    Adjacent Intersections: 10, 30, 33
+  Intersection 47:
+    Production Value: 16.7% per roll
+    Tiles: ore 2, ore 6
+    Resource Production: ore: 16.7%
+    Adjacent Intersections: 20, 46, 48
+  Intersection 37:
+    Production Value: 16.7% per roll
+    Tiles: wood 3, wood 9
+    Resource Production: wood: 16.7%
+    Adjacent Intersections: 14, 36, 38
+  Intersection 42 [PORT: wood]:
+    Production Value: 16.7% per roll
+    Tiles: wheat 4, wood 4
+    Resource Production: wheat: 8.3%, wood: 8.3%
+    Adjacent Intersections: 17, 41, 43
+  Intersection 8:
+    Production Value: 13.9% per roll
+    Tiles: sheep 3, wood 10
+    Resource Production: wood: 8.3%, sheep: 5.6%
+    Adjacent Intersections: 7, 9, 25
+  Intersection 30:
+    Production Value: 13.9% per roll
+    Tiles: wheat 6
+    Resource Production: wheat: 13.9%
+    Adjacent Intersections: 31, 32
+  Intersection 32 [PORT: ore]:
+    Production Value: 13.9% per roll
+    Tiles: wheat 6
+    Resource Production: wheat: 13.9%
+    Adjacent Intersections: 28, 30
+  Intersection 34:
+    Production Value: 13.9% per roll
+    Tiles: wheat 12, wood 9
+    Resource Production: wood: 11.1%, wheat: 2.8%
+    Adjacent Intersections: 13, 33, 35
+  Intersection 39 [PORT: wheat]:
+    Production Value: 13.9% per roll
+    Tiles: wheat 4, wood 3
+    Resource Production: wheat: 8.3%, wood: 5.6%
+    Adjacent Intersections: 16, 38, 40
+  Intersection 45 [PORT: sheep]:
+    Production Value: 13.9% per roll
+    Tiles: ore 6
+    Resource Production: ore: 13.9%
+    Adjacent Intersections: 44, 46
+  Intersection 46 [PORT: sheep]:
+    Production Value: 13.9% per roll
+    Tiles: ore 6
+    Resource Production: ore: 13.9%
+    Adjacent Intersections: 45, 47
+  Intersection 49 [PORT: 3:1]:
+    Production Value: 13.9% per roll
+    Tiles: ore 2, sheep 5
+    Resource Production: sheep: 11.1%, ore: 2.8%
+    Adjacent Intersections: 22, 48, 50
+  Intersection 9:
+    Production Value: 11.1% per roll
+    Tiles: brick 11, sheep 3
+    Resource Production: brick: 5.6%, sheep: 5.6%
+    Adjacent Intersections: 6, 8, 24
+  Intersection 35 [PORT: 3:1]:
+    Production Value: 11.1% per roll
+    Tiles: wood 9
+    Resource Production: wood: 11.1%
+    Adjacent Intersections: 34, 36
+  Intersection 36 [PORT: 3:1]:
+    Production Value: 11.1% per roll
+    Tiles: wood 9
+    Resource Production: wood: 11.1%
+    Adjacent Intersections: 35, 37
+  Intersection 50 [PORT: 3:1]:
+    Production Value: 11.1% per roll
+    Tiles: sheep 5
+    Resource Production: sheep: 11.1%
+    Adjacent Intersections: 49, 51
+  Intersection 51:
+    Production Value: 11.1% per roll
+    Tiles: sheep 5
+    Resource Production: sheep: 11.1%
+    Adjacent Intersections: 50, 52
+  Intersection 25:
+    Production Value: 8.3% per roll
+    Tiles: wood 10
+    Resource Production: wood: 8.3%
+    Adjacent Intersections: 8, 26, 53
+  Intersection 40 [PORT: wheat]:
+    Production Value: 8.3% per roll
+    Tiles: wheat 4
+    Resource Production: wheat: 8.3%
+    Adjacent Intersections: 39, 41
+  Intersection 41:
+    Production Value: 8.3% per roll
+    Tiles: wheat 4
+    Resource Production: wheat: 8.3%
+    Adjacent Intersections: 40, 42
+  Intersection 43 [PORT: wood]:
+    Production Value: 8.3% per roll
+    Tiles: wood 4
+    Resource Production: wood: 8.3%
+    Adjacent Intersections: 42, 44
+  Intersection 53 [PORT: brick]:
+    Production Value: 8.3% per roll
+    Tiles: wood 10
+    Resource Production: wood: 8.3%
+    Adjacent Intersections: 25, 52
+  Intersection 24:
+    Production Value: 5.6% per roll
+    Tiles: brick 11
+    Resource Production: brick: 5.6%
+    Adjacent Intersections: 9, 27, 29
+  Intersection 29:
+    Production Value: 5.6% per roll
+    Tiles: brick 11
+    Resource Production: brick: 5.6%
+    Adjacent Intersections: 24, 28
+  Intersection 38:
+    Production Value: 5.6% per roll
+    Tiles: wood 3
+    Resource Production: wood: 5.6%
+    Adjacent Intersections: 37, 39
+  Intersection 33 [PORT: 3:1]:
+    Production Value: 2.8% per roll
+    Tiles: wheat 12
+    Resource Production: wheat: 2.8%
+    Adjacent Intersections: 31, 34
+  Intersection 48:
+    Production Value: 2.8% per roll
+    Tiles: ore 2
+    Resource Production: ore: 2.8%
+    Adjacent Intersections: 47, 49
+  Intersection 26 [PORT: 3:1]:
+    Production Value: 0.0% per roll
+    Adjacent Intersections: 25, 27
+  Intersection 27 [PORT: 3:1]:
+    Production Value: 0.0% per roll
+    Adjacent Intersections: 24, 26
+
+=== Road Network ===
+Casey Rodriguez's Roads (1):
+  Road 35: I19 <-> I44
+
+=== Robber ===
+Robber is on Tile 7 (Desert)
+
+
+
+=== LEGAL ACTIONS ===
+=== Legal Actions ===
+- Setup Place Settlement:
+  * At intersection 0 (tiles: T0(S5),T2(O10),T3(B8))
+  * At intersection 1 (tiles: T0(S5),T3(B8),T4(H11))
+  * At intersection 2 (tiles: T0(S5),T4(H11),T5(S9))
+  * At intersection 3 (tiles: T0(S5),T5(S9),T6(B8))
+  * At intersection 4 (tiles: T0(S5),T1(S3),T6(B8))
+  * At intersection 5 (tiles: T0(S5),T1(S3),T2(O10))
+  * At intersection 6 (tiles: T1(S3),T2(O10),T8(B11))
+  * At intersection 7 (tiles: T1(S3),T6(B8),T18(W10))
+  * At intersection 8 (tiles: T1(S3),T7(DES),T18(W10))
+  * At intersection 9 (tiles: T1(S3),T7(DES),T8(B11))
+  * At intersection 10 (tiles: T2(O10),T9(H6),T10(H12))
+  * At intersection 11 (tiles: T2(O10),T3(B8),T10(H12))
+  * At intersection 12 (tiles: T2(O10),T8(B11),T9(H6))
+  * At intersection 13 (tiles: T3(B8),T10(H12),T11(W9))
+  * At intersection 14 (tiles: T3(B8),T11(W9),T12(W3))
+  * At intersection 15 (tiles: T3(B8),T4(H11),T12(W3))
+  * At intersection 16 (tiles: T4(H11),T12(W3),T13(H4))
+  * At intersection 17 (tiles: T4(H11),T13(H4),T14(W4))
+  * At intersection 21 (tiles: T5(S9),T6(B8),T16(O2))
+  * At intersection 22 (tiles: T6(B8),T16(O2),T17(S5))
+  * At intersection 23 (tiles: T6(B8),T17(S5),T18(W10))
+  * At intersection 24 (tiles: T7(DES),T8(B11))
+  * At intersection 25 (tiles: T7(DES),T18(W10))
+  * At intersection 26 (tiles: T7(DES); PORT:3:1)
+  * At intersection 27 (tiles: T7(DES); PORT:3:1)
+  * At intersection 28 (tiles: T8(B11),T9(H6); PORT:ore)
+  * At intersection 29 (tiles: T8(B11))
+  * At intersection 30 (tiles: T9(H6))
+  * At intersection 31 (tiles: T9(H6),T10(H12); PORT:3:1)
+  * At intersection 32 (tiles: T9(H6); PORT:ore)
+  * At intersection 33 (tiles: T10(H12); PORT:3:1)
+  * At intersection 34 (tiles: T10(H12),T11(W9))
+  * At intersection 35 (tiles: T11(W9); PORT:3:1)
+  * At intersection 36 (tiles: T11(W9); PORT:3:1)
+  * At intersection 37 (tiles: T11(W9),T12(W3))
+  * At intersection 38 (tiles: T12(W3))
+  * At intersection 39 (tiles: T12(W3),T13(H4); PORT:wheat)
+  * At intersection 40 (tiles: T13(H4); PORT:wheat)
+  * At intersection 41 (tiles: T13(H4))
+  * At intersection 42 (tiles: T13(H4),T14(W4); PORT:wood)
+  * At intersection 43 (tiles: T14(W4); PORT:wood)
+  * At intersection 45 (tiles: T15(O6); PORT:sheep)
+  * At intersection 46 (tiles: T15(O6); PORT:sheep)
+  * At intersection 47 (tiles: T15(O6),T16(O2))
+  * At intersection 48 (tiles: T16(O2))
+  * At intersection 49 (tiles: T16(O2),T17(S5); PORT:3:1)
+  * At intersection 50 (tiles: T17(S5); PORT:3:1)
+  * At intersection 51 (tiles: T17(S5))
+  * At intersection 52 (tiles: T17(S5),T18(W10); PORT:brick)
+  * At intersection 53 (tiles: T18(W10); PORT:brick)

@@ -881,8 +881,36 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
                                     port_intersection_id=None,
                                 )))
             
-            # Player trades are now constructed via the UI, not auto-generated
-            # This allows for multi-resource trades with custom give/receive amounts
+            # Can propose trades to other players (only if no trade is pending and trading is allowed)
+            if can_trade and state.pending_trade_offer is None:
+                # Generate trade proposals: simple 1:1 trades for each resource type
+                # Agents can propose giving 1 of any resource they have for 1 of any resource they need
+                other_players = [p.id for p in state.players if p.id != player_id]
+                
+                if other_players:
+                    # Generate trades: give 1 of X, receive 1 of Y (for each resource type the player has)
+                    for give_resource in ResourceType:
+                        if player.resources.get(give_resource, 0) >= 1:
+                            # Can propose to give 1 of this resource
+                            for receive_resource in ResourceType:
+                                if give_resource != receive_resource:
+                                    # Propose trade to all other players
+                                    legal.append((Action.PROPOSE_TRADE, ProposeTradePayload(
+                                        target_player_ids=other_players,
+                                        give_resources={give_resource: 1},
+                                        receive_resources={receive_resource: 1}
+                                    )))
+                    
+                    # Also generate 2:1 trades (give 2, receive 1) for resources player has in excess
+                    for give_resource in ResourceType:
+                        if player.resources.get(give_resource, 0) >= 2:
+                            for receive_resource in ResourceType:
+                                if give_resource != receive_resource:
+                                    legal.append((Action.PROPOSE_TRADE, ProposeTradePayload(
+                                        target_player_ids=other_players,
+                                        give_resources={give_resource: 2},
+                                        receive_resources={receive_resource: 1}
+                                    )))
             
             # Can end turn (but not if waiting for robber actions, or if 7 was rolled and anyone needs to discard)
             # Never allow END_TURN if waiting_for_robber_move or waiting_for_robber_steal is True
@@ -957,6 +985,21 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
         setup_player = state.players[state.setup_phase_player_index]
         lines.append(f"Setup player: {setup_player.name} ({setup_player.id})")
         lines.append(f"Setup round: {state.setup_round + 1}")
+        
+        # Show player order and who has already placed in this round
+        lines.append(f"Player order in setup: {', '.join([f'{i+1}. {p.name} ({p.id})' for i, p in enumerate(state.players)])}")
+        lines.append(f"Your position: {state.setup_phase_player_index + 1} of {len(state.players)}")
+        
+        # Show which players have already placed settlements in this round
+        settlements_placed_this_round = []
+        for i, p in enumerate(state.players):
+            if i < state.setup_phase_player_index:
+                # This player has already placed in this round
+                settlements_placed_this_round.append(f"{p.name} ({p.id})")
+        if settlements_placed_this_round:
+            lines.append(f"Players who have already placed this round: {', '.join(settlements_placed_this_round)}")
+        else:
+            lines.append("You are the first player to place in this round")
     
     lines.append("")
     
@@ -1160,6 +1203,7 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
             if can_build:
                 total_production = 0.0
                 resource_prod = {}
+                tile_details = []  # Store actual tile info: (resource_type, token_value)
                 port_bonus = ""
                 if inter.port_type:
                     port_bonus = f" [PORT: {inter.port_type}]"
@@ -1174,20 +1218,27 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
                         if res_type not in resource_prod:
                             resource_prod[res_type] = 0.0
                         resource_prod[res_type] += prob
+                        # Store actual tile details
+                        tile_details.append((res_type, token_value))
                 
-                candidates.append((inter.id, total_production, resource_prod, port_bonus, inter.adjacent_intersections))
+                candidates.append((inter.id, total_production, resource_prod, tile_details, port_bonus, inter.adjacent_intersections))
         
         # Sort by production value (descending)
         candidates.sort(key=lambda x: -x[1])
         
         # Show ALL available candidates (not just top 15)
         lines.append(f"  Total available: {len(candidates)} intersections")
-        for inter_id, prod, res_prod, port, adj_inters in candidates:
+        for inter_id, prod, res_prod, tile_details, port, adj_inters in candidates:
             lines.append(f"  Intersection {inter_id}{port}:")
             lines.append(f"    Production Value: {prod*100:.1f}% per roll")
+            # Show actual tiles with resource types and number tokens
+            if tile_details:
+                tile_str = ", ".join([f"{res_type} {token}" for res_type, token in sorted(tile_details, key=lambda x: (x[0], x[1]))])
+                lines.append(f"    Tiles: {tile_str}")
+            # Also show aggregated percentages for quick reference
             if res_prod:
                 res_str = ", ".join([f"{k}: {v*100:.1f}%" for k, v in sorted(res_prod.items(), key=lambda x: -x[1])])
-                lines.append(f"    Resources: {res_str}")
+                lines.append(f"    Resource Production: {res_str}")
             if adj_inters:
                 adj_str = ", ".join([str(aid) for aid in sorted(adj_inters)])
                 lines.append(f"    Adjacent Intersections: {adj_str}")
@@ -1308,8 +1359,8 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
                 lines.append(f"  One player accepted - trade will execute automatically")
             else:
                 lines.append(f"  Waiting for responses...")
-        
-        lines.append("")
+    
+    lines.append("")
     
     # Recent history (last 3 actions)
     if history:
@@ -1450,10 +1501,22 @@ def _generate_compact_map(state: GameState, player_id: str, tile_map: Dict[int, 
     
     lines.append("=== Compact Map (Hexagonal Layout) ===")
     lines.append("Format: [🔴=Robber][Resource][Token], e.g., ' W 6' = Wood token 6")
-    lines.append("Buildings: 🏠=Your Settlement, 🏛️=Your City, S=Opp Settlement, C=Opp City")
+    lines.append("Intersections: I{id}[owner][building][port]")
+    lines.append("  Owner: Y=You, 0/1/2/3=Player ID, _=Empty")
+    lines.append("  Building: S=Settlement, C=City, _=Empty")
+    lines.append("  Port: P=3:1, W/B/H/S/O=Resource port")
     lines.append("")
     
-    # Display tiles in rows with indentation for hex layout
+    # Create player ID to short name mapping
+    player_short_names = {}
+    for i, p in enumerate(state.players):
+        if p.id == player_id:
+            player_short_names[p.id] = "Y"  # You
+        else:
+            # Use player index as short name
+            player_short_names[p.id] = str(i)
+    
+    # Display tiles in rows with intersections labeled below
     for r, tiles_in_row in sorted_rows:
         tiles_in_row.sort(key=lambda x: x[0])  # Sort by q coordinate
         
@@ -1468,28 +1531,94 @@ def _generate_compact_map(state: GameState, player_id: str, tile_map: Dict[int, 
         
         lines.append(" " * indent + "  ".join(tile_strs))
         
-        # Show buildings on intersections of tiles in this row (compact)
-        building_info = []
+        # Show intersections around tiles in this row
+        # Prioritize showing intersections with buildings or ports
+        intersection_parts = []
         for q, tile_id in tiles_in_row:
-            intersections = tile_to_intersections.get(tile_id, [])
-            for inter_id in intersections[:2]:  # Limit to 2 per tile
+            intersections = sorted(tile_to_intersections.get(tile_id, []))
+            inter_labels = []
+            
+            # First pass: collect all intersections with their info
+            inter_info = []
+            for inter_id in intersections:
                 owner = inter_owner_map.get(inter_id)
                 building = inter_building_map.get(inter_id)
                 port = inter_port_map.get(inter_id)
                 
-                if owner == player_id:
-                    symbol = "🏠" if building == "settlement" else "🏛️" if building == "city" else ""
-                elif owner:
-                    symbol = "S" if building == "settlement" else "C" if building == "city" else ""
-                else:
-                    symbol = ""
+                # Build intersection label: I{id}_[owner][building][port]
+                # Format: I19_0S_ = Intersection 19, owned by player 0, Settlement, no port
+                label = f"I{inter_id}"
                 
-                if symbol:
-                    port_str = f"[{port}]" if port else ""
-                    building_info.append(f"I{inter_id}{symbol}{port_str}")
+                # Add owner indicator (with underscore separator)
+                if owner:
+                    owner_label = player_short_names.get(owner, "?")
+                    label += f"_{owner_label}"
+                else:
+                    label += "__"  # Empty (two underscores for alignment)
+                
+                # Add building indicator
+                if building:
+                    if building == "settlement":
+                        label += "S"
+                    elif building == "city":
+                        label += "C"
+                else:
+                    label += "_"  # Empty
+                
+                # Add port indicator
+                if port:
+                    if port == "3:1":
+                        label += "P"
+                    else:
+                        # Resource port: use first letter capitalized
+                        port_abbr = port[0].upper()
+                        label += port_abbr
+                else:
+                    label += "_"  # No port
+                
+                # Prioritize: buildings > ports > empty
+                priority = 0
+                if building:
+                    priority = 1  # Buildings first
+                elif port:
+                    priority = 2  # Ports second
+                else:
+                    priority = 3  # Empty last
+                
+                inter_info.append((priority, label))
+            
+            # Sort by priority (buildings first, then ports, then empty)
+            inter_info.sort(key=lambda x: x[0])
+            
+            # Show up to 6 intersections per tile, prioritizing buildings and ports
+            # But always show ALL buildings and ports, even if more than 6
+            shown_labels = []
+            buildings_and_ports = [label for pri, label in inter_info if pri <= 2]
+            empty_intersections = [label for pri, label in inter_info if pri == 3]
+            
+            # Show all buildings/ports first
+            shown_labels.extend(buildings_and_ports)
+            # Then fill remaining slots with empty intersections (up to 6 total)
+            remaining_slots = max(0, 6 - len(shown_labels))
+            shown_labels.extend(empty_intersections[:remaining_slots])
+            
+            if shown_labels:
+                intersection_parts.append(" ".join(shown_labels))
+            else:
+                intersection_parts.append("")  # Empty space for alignment
         
-        if building_info:
-            lines.append(" " * indent + "  ".join(building_info[:6]))  # Limit length
+        # Show intersections below tiles with proper spacing
+        if any(intersection_parts):
+            # Align intersection labels with tiles above
+            inter_line_parts = []
+            for i, part in enumerate(intersection_parts):
+                if part:
+                    inter_line_parts.append(part)
+                else:
+                    inter_line_parts.append("")
+            inter_line = "  ".join(inter_line_parts)
+            if inter_line.strip():
+                lines.append(" " * indent + inter_line)
     
     lines.append("")
     
@@ -1502,23 +1631,49 @@ def _generate_compact_map(state: GameState, player_id: str, tile_map: Dict[int, 
             port_str = f" [PORT:{inter.port_type}]" if inter.port_type else ""
             lines.append(f"  I{inter.id}: {inter.building_type}{port_str} on {','.join(tiles)}")
     
-    # Summary: Opponent buildings
+    # Summary: All opponent buildings (with full details)
     opp_intersections = [i for i in state.intersections if i.owner and i.owner != player_id]
     if opp_intersections:
-        lines.append("Opponent Buildings:")
-        for inter in opp_intersections[:8]:  # Top 8
-            owner_name = player_names.get(inter.owner, inter.owner)
-            tiles = [f"T{tid}" for tid in sorted(inter.adjacent_tiles)[:3]]
-            port_str = f" [PORT:{inter.port_type}]" if inter.port_type else ""
-            lines.append(f"  I{inter.id}: {inter.building_type} ({owner_name}){port_str} on {','.join(tiles)}")
+        # Group by player
+        buildings_by_player = {}
+        for inter in opp_intersections:
+            if inter.owner not in buildings_by_player:
+                buildings_by_player[inter.owner] = []
+            buildings_by_player[inter.owner].append(inter)
+        
+        for owner_id, buildings in buildings_by_player.items():
+            owner_name = player_names.get(owner_id, owner_id)
+            owner_short = player_short_names.get(owner_id, "?")
+            lines.append(f"{owner_name} (Player {owner_short}) Buildings:")
+            for inter in buildings:
+                tiles = [f"T{tid}" for tid in sorted(inter.adjacent_tiles)]
+                port_str = f" [PORT:{inter.port_type}]" if inter.port_type else ""
+                lines.append(f"  I{inter.id}: {inter.building_type}{port_str} on {','.join(tiles)}")
     
-    # Road network summary
+    # Road network summary - show both your roads and opponent roads
     your_roads = [r for r in state.road_edges if r.owner == player_id]
     if your_roads:
         road_connections = [f"I{r.intersection1_id}-I{r.intersection2_id}" for r in your_roads[:12]]
         lines.append(f"Your Roads ({len(your_roads)}): {', '.join(road_connections)}")
         if len(your_roads) > 12:
             lines.append(f"  ... and {len(your_roads) - 12} more")
+    
+    # Show opponent roads too
+    opp_roads = [r for r in state.road_edges if r.owner and r.owner != player_id]
+    if opp_roads:
+        # Group by owner
+        roads_by_owner = {}
+        for road in opp_roads:
+            if road.owner not in roads_by_owner:
+                roads_by_owner[road.owner] = []
+            roads_by_owner[road.owner].append(road)
+        
+        for owner_id, owner_roads in roads_by_owner.items():
+            owner_name = player_names.get(owner_id, owner_id)
+            road_connections = [f"I{r.intersection1_id}-I{r.intersection2_id}" for r in owner_roads[:8]]
+            lines.append(f"{owner_name}'s Roads ({len(owner_roads)}): {', '.join(road_connections)}")
+            if len(owner_roads) > 8:
+                lines.append(f"  ... and {len(owner_roads) - 8} more")
     
     return lines
 
