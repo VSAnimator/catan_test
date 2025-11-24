@@ -888,22 +888,26 @@ class GameState:
             road_graph[inter2].append(inter1)
         
         # Find longest path using DFS
+        # The longest path in an undirected graph (without cycles) is found by
+        # doing DFS from each node and tracking the longest path found
         max_length = 0
         
-        def dfs_path_length(node: int, visited_nodes: Set[int], visited_edges: Set[Tuple[int, int]]) -> int:
+        def dfs_path_length(node: int, visited_edges: Set[Tuple[int, int]]) -> int:
+            """DFS to find longest path from current node, returning number of edges."""
             max_path = 0
             for neighbor in road_graph.get(node, []):
                 edge_key = (min(node, neighbor), max(node, neighbor))
                 if edge_key not in visited_edges:
                     visited_edges.add(edge_key)
-                    if neighbor not in visited_nodes:
-                        path_len = 1 + dfs_path_length(neighbor, visited_nodes | {neighbor}, visited_edges)
-                        max_path = max(max_path, path_len)
+                    # Continue path from neighbor
+                    path_len = 1 + dfs_path_length(neighbor, visited_edges)
+                    max_path = max(max_path, path_len)
                     visited_edges.remove(edge_key)
             return max_path
         
+        # Try starting from each node to find the longest path
         for start_node in road_graph.keys():
-            path_len = dfs_path_length(start_node, {start_node}, set())
+            path_len = dfs_path_length(start_node, set())
             max_length = max(max_length, path_len)
         
         return max_length

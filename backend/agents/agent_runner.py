@@ -104,11 +104,13 @@ class AgentRunner:
                         ]
                         
                         if players_needing_discard:
-                            # Process discards for all players who need to
+                            # Process discards for all AI players who need to (skip human players)
+                            processed_any = False
                             for player in players_needing_discard:
                                 discard_agent = self.agents.get(player.id)
                                 if not discard_agent:
-                                    return self.state, False, f"No agent found for player {player.id}"
+                                    # Skip human players - they'll handle it via UI
+                                    continue
                                 
                                 # Get legal actions for this player (should include DISCARD_RESOURCES)
                                 legal_actions_list = legal_actions(self.state, player.id)
@@ -135,6 +137,7 @@ class AgentRunner:
                                     
                                     # Apply the action
                                     self.state = self.state.step(action, payload, player_id=player.id)
+                                    processed_any = True
                                     
                                     # Save state if callback provided
                                     if save_state_callback:
@@ -152,6 +155,10 @@ class AgentRunner:
                                         )
                             
                             # Continue to next iteration to check if we can proceed
+                            if processed_any:
+                                continue
+                            # If no AI players processed (only human players), continue anyway
+                            # The human players will handle their discards via UI
                             continue
                 
                 # Get legal actions for current player
@@ -286,64 +293,73 @@ class AgentRunner:
                     ]
                     
                     if players_needing_discard:
-                        # Process discard for first player who needs to
-                        player = players_needing_discard[0]
-                        discard_agent = self.agents.get(player.id)
-                        if not discard_agent:
-                            return self.state, False, f"No agent found for player {player.id}", None
+                        # Find first AI player who needs to discard (skip human players)
+                        ai_player = None
+                        for player in players_needing_discard:
+                            discard_agent = self.agents.get(player.id)
+                            if discard_agent:
+                                ai_player = player
+                                break
                         
-                        # Get legal actions for this player
-                        legal_actions_list = legal_actions(self.state, player.id)
-                        
-                        # Filter to only discard actions
-                        discard_actions = [
-                            (action, payload) 
-                            for action, payload in legal_actions_list
-                            if action == Action.DISCARD_RESOURCES
-                        ]
-                        
-                        if discard_actions:
-                            # Store state before action
-                            state_before = copy.deepcopy(self.state)
+                        if ai_player:
+                            # Process discard for AI player
+                            # Get legal actions for this player
+                            legal_actions_list = legal_actions(self.state, ai_player.id)
                             
-                            # Choose a discard action
-                            result = discard_agent.choose_action(self.state, discard_actions)
-                            if len(result) == 4:
-                                action, payload, _, _ = result  # Ignore reasoning and raw_response for discard
-                            elif len(result) == 3:
-                                action, payload, _ = result  # Ignore reasoning for discard
-                            else:
-                                # Backward compatibility
-                                action, payload = result
-                                reasoning = None
+                            # Filter to only discard actions
+                            discard_actions = [
+                                (action, payload) 
+                                for action, payload in legal_actions_list
+                                if action == Action.DISCARD_RESOURCES
+                            ]
                             
-                            # Print reasoning if available
-                            if reasoning:
-                                print(f"[{player.name}] Reasoning: {reasoning}")
-                            
-                            # Apply the action
-                            self.state = self.state.step(action, payload, player_id=player.id)
-                            
-                            # Save state if callback provided
-                            if save_state_callback:
-                                action_dict = {
-                                    "type": serialize_action(action),
-                                }
-                                if payload:
-                                    action_dict["payload"] = serialize_action_payload(payload)
+                            if discard_actions:
+                                # Store state before action
+                                state_before = copy.deepcopy(self.state)
+                                
+                                # Choose a discard action
+                                discard_agent = self.agents.get(ai_player.id)
+                                result = discard_agent.choose_action(self.state, discard_actions)
+                                if len(result) == 4:
+                                    action, payload, _, _ = result  # Ignore reasoning and raw_response for discard
+                                elif len(result) == 3:
+                                    action, payload, _ = result  # Ignore reasoning for discard
+                                else:
+                                    # Backward compatibility
+                                    action, payload = result
+                                    reasoning = None
+                                
+                                # Print reasoning if available
                                 if reasoning:
-                                    action_dict["reasoning"] = reasoning
-                                save_state_callback(
-                                    self.state.game_id,
-                                    state_before,
-                                    self.state,
-                                    action_dict,
-                                    player.id
-                                )
-                            
-                            return self.state, True, None, player.id
+                                    print(f"[{ai_player.name}] Reasoning: {reasoning}")
+                                
+                                # Apply the action
+                                self.state = self.state.step(action, payload, player_id=ai_player.id)
+                                
+                                # Save state if callback provided
+                                if save_state_callback:
+                                    action_dict = {
+                                        "type": serialize_action(action),
+                                    }
+                                    if payload:
+                                        action_dict["payload"] = serialize_action_payload(payload)
+                                    if reasoning:
+                                        action_dict["reasoning"] = reasoning
+                                    save_state_callback(
+                                        self.state.game_id,
+                                        state_before,
+                                        self.state,
+                                        action_dict,
+                                        ai_player.id
+                                    )
+                                
+                                return self.state, True, None, ai_player.id
+                            else:
+                                return self.state, False, f"No discard actions available for player {ai_player.id}", None
                         else:
-                            return self.state, False, f"No discard actions available for player {player.id}", None
+                            # Only human players need to discard - they'll handle it via UI
+                            # Return success but don't process - the UI will handle it
+                            return self.state, True, None, None
             
             # Get agent for current player
             agent = self.agents.get(current_player.id)

@@ -539,6 +539,12 @@ function App() {
       if (payload.other_player_id && !payload.give_resources) {
         return `${type} from ${payload.other_player_id}`
       }
+      if (payload.selected_player_id) {
+        // For SELECT_TRADE_PARTNER, show player name if available
+        const selectedPlayer = gameState?.players.find(p => p.id === payload.selected_player_id)
+        const playerName = selectedPlayer?.name || payload.selected_player_id
+        return `${type}: ${playerName}`
+      }
       if (payload.resources) {
         const resourceList = Object.entries(payload.resources)
           .filter(([_, count]) => count > 0)

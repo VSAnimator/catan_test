@@ -31,6 +31,9 @@ class BaseBehaviorTreeAgent(BaseAgent):
         if not player:
             raise ValueError(f"Player {self.player_id} not found")
         
+        # Filter out repeated trades before processing
+        legal_actions_list = self._filter_repeated_trades(state, player, legal_actions_list)
+        
         # Handle setup phase
         if state.phase == "setup":
             return self._handle_setup_phase(state, legal_actions_list)
@@ -106,6 +109,46 @@ class BaseBehaviorTreeAgent(BaseAgent):
         
         action, payload = legal_actions_list[0]
         return (action, payload, "Setup fallback")
+    
+    def _filter_repeated_trades(
+        self,
+        state: GameState,
+        player,
+        legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
+    ) -> List[Tuple[Action, Optional[ActionPayload]]]:
+        """Filter out propose_trade actions that were already taken this turn."""
+        filtered_actions = []
+        player_actions_this_turn = [
+            a for a in state.actions_taken_this_turn 
+            if a["player_id"] == player.id and a["action"] == "propose_trade"
+        ]
+        
+        for action, payload in legal_actions_list:
+            if action == Action.PROPOSE_TRADE:
+                # Check if this exact trade was already proposed this turn
+                already_proposed = False
+                if payload and hasattr(payload, 'give_resources') and hasattr(payload, 'receive_resources'):
+                    # Normalize current payload to string keys (matching stored format)
+                    current_give = {rt.value: count for rt, count in payload.give_resources.items()}
+                    current_receive = {rt.value: count for rt, count in payload.receive_resources.items()}
+                    
+                    for prev_action in player_actions_this_turn:
+                        prev_payload = prev_action.get("payload", {})
+                        prev_give = prev_payload.get("give_resources", {})
+                        prev_receive = prev_payload.get("receive_resources", {})
+                        prev_targets = set(prev_payload.get("target_player_ids", []))
+                        
+                        if (prev_give == current_give and
+                            prev_receive == current_receive and
+                            prev_targets == set(payload.target_player_ids)):
+                            already_proposed = True
+                            break
+                if not already_proposed:
+                    filtered_actions.append((action, payload))
+            else:
+                filtered_actions.append((action, payload))
+        
+        return filtered_actions if filtered_actions else legal_actions_list
     
     def _choose_strategic_action(
         self,

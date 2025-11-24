@@ -260,6 +260,43 @@ class LLMAgent(BaseAgent):
                     # But we should still be able to continue, so let it fall through
                     pass
         
+        # Filter out propose_trade actions that were already taken this turn
+        # to avoid repeated trade proposals
+        filtered_actions = []
+        current_player = state.players[state.current_player_index]
+        player_actions_this_turn = [
+            a for a in state.actions_taken_this_turn 
+            if a["player_id"] == current_player.id and a["action"] == "propose_trade"
+        ]
+        
+        for action, payload in legal_actions_list:
+            if action == Action.PROPOSE_TRADE:
+                # Check if this exact trade was already proposed this turn
+                already_proposed = False
+                if payload and hasattr(payload, 'give_resources') and hasattr(payload, 'receive_resources'):
+                    # Normalize current payload to string keys (matching stored format)
+                    current_give = {rt.value: count for rt, count in payload.give_resources.items()}
+                    current_receive = {rt.value: count for rt, count in payload.receive_resources.items()}
+                    
+                    for prev_action in player_actions_this_turn:
+                        prev_payload = prev_action.get("payload", {})
+                        prev_give = prev_payload.get("give_resources", {})
+                        prev_receive = prev_payload.get("receive_resources", {})
+                        prev_targets = set(prev_payload.get("target_player_ids", []))
+                        
+                        if (prev_give == current_give and
+                            prev_receive == current_receive and
+                            prev_targets == set(payload.target_player_ids)):
+                            already_proposed = True
+                            break
+                if not already_proposed:
+                    filtered_actions.append((action, payload))
+            else:
+                filtered_actions.append((action, payload))
+        
+        # Use filtered actions
+        legal_actions_list = filtered_actions if filtered_actions else legal_actions_list
+        
         # Step 1: Observe - Format current state
         state_and_actions = self._format_state_and_actions(state, legal_actions_list)
         
@@ -300,6 +337,7 @@ class LLMAgent(BaseAgent):
 - **Bank trades**: 4:1 default, 3:1 with matching port, 2:1 with specific resource port
 - **Player trades**: Propose to one or more players, they accept/reject, proposer selects if multiple accept
 - **IMPORTANT**: Trading is fully functional! When you see "propose_trade" actions, they include specific give/receive resource details. Each trade proposal is a concrete, actionable move that will be sent to other players for their response.
+- **CRITICAL - No Repeated Trades**: Check the "Actions Taken This Turn" section in the game state. DO NOT propose the same trade (same give/receive resources to the same players) that you already proposed this turn. If a trade was rejected, try a different trade or different players instead.
 
 ### Victory:
 - First player to reach 10+ victory points wins
@@ -356,9 +394,11 @@ Be strategic and consider:
 - Building settlements/cities for VPs
 - Building roads for expansion and longest road
 - Buying development cards for flexibility
-- Trading when beneficial
+- Trading when beneficial (but NEVER repeat the same trade proposal in one turn)
 - Playing development cards at the right time
-- Blocking opponents when advantageous"""
+- Blocking opponents when advantageous
+
+**IMPORTANT**: Always check the "Actions Taken This Turn" section to see what you've already done. Do not repeat trade proposals you've already made this turn."""
         
         # Add urgent note if trade response is needed
         trade_urgency_note = ""

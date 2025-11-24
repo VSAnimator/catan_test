@@ -1328,10 +1328,11 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
     
     lines.append("")
     
-    # Actions taken this turn (for current player)
+    # Actions taken this turn (for the player viewing the state, not necessarily current_player_index)
     if state.phase == "playing" and state.actions_taken_this_turn:
-        current_player = state.players[state.current_player_index]
-        player_actions = [a for a in state.actions_taken_this_turn if a["player_id"] == current_player.id]
+        # Use player_id parameter, not current_player_index, because current_player_index may have changed
+        # (e.g., after proposing a trade, it switches to the target player)
+        player_actions = [a for a in state.actions_taken_this_turn if a["player_id"] == player_id]
         if player_actions:
             lines.append("=== Actions Taken This Turn ===")
             for i, action_info in enumerate(player_actions, 1):
@@ -1358,7 +1359,10 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
                 lines.append(f"  {i}. {action_type}{payload_str}")
             
             # Show warning if approaching trade rejection limit
-            consecutive_rejections = state.consecutive_rejected_trades.get(current_player.id, 0)
+            viewing_player = next((p for p in state.players if p.id == player_id), None)
+            consecutive_rejections = 0
+            if viewing_player:
+                consecutive_rejections = state.consecutive_rejected_trades.get(viewing_player.id, 0)
             if consecutive_rejections >= 2:
                 lines.append(f"")
                 lines.append(f"⚠️ WARNING: You have had {consecutive_rejections} consecutive trade proposals rejected this turn.")
@@ -1455,22 +1459,26 @@ def _calculate_longest_road_length(state: GameState, player_id: str) -> int:
         road_graph[inter2].append(inter1)
     
     # Find longest path using DFS
+    # The longest path in an undirected graph (without cycles) is found by
+    # doing DFS from each node and tracking the longest path found
     max_length = 0
     
-    def dfs_path_length(node: int, visited_nodes: set, visited_edges: set) -> int:
+    def dfs_path_length(node: int, visited_edges: set) -> int:
+        """DFS to find longest path from current node, returning number of edges."""
         max_path = 0
         for neighbor in road_graph.get(node, []):
             edge_key = (min(node, neighbor), max(node, neighbor))
             if edge_key not in visited_edges:
                 visited_edges.add(edge_key)
-                if neighbor not in visited_nodes:
-                    path_len = 1 + dfs_path_length(neighbor, visited_nodes | {neighbor}, visited_edges)
-                    max_path = max(max_path, path_len)
+                # Continue path from neighbor
+                path_len = 1 + dfs_path_length(neighbor, visited_edges)
+                max_path = max(max_path, path_len)
                 visited_edges.remove(edge_key)
         return max_path
     
+    # Try starting from each node to find the longest path
     for start_node in road_graph.keys():
-        path_len = dfs_path_length(start_node, {start_node}, set())
+        path_len = dfs_path_length(start_node, set())
         max_length = max(max_length, path_len)
     
     return max_length
@@ -1748,6 +1756,7 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
     lines.append("  - build_settlement: {\"intersection_id\": <number>}")
     lines.append("  - build_city: {\"intersection_id\": <number>}")
     lines.append("  - move_robber: {\"tile_id\": <number>}")
+    lines.append("  - buy_dev_card: {\"action_payload\": null}  (no payload needed)")
     lines.append("  - See system prompt for full format examples")
     lines.append("")
     
@@ -2082,7 +2091,11 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
         
         if len(group) == 1 and group[0][1] is None:
             # Simple action without payload
-            lines.append(f"- {action_name}")
+            # Make BUY_DEV_CARD more prominent since it's often overlooked
+            if action == Action.BUY_DEV_CARD:
+                lines.append(f"- {action_name} (Cost: 1 wheat, 1 sheep, 1 ore)")
+            else:
+                lines.append(f"- {action_name}")
             if action_key not in shown_json_examples:
                 lines.append(f"  → JSON: {get_json_example(action, None)}")
                 shown_json_examples.add(action_key)
