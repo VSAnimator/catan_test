@@ -177,20 +177,46 @@ class AgentRunner:
                     reasoning = f"Automated: only one legal action available"
                 else:
                     # Agent chooses an action
-                    try:
-                        result = agent.choose_action(self.state, legal_actions_list)
-                        if len(result) == 4:
-                            action, payload, reasoning, raw_llm_response = result
-                        elif len(result) == 3:
-                            action, payload, reasoning = result
-                            raw_llm_response = None
-                        else:
-                            # Backward compatibility: old agents return 2-tuple
-                            action, payload = result
-                            reasoning = None
-                            raw_llm_response = None
-                    except Exception as e:
-                        return self.state, False, f"Agent error for player {current_player.id}: {str(e)}"
+                    # Retry logic for PROPOSE_TRADE parsing errors
+                    max_retries = 3
+                    retry_count = 0
+                    last_error = None
+                    
+                    while retry_count < max_retries:
+                        try:
+                            result = agent.choose_action(self.state, legal_actions_list)
+                            if len(result) == 4:
+                                action, payload, reasoning, raw_llm_response = result
+                            elif len(result) == 3:
+                                action, payload, reasoning = result
+                                raw_llm_response = None
+                            else:
+                                # Backward compatibility: old agents return 2-tuple
+                                action, payload = result
+                                reasoning = None
+                                raw_llm_response = None
+                            # Success - break out of retry loop
+                            break
+                        except ValueError as e:
+                            error_str = str(e)
+                            # Check if this is a PROPOSE_TRADE parsing error that should trigger retry
+                            if "PROPOSE_TRADE" in error_str or ("propose_trade" in error_str.lower() and ("parse" in error_str.lower() or "format" in error_str.lower() or "invalid" in error_str.lower())):
+                                retry_count += 1
+                                last_error = e
+                                if retry_count < max_retries:
+                                    print(f"  PROPOSE_TRADE parsing error (attempt {retry_count}/{max_retries}): {error_str}", flush=True)
+                                    print(f"  Retrying...", flush=True)
+                                    # Continue to retry
+                                    continue
+                                else:
+                                    # Max retries reached
+                                    return self.state, False, f"Agent error for player {current_player.id}: Failed to parse PROPOSE_TRADE after {max_retries} attempts. Last error: {error_str}"
+                            else:
+                                # Not a PROPOSE_TRADE parsing error - don't retry
+                                return self.state, False, f"Agent error for player {current_player.id}: {str(e)}"
+                        except Exception as e:
+                            # Other exceptions - don't retry
+                            return self.state, False, f"Agent error for player {current_player.id}: {str(e)}"
                 
                 # Print reasoning if available
                 if reasoning:
@@ -293,73 +319,136 @@ class AgentRunner:
                     ]
                     
                     if players_needing_discard:
-                        # Find first AI player who needs to discard (skip human players)
-                        ai_player = None
-                        for player in players_needing_discard:
-                            discard_agent = self.agents.get(player.id)
-                            if discard_agent:
-                                ai_player = player
-                                break
+                        # Check if current player needs to discard
+                        current_player_needs_discard = any(
+                            p.id == current_player.id for p in players_needing_discard
+                        )
                         
-                        if ai_player:
-                            # Process discard for AI player
-                            # Get legal actions for this player
-                            legal_actions_list = legal_actions(self.state, ai_player.id)
-                            
-                            # Filter to only discard actions
-                            discard_actions = [
-                                (action, payload) 
-                                for action, payload in legal_actions_list
-                                if action == Action.DISCARD_RESOURCES
+                        if current_player_needs_discard:
+                            # Current player needs to discard - process it
+                            discard_agent = self.agents.get(current_player.id)
+                            if discard_agent:
+                                # AI player - process discard
+                                legal_actions_list = legal_actions(self.state, current_player.id)
+                                
+                                # Filter to only discard actions
+                                discard_actions = [
+                                    (action, payload) 
+                                    for action, payload in legal_actions_list
+                                    if action == Action.DISCARD_RESOURCES
+                                ]
+                                
+                                if discard_actions:
+                                    # Store state before action
+                                    state_before = copy.deepcopy(self.state)
+                                    
+                                    # Choose a discard action
+                                    result = discard_agent.choose_action(self.state, discard_actions)
+                                    if len(result) == 4:
+                                        action, payload, reasoning, _ = result
+                                    elif len(result) == 3:
+                                        action, payload, reasoning = result
+                                    else:
+                                        # Backward compatibility
+                                        action, payload = result
+                                        reasoning = None
+                                    
+                                    # Print reasoning if available
+                                    if reasoning:
+                                        print(f"[{current_player.name}] Reasoning: {reasoning}")
+                                    
+                                    # Apply the action
+                                    self.state = self.state.step(action, payload, player_id=current_player.id)
+                                    
+                                    # Save state if callback provided
+                                    if save_state_callback:
+                                        action_dict = {
+                                            "type": serialize_action(action),
+                                        }
+                                        if payload:
+                                            action_dict["payload"] = serialize_action_payload(payload)
+                                        if reasoning:
+                                            action_dict["reasoning"] = reasoning
+                                        save_state_callback(
+                                            self.state.game_id,
+                                            state_before,
+                                            self.state,
+                                            action_dict,
+                                            current_player.id
+                                        )
+                                    
+                                    # After discard, check if there are more players who need to discard
+                                    # and cycle to the next one (similar to trade handling)
+                                    remaining_players_needing_discard = [
+                                        p for p in self.state.players
+                                        if (sum(p.resources.values()) >= 8 and 
+                                            p.id not in self.state.players_discarded)
+                                    ]
+                                    
+                                    if remaining_players_needing_discard:
+                                        # Find next AI player who needs to discard
+                                        next_ai_player = None
+                                        for player in remaining_players_needing_discard:
+                                            if self.agents.get(player.id):
+                                                next_ai_player = player
+                                                break
+                                        
+                                        if next_ai_player:
+                                            # Change current_player_index to next player who needs to discard
+                                            next_index = next((i for i, p in enumerate(self.state.players) if p.id == next_ai_player.id), None)
+                                            if next_index is not None:
+                                                # Create a new state with updated current_player_index
+                                                import dataclasses
+                                                self.state = dataclasses.replace(self.state, current_player_index=next_index)
+                                    
+                                    return self.state, True, None, current_player.id
+                                else:
+                                    return self.state, False, f"No discard actions available for player {current_player.id}", None
+                            else:
+                                # Human player - they'll handle it via UI, but we should still cycle to next player
+                                remaining_players_needing_discard = [
+                                    p for p in self.state.players
+                                    if (sum(p.resources.values()) >= 8 and 
+                                        p.id not in self.state.players_discarded and
+                                        p.id != current_player.id)
+                                ]
+                                
+                                # Find next AI player who needs to discard
+                                next_ai_player = None
+                                for player in remaining_players_needing_discard:
+                                    if self.agents.get(player.id):
+                                        next_ai_player = player
+                                        break
+                                
+                                if next_ai_player:
+                                    # Change current_player_index to next player who needs to discard
+                                    next_index = next((i for i, p in enumerate(self.state.players) if p.id == next_ai_player.id), None)
+                                    if next_index is not None:
+                                        import dataclasses
+                                        self.state = dataclasses.replace(self.state, current_player_index=next_index)
+                                
+                                # Return success - human will handle their discard via UI
+                                return self.state, True, None, None
+                        else:
+                            # Current player doesn't need to discard, but others do
+                            # Cycle to the next AI player who needs to discard
+                            ai_players_needing_discard = [
+                                p for p in players_needing_discard
+                                if self.agents.get(p.id)
                             ]
                             
-                            if discard_actions:
-                                # Store state before action
-                                state_before = copy.deepcopy(self.state)
-                                
-                                # Choose a discard action
-                                discard_agent = self.agents.get(ai_player.id)
-                                result = discard_agent.choose_action(self.state, discard_actions)
-                                if len(result) == 4:
-                                    action, payload, _, _ = result  # Ignore reasoning and raw_response for discard
-                                elif len(result) == 3:
-                                    action, payload, _ = result  # Ignore reasoning for discard
-                                else:
-                                    # Backward compatibility
-                                    action, payload = result
-                                    reasoning = None
-                                
-                                # Print reasoning if available
-                                if reasoning:
-                                    print(f"[{ai_player.name}] Reasoning: {reasoning}")
-                                
-                                # Apply the action
-                                self.state = self.state.step(action, payload, player_id=ai_player.id)
-                                
-                                # Save state if callback provided
-                                if save_state_callback:
-                                    action_dict = {
-                                        "type": serialize_action(action),
-                                    }
-                                    if payload:
-                                        action_dict["payload"] = serialize_action_payload(payload)
-                                    if reasoning:
-                                        action_dict["reasoning"] = reasoning
-                                    save_state_callback(
-                                        self.state.game_id,
-                                        state_before,
-                                        self.state,
-                                        action_dict,
-                                        ai_player.id
-                                    )
-                                
-                                return self.state, True, None, ai_player.id
+                            if ai_players_needing_discard:
+                                # Change current_player_index to first AI player who needs to discard
+                                next_ai_player = ai_players_needing_discard[0]
+                                next_index = next((i for i, p in enumerate(self.state.players) if p.id == next_ai_player.id), None)
+                                if next_index is not None:
+                                    import dataclasses
+                                    self.state = dataclasses.replace(self.state, current_player_index=next_index)
+                                # Return to trigger another call to run_step for the next player
+                                return self.state, True, None, None
                             else:
-                                return self.state, False, f"No discard actions available for player {ai_player.id}", None
-                        else:
-                            # Only human players need to discard - they'll handle it via UI
-                            # Return success but don't process - the UI will handle it
-                            return self.state, True, None, None
+                                # Only human players need to discard - they'll handle it via UI
+                                return self.state, True, None, None
             
             # Get agent for current player
             agent = self.agents.get(current_player.id)
@@ -381,21 +470,47 @@ class AgentRunner:
                 reasoning = f"Automated: only one legal action available"
             else:
                 # Agent chooses an action
-                try:
-                    result = agent.choose_action(self.state, legal_actions_list)
-                    if len(result) == 4:
-                        action, payload, reasoning, raw_llm_response = result
-                    elif len(result) == 3:
-                        action, payload, reasoning = result
-                        raw_llm_response = None
-                    else:
-                        # Backward compatibility: old agents return 2-tuple
-                        action, payload = result
-                        reasoning = None
-                        raw_llm_response = None
-                        reasoning = None
-                except Exception as e:
-                    return self.state, False, f"Agent error for player {current_player.id}: {str(e)}", None
+                # Retry logic for PROPOSE_TRADE parsing errors
+                max_retries = 3
+                retry_count = 0
+                last_error = None
+                
+                while retry_count < max_retries:
+                    try:
+                        result = agent.choose_action(self.state, legal_actions_list)
+                        if len(result) == 4:
+                            action, payload, reasoning, raw_llm_response = result
+                        elif len(result) == 3:
+                            action, payload, reasoning = result
+                            raw_llm_response = None
+                        else:
+                            # Backward compatibility: old agents return 2-tuple
+                            action, payload = result
+                            reasoning = None
+                            raw_llm_response = None
+                            reasoning = None
+                        # Success - break out of retry loop
+                        break
+                    except ValueError as e:
+                        error_str = str(e)
+                        # Check if this is a PROPOSE_TRADE parsing error that should trigger retry
+                        if "PROPOSE_TRADE" in error_str or ("propose_trade" in error_str.lower() and ("parse" in error_str.lower() or "format" in error_str.lower() or "invalid" in error_str.lower())):
+                            retry_count += 1
+                            last_error = e
+                            if retry_count < max_retries:
+                                print(f"  PROPOSE_TRADE parsing error (attempt {retry_count}/{max_retries}): {error_str}", flush=True)
+                                print(f"  Retrying...", flush=True)
+                                # Continue to retry
+                                continue
+                            else:
+                                # Max retries reached
+                                return self.state, False, f"Agent error for player {current_player.id}: Failed to parse PROPOSE_TRADE after {max_retries} attempts. Last error: {error_str}", None
+                        else:
+                            # Not a PROPOSE_TRADE parsing error - don't retry
+                            return self.state, False, f"Agent error for player {current_player.id}: {str(e)}", None
+                    except Exception as e:
+                        # Other exceptions - don't retry
+                        return self.state, False, f"Agent error for player {current_player.id}: {str(e)}", None
             
             # Print reasoning if available
             if reasoning:

@@ -196,7 +196,7 @@ async def create_game(request: CreateGameRequest):
 
 @router.get("/games/{game_id}")
 async def get_game(game_id: str):
-    """Get current game state (serialized JSON)."""
+    """Get current game state (serialized JSON) and metadata."""
     # Check if game exists
     game_row = get_game_from_db(game_id)
     if not game_row:
@@ -210,7 +210,20 @@ async def get_game(game_id: str):
             detail="Game state not found."
         )
     
-    return state_json
+    # Parse metadata to include agent_mapping
+    metadata = {}
+    if game_row["metadata"]:
+        try:
+            metadata = json.loads(game_row["metadata"])
+        except:
+            metadata = {}
+    
+    # Add metadata to response (including agent_mapping if present)
+    response = state_json.copy()
+    if metadata:
+        response["_metadata"] = metadata
+    
+    return response
 
 
 @router.get("/games/{game_id}/legal_actions")
@@ -489,6 +502,10 @@ async def fork_game(game_id: str, state: Dict[str, Any]):
         "forked_at_step": None,  # Could be enhanced to track which step was forked
     }
     
+    # Copy agent_mapping from source game if it exists
+    if "agent_mapping" in source_metadata:
+        metadata["agent_mapping"] = source_metadata["agent_mapping"]
+    
     # Create the new game in the database
     create_game_in_db(
         new_game_id,
@@ -497,9 +514,13 @@ async def fork_game(game_id: str, state: Dict[str, Any]):
         initial_state_json=state,
     )
     
+    # Add metadata to response state so frontend can restore agent_mapping
+    response_state = state.copy()
+    response_state["_metadata"] = metadata
+    
     return CreateGameResponse(
         game_id=new_game_id,
-        initial_state=state
+        initial_state=response_state
     )
 
 
@@ -657,6 +678,30 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
     # Create agents only for players specified in agent_mapping
     agents = {}
     agent_mapping = request.agent_mapping or {}
+    
+    # Store agent_mapping in game metadata if provided (for future restoration)
+    if agent_mapping:
+        # Get current metadata
+        current_metadata = {}
+        if game_row["metadata"]:
+            try:
+                current_metadata = json.loads(game_row["metadata"])
+            except:
+                current_metadata = {}
+        
+        # Update agent_mapping in metadata (merge with existing)
+        if "agent_mapping" not in current_metadata or current_metadata["agent_mapping"] != agent_mapping:
+            current_metadata["agent_mapping"] = agent_mapping
+            # Update metadata in database
+            from api.database import get_db_connection
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE games
+                SET metadata = ?
+                WHERE id = ?
+            """, (json.dumps(current_metadata), game_id))
+            conn.commit()
     
     # Import agent classes
     from agents import RandomAgent, BehaviorTreeAgent

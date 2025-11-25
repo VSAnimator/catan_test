@@ -312,6 +312,11 @@ function App() {
     try {
       const newState = await getGameState(gameState.game_id)
       setGameState(newState)
+      
+      // Restore agent_mapping from metadata if available
+      if ((newState as any)._metadata && (newState as any)._metadata.agent_mapping) {
+        setAgentMapping((newState as any)._metadata.agent_mapping)
+      }
     } catch (err) {
       // Silently fail for auto-refresh to avoid spam
       console.error('Failed to refresh game state:', err)
@@ -367,6 +372,11 @@ function App() {
       if (data.players && data.players.length > 0) {
         const player = data.players.find((p: Player) => p.name === playerNameInput) || data.players[0]
         setPlayerId(player.id)
+      }
+      
+      // Restore agent_mapping from metadata if available
+      if ((data as any)._metadata && (data as any)._metadata.agent_mapping) {
+        setAgentMapping((data as any)._metadata.agent_mapping)
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
@@ -1167,6 +1177,10 @@ function App() {
                       const finalState = await getGameState(result.game_id)
                       setGameState(finalState)
                       setReplayGameId(result.game_id)
+                      // Restore agent_mapping from metadata if available
+                      if ((finalState as any)._metadata && (finalState as any)._metadata.agent_mapping) {
+                        setAgentMapping((finalState as any)._metadata.agent_mapping)
+                      }
                     } catch (err) {
                       setError(err instanceof Error ? err.message : 'Failed to run agents')
                     } finally {
@@ -1193,6 +1207,10 @@ function App() {
                       const state = await getGameState(agentWatchGameId)
                       setGameState(state)
                       setView('agent-watch')
+                      // Restore agent_mapping from metadata if available
+                      if ((state as any)._metadata && (state as any)._metadata.agent_mapping) {
+                        setAgentMapping((state as any)._metadata.agent_mapping)
+                      }
                     } catch (err) {
                       setError(err instanceof Error ? err.message : 'Failed to load game')
                     } finally {
@@ -1839,6 +1857,12 @@ function App() {
                           const forkedGame = await forkGame(replayData.game_id, displayState)
                           // Load the forked game state
                           setGameState(forkedGame.initial_state)
+                          
+                          // Restore agent_mapping from metadata if available (forked games preserve agent_mapping)
+                          if ((forkedGame.initial_state as any)._metadata && (forkedGame.initial_state as any)._metadata.agent_mapping) {
+                            setAgentMapping((forkedGame.initial_state as any)._metadata.agent_mapping)
+                          }
+                          
                           // Set player ID to current player
                           if (forkedGame.initial_state.phase === 'playing') {
                             const currentPlayer = forkedGame.initial_state.players[forkedGame.initial_state.current_player_index]
@@ -1898,6 +1922,10 @@ function App() {
                           // Load the restored game state
                           const restoredState = await getGameState(replayData.game_id)
                           setGameState(restoredState)
+                          // Restore agent_mapping from metadata if available
+                          if ((restoredState as any)._metadata && (restoredState as any)._metadata.agent_mapping) {
+                            setAgentMapping((restoredState as any)._metadata.agent_mapping)
+                          }
                           // Set player ID to current player
                           if (restoredState.phase === 'playing') {
                             const currentPlayer = restoredState.players[restoredState.current_player_index]
@@ -2135,7 +2163,7 @@ function App() {
         )}
         
         {/* Step-by-step mode controls for main game view */}
-        {view === 'game' && gameState && Object.keys(agentMapping).length > 0 && (
+        {view === 'game' && gameState && (
           <div style={{ 
             padding: '1rem', 
             backgroundColor: '#f5f5f5', 
@@ -2156,11 +2184,12 @@ function App() {
               <span>Step-by-Step Mode (read reasoning before advancing)</span>
             </label>
             
-            {stepByStepMode && activePlayer && activePlayer.id in agentMapping && activePlayer.id !== playerId && (
+            {stepByStepMode && activePlayer && activePlayer.id !== playerId && (
               // Show button if:
               // 1. No pending trade, OR
               // 2. Pending trade but current player is an agent who needs to respond (target), OR
               // 3. Pending trade and current player is proposer who needs to select partner
+              // Note: We show the button even if agentMapping is empty, as the backend may have agents configured
               (!gameState.pending_trade_offer || 
                (gameState.pending_trade_offer && (
                  gameState.pending_trade_offer.target_player_ids?.includes(activePlayer.id) ||

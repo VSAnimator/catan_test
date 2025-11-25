@@ -889,35 +889,16 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
                                 )))
             
             # Can propose trades to other players (only if no trade is pending and trading is allowed)
+            # Instead of enumerating all possible trades, just indicate that trading is available
+            # The agent can propose any trade it wants with any combination of resources
             if can_trade and state.pending_trade_offer is None:
-                # Generate trade proposals: simple 1:1 trades for each resource type
-                # Agents can propose giving 1 of any resource they have for 1 of any resource they need
                 other_players = [p.id for p in state.players if p.id != player_id]
                 
                 if other_players:
-                    # Generate trades: give 1 of X, receive 1 of Y (for each resource type the player has)
-                    for give_resource in ResourceType:
-                        if player.resources.get(give_resource, 0) >= 1:
-                            # Can propose to give 1 of this resource
-                            for receive_resource in ResourceType:
-                                if give_resource != receive_resource:
-                                    # Propose trade to all other players
-                                    legal.append((Action.PROPOSE_TRADE, ProposeTradePayload(
-                                        target_player_ids=other_players,
-                                        give_resources={give_resource: 1},
-                                        receive_resources={receive_resource: 1}
-                                    )))
-                    
-                    # Also generate 2:1 trades (give 2, receive 1) for resources player has in excess
-                    for give_resource in ResourceType:
-                        if player.resources.get(give_resource, 0) >= 2:
-                            for receive_resource in ResourceType:
-                                if give_resource != receive_resource:
-                                    legal.append((Action.PROPOSE_TRADE, ProposeTradePayload(
-                                        target_player_ids=other_players,
-                                        give_resources={give_resource: 2},
-                                        receive_resources={receive_resource: 1}
-                                    )))
+                    # Add a single PROPOSE_TRADE action to indicate trading is available
+                    # The agent will construct the payload with the desired trade
+                    # Use a placeholder payload - the actual payload will be constructed by the agent
+                    legal.append((Action.PROPOSE_TRADE, None))
             
             # Can end turn (but not if waiting for robber actions, or if 7 was rolled and anyone needs to discard)
             # Never allow END_TURN if waiting_for_robber_move or waiting_for_robber_steal is True
@@ -1766,7 +1747,11 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
         for action, _ in actions
     )
     if has_trade_actions:
-        lines.append("Note: All trade actions shown below are fully functional with specific give/receive details. Trading is a concrete, actionable move.")
+        has_propose_trade = any(action.value == 'propose_trade' for action, _ in actions)
+        if has_propose_trade:
+            lines.append("Note: The 'Propose Trade' actions below are trades YOU can propose to other players. These are not trades being offered to you - you are the one making the offer. Each action will send a trade proposal to the specified players.")
+        else:
+            lines.append("Note: All trade actions shown below are fully functional with specific give/receive details. Trading is a concrete, actionable move.")
         lines.append("")
     
     # Create lookup maps if state is provided
@@ -2094,6 +2079,26 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
             # Make BUY_DEV_CARD more prominent since it's often overlooked
             if action == Action.BUY_DEV_CARD:
                 lines.append(f"- {action_name} (Cost: 1 wheat, 1 sheep, 1 ore)")
+            elif action == Action.PROPOSE_TRADE:
+                # PROPOSE_TRADE with None payload means the agent can propose any trade
+                # Get list of other players
+                other_players = []
+                if state:
+                    current_player = next((p for p in state.players if p.id == player_id), None) if player_id else None
+                    if current_player:
+                        other_players = [p for p in state.players if p.id != player_id]
+                if other_players:
+                    player_names = [p.name for p in other_players]
+                    lines.append(f"- {action_name}: You can propose ANY trade to other players")
+                    lines.append(f"  Available players to trade with: {', '.join(player_names)}")
+                    lines.append(f"  Format: Specify 'give_resources' (what you give) and 'receive_resources' (what you receive)")
+                    lines.append(f"  Resource types: wood, brick, sheep, wheat, ore")
+                    lines.append(f"  Example: {{\"action_type\": \"propose_trade\", \"action_payload\": {{\"give_resources\": {{\"wood\": 1, \"brick\": 1}}, \"receive_resources\": {{\"sheep\": 1}}, \"target_player_ids\": [\"player_1\", \"player_2\"]}}}}")
+                    lines.append(f"  You can propose any combination of resources you have. You can trade with one or more players.")
+                else:
+                    lines.append(f"- {action_name}: You can propose any trade (no other players available)")
+                if action_key not in shown_json_examples:
+                    shown_json_examples.add(action_key)
             else:
                 lines.append(f"- {action_name}")
             if action_key not in shown_json_examples:
@@ -2140,7 +2145,7 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
                         player = next((p for p in state.players if p.id == pid), None)
                         target_names.append(player.name if player else pid)
                 targets_str = ", ".join(target_names) if target_names else ", ".join(payload.target_player_ids)
-                lines.append(f"- {action_name}: Give {give_str}, receive {receive_str} (to: {targets_str})")
+                lines.append(f"- {action_name}: YOU give {give_str}, YOU receive {receive_str} (propose to: {targets_str})")
                 if action_key not in shown_json_examples:
                     lines.append(f"  → JSON: {get_json_example(action, payload)}")
                     shown_json_examples.add(action_key)
@@ -2233,7 +2238,7 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
                             player = next((p for p in state.players if p.id == pid), None)
                             target_names.append(player.name if player else pid)
                     targets_str = ", ".join(target_names) if target_names else ", ".join(payload.target_player_ids)
-                    lines.append(f"  * Give {give_str}, receive {receive_str} (to: {targets_str})")
+                    lines.append(f"  * YOU give {give_str}, YOU receive {receive_str} (propose to: {targets_str})")
                     if not json_shown_for_group:
                         lines.append(f"    → JSON: {get_json_example(action, payload)}")
                         json_shown_for_group = True
