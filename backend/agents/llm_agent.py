@@ -324,9 +324,9 @@ class LLMAgent(BaseAgent):
 
 ### Development Cards:
 - **Knight**: Move robber and steal one resource from a player on that tile
-- **Year of Plenty**: Take any 2 resources from the bank
+- **Year of Plenty**: Take any 2 resources from the bank. **CRITICAL: After playing Year of Plenty, you immediately receive the resources and can use them in the SAME TURN to build settlements, cities, or roads!** For example, if you need wood+brick to build a settlement, you can play Year of Plenty to get wood+brick, then immediately build the settlement in the same turn. The legal actions you see are for your CURRENT resources - after using Year of Plenty, new build actions will become available.
 - **Monopoly**: All players give you all resources of one type
-- **Road Building**: Build 2 roads for free (must be legal placements)
+- **Road Building**: When played, gives you 2 FREE roads that you can build immediately. These roads don't cost resources. You can build them even if you don't have wood/brick. **IMPORTANT: You must use ALL free roads before ending your turn - any unused free roads are lost when you end your turn.** Check the game state for "FREE ROADS AVAILABLE" to see how many you have remaining.
 - **Victory Point**: Worth 1 VP, revealed at game end
 
 ### Robber Rules:
@@ -407,6 +407,15 @@ Be strategic and consider:
 - Trading when beneficial (but NEVER repeat the same trade proposal in one turn)
 - Playing development cards at the right time
 - Blocking opponents when advantageous
+
+**CRITICAL - Dynamic Legal Actions:**
+- Legal actions shown are based on your CURRENT resources and board state
+- Actions can CHANGE during your turn as you gain resources (from trades, Year of Plenty, Monopoly, etc.)
+- If you don't see a build action now, you can still get resources and build in the SAME TURN!
+- Example: Use Year of Plenty to get wood+brick+sheep+wheat → then build_settlement becomes available
+- Example: Trade to get missing resources → then build actions become available
+- Example: Build a road → then new settlement locations become available (connected to that road)
+- The legal actions list updates after each action you take
 
 **IMPORTANT**: Always check the "Actions Taken This Turn" section to see what you've already done. Do not repeat trade proposals you've already made this turn."""
         

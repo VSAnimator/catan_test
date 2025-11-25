@@ -1243,6 +1243,14 @@ class GameState:
         if new_state.pending_trade_offer is not None:
             raise ValueError("Cannot end turn while trade is pending")
         
+        # Get the current player (before advancing) to clear their free roads
+        current_player = new_state.players[new_state.current_player_index]
+        
+        # Clear free roads from Road Building card for the current player
+        # Free roads must be used before the end of the turn
+        if current_player.id in new_state.roads_from_road_building:
+            del new_state.roads_from_road_building[current_player.id]
+        
         # Advance to next player
         new_state.current_player_index = (new_state.current_player_index + 1) % len(new_state.players)
         new_state.turn_number += 1
@@ -1257,7 +1265,6 @@ class GameState:
         # Clear turn tracking for next player's turn
         new_state.actions_taken_this_turn = []
         new_state.consecutive_rejected_trades = {}
-        # Note: roads_from_road_building persists across turns until used (player can build roads on later turns)
         
         return new_state
     

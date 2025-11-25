@@ -31,6 +31,8 @@ function App() {
   const [autoRefresh, setAutoRefresh] = useState(false)
   const [devMode, setDevMode] = useState(false)
   const refreshIntervalRef = useRef<number | null>(null)
+  const discardPanelInitializedRef = useRef(false)  // Track if discard panel has been initialized to prevent clearing user input during auto-refresh
+  const lastDiscardTurnRef = useRef<number | null>(null)  // Track turn number to detect new discard phases
   
   // For create/join game
   const [gameIdInput, setGameIdInput] = useState('')
@@ -115,17 +117,41 @@ function App() {
       if (player) {
         const totalResources = Object.values(player.resources).reduce((a, b) => a + b, 0)
         const hasAlreadyDiscarded = gameState.players_discarded?.includes(playerId) || false
+        
+        // Reset ref if this is a new turn (different turn number)
+        if (lastDiscardTurnRef.current !== gameState.turn_number) {
+          discardPanelInitializedRef.current = false
+          lastDiscardTurnRef.current = gameState.turn_number
+        }
+        
         if (totalResources >= 8 && !hasAlreadyDiscarded) {
-          setShowDiscardPanel(true)
-          // Also clear any previous discard selections
-          setDiscardResources({})
+          // Only open panel and clear selections if panel wasn't already initialized for this discard phase
+          // This prevents clearing user input during auto-refresh
+          if (!discardPanelInitializedRef.current) {
+            setShowDiscardPanel(true)
+            setDiscardResources({})
+            discardPanelInitializedRef.current = true
+          }
+          // Panel stays open, preserve discardResources during auto-refresh
         } else {
           setShowDiscardPanel(false)
+          discardPanelInitializedRef.current = false
+          // Only clear discard resources if player has already discarded or no longer needs to
+          if (hasAlreadyDiscarded || totalResources < 8) {
+            setDiscardResources({})
+          }
         }
       }
     } else {
       // Clear discard panel when not needed or when robber phase has started
       setShowDiscardPanel(false)
+      discardPanelInitializedRef.current = false
+      lastDiscardTurnRef.current = null
+      // Only clear resources if we're closing the panel due to phase change
+      if (gameState && (!gameState.dice_roll || gameState.dice_roll !== 7 || 
+          gameState.waiting_for_robber_move || gameState.waiting_for_robber_steal)) {
+        setDiscardResources({})
+      }
     }
   }, [gameState, playerId])
 

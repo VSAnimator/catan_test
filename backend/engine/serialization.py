@@ -1005,6 +1005,12 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
         lines.append(f"  * Longest Road: {longest_road_length} segments")
     elif longest_road_length > 0:
         lines.append(f"  Longest Road: {longest_road_length} segments (needs 5+ for card)")
+    
+    # Show free roads from Road Building card if available
+    free_roads_remaining = state.roads_from_road_building.get(player_id, 0)
+    if free_roads_remaining > 0:
+        lines.append(f"  ** FREE ROADS AVAILABLE: {free_roads_remaining} free road(s) from Road Building card! You can build roads without spending resources. WARNING: These must be used before ending your turn or they will be lost! **")
+    
     lines.append(f"Dev Cards: {len(player.dev_cards)}")
     if player.dev_cards:
         lines.append(f"  Types: {', '.join(player.dev_cards)}")
@@ -1732,6 +1738,19 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
     
     lines = []
     lines.append("=== Legal Actions ===")
+    lines.append("")
+    lines.append("⚠️ CRITICAL: Legal actions shown are based on your CURRENT resources and board state.")
+    lines.append("  - Actions can CHANGE during your turn as you gain resources (from trades, Year of Plenty, etc.)")
+    lines.append("  - If you don't see a build action now, you can still get resources and build in the SAME TURN!")
+    lines.append("  - Example: Use Year of Plenty to get wood+brick+sheep+wheat → then build_settlement becomes available")
+    lines.append("  - Example: Trade to get missing resources → then build actions become available")
+    lines.append("")
+    lines.append("Building Costs:")
+    lines.append("  - Settlement: 1 wood, 1 brick, 1 sheep, 1 wheat")
+    lines.append("  - City: 2 wheat, 3 ore (upgrades existing settlement)")
+    lines.append("  - Road: 1 wood, 1 brick")
+    lines.append("  - Development Card: 1 wheat, 1 sheep, 1 ore")
+    lines.append("")
     lines.append("IMPORTANT: When returning JSON, use these EXACT field names:")
     lines.append("  - build_road: {\"road_edge_id\": <number>}  (NOT \"road_id\")")
     lines.append("  - build_settlement: {\"intersection_id\": <number>}")
@@ -1740,6 +1759,102 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
     lines.append("  - buy_dev_card: {\"action_payload\": null}  (no payload needed)")
     lines.append("  - See system prompt for full format examples")
     lines.append("")
+    
+    # Show what resources are needed for building (even if actions aren't available)
+    if state and player_id:
+        player = next((p for p in state.players if p.id == player_id), None)
+        if player:
+            # Check what's missing for each building type
+            missing_for_settlement = []
+            missing_for_city = []
+            missing_for_road = []
+            
+            if player.resources[ResourceType.WOOD] < 1:
+                missing_for_settlement.append("wood")
+                missing_for_road.append("wood")
+            if player.resources[ResourceType.BRICK] < 1:
+                missing_for_settlement.append("brick")
+                missing_for_road.append("brick")
+            if player.resources[ResourceType.SHEEP] < 1:
+                missing_for_settlement.append("sheep")
+            if player.resources[ResourceType.WHEAT] < 1:
+                missing_for_settlement.append("wheat")
+                missing_for_city.append("wheat")
+            if player.resources[ResourceType.ORE] < 1:
+                missing_for_city.append("ore")
+            
+            # Check if any build actions are missing
+            has_build_settlement = any(action.value == 'build_settlement' for action, _ in actions)
+            has_build_city = any(action.value == 'build_city' for action, _ in actions)
+            has_build_road = any(action.value == 'build_road' for action, _ in actions)
+            
+            if missing_for_settlement and not has_build_settlement:
+                lines.append(f"💡 To enable build_settlement: You need {', '.join(missing_for_settlement)}. Get these resources (via trade, Year of Plenty, etc.) and you can build in the SAME TURN!")
+            if missing_for_city and not has_build_city:
+                # Check if player has any settlements to upgrade
+                has_settlement = any(i.owner == player_id and i.building_type == "settlement" for i in state.intersections) if state else False
+                if has_settlement:
+                    lines.append(f"💡 To enable build_city: You need {', '.join(missing_for_city)}. Get these resources (via trade, Year of Plenty, etc.) and you can build in the SAME TURN!")
+            if missing_for_road and not has_build_road:
+                lines.append(f"💡 To enable build_road: You need {', '.join(missing_for_road)}. Get these resources (via trade, Year of Plenty, etc.) and you can build in the SAME TURN!")
+            if (missing_for_settlement or missing_for_city or missing_for_road) and (not has_build_settlement and not has_build_city and not has_build_road):
+                lines.append("")
+    
+    # Check if Year of Plenty is available and add a helpful note
+    has_year_of_plenty = False
+    if state and player_id:
+        player = next((p for p in state.players if p.id == player_id), None)
+        if player and "year_of_plenty" in player.dev_cards:
+            # Check if it can be played (not bought this turn, not played this turn)
+            if (player_id not in state.dev_cards_bought_this_turn and 
+                player_id not in state.dev_cards_played_this_turn):
+                has_year_of_plenty = True
+    
+    if has_year_of_plenty:
+        # Check what resources player needs for building
+        player = next((p for p in state.players if p.id == player_id), None) if state and player_id else None
+        if player:
+            needs_for_settlement = []
+            needs_for_city = []
+            needs_for_road = []
+            
+            if player.resources[ResourceType.WOOD] < 1:
+                needs_for_settlement.append("wood")
+                needs_for_road.append("wood")
+            if player.resources[ResourceType.BRICK] < 1:
+                needs_for_settlement.append("brick")
+                needs_for_road.append("brick")
+            if player.resources[ResourceType.SHEEP] < 1:
+                needs_for_settlement.append("sheep")
+            if player.resources[ResourceType.WHEAT] < 1:
+                needs_for_settlement.append("wheat")
+                needs_for_city.append("wheat")
+            if player.resources[ResourceType.ORE] < 1:
+                needs_for_city.append("ore")
+            
+            lines.append("💡 STRATEGY TIP: You have Year of Plenty available!")
+            if needs_for_settlement:
+                lines.append(f"  - To build a settlement, you need: {', '.join(needs_for_settlement)}")
+                lines.append(f"  - You can use Year of Plenty to get 2 of these resources, then build the settlement in the SAME TURN!")
+            if needs_for_city:
+                lines.append(f"  - To build a city, you need: {', '.join(needs_for_city)}")
+                lines.append(f"  - You can use Year of Plenty to get these resources, then build the city in the SAME TURN!")
+            if needs_for_road:
+                lines.append(f"  - To build a road, you need: {', '.join(needs_for_road)}")
+                lines.append(f"  - You can use Year of Plenty to get these resources, then build the road in the SAME TURN!")
+            lines.append("  Remember: After playing Year of Plenty, you immediately get the resources and can use them to build!")
+            lines.append("")
+    
+    # Check if player has free roads from Road Building card
+    if state and player_id:
+        free_roads_remaining = state.roads_from_road_building.get(player_id, 0)
+        if free_roads_remaining > 0:
+            has_build_road = any(action.value == 'build_road' for action, _ in actions)
+            if has_build_road:
+                lines.append(f"⚠️ URGENT: You have {free_roads_remaining} FREE ROAD(S) from Road Building card! You can build roads without spending wood/brick resources. The build_road actions below can use these free roads. **YOU MUST USE ALL FREE ROADS BEFORE ENDING YOUR TURN OR THEY WILL BE LOST!**")
+            else:
+                lines.append(f"⚠️ URGENT: You have {free_roads_remaining} FREE ROAD(S) from Road Building card, but no build_road actions are currently legal (likely no valid road placements available). **YOU MUST USE ALL FREE ROADS BEFORE ENDING YOUR TURN OR THEY WILL BE LOST!**")
+            lines.append("")
     
     # Check if there are trade actions and add a helpful note
     has_trade_actions = any(
@@ -2109,18 +2224,30 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
             payload = group[0][1]
             if isinstance(payload, BuildSettlementPayload):
                 context = get_intersection_context(payload.intersection_id)
-                lines.append(f"- {action_name} at intersection {payload.intersection_id}{context}")
+                lines.append(f"- {action_name} at intersection {payload.intersection_id}{context} (Cost: 1 wood, 1 brick, 1 sheep, 1 wheat)")
                 lines.append(f"  → JSON: {{\"action_type\": \"build_settlement\", \"action_payload\": {{\"intersection_id\": {payload.intersection_id}}}}}")
             elif isinstance(payload, BuildRoadPayload):
                 context = get_road_context(payload.road_edge_id)
-                lines.append(f"- {action_name} on road edge {payload.road_edge_id}{context}")
+                # Check if this is a free road from Road Building
+                free_roads_remaining = 0
+                if state and player_id:
+                    free_roads_remaining = state.roads_from_road_building.get(player_id, 0)
+                if free_roads_remaining > 0:
+                    lines.append(f"- {action_name} on road edge {payload.road_edge_id}{context} (FREE from Road Building card - no cost!)")
+                else:
+                    lines.append(f"- {action_name} on road edge {payload.road_edge_id}{context} (Cost: 1 wood, 1 brick)")
                 lines.append(f"  → JSON: {{\"action_type\": \"build_road\", \"action_payload\": {{\"road_edge_id\": {payload.road_edge_id}}}}}")
             elif isinstance(payload, BuildCityPayload):
                 context = get_intersection_context(payload.intersection_id)
-                lines.append(f"- {action_name} at intersection {payload.intersection_id}{context}")
+                lines.append(f"- {action_name} at intersection {payload.intersection_id}{context} (Cost: 2 wheat, 3 ore - upgrades settlement)")
                 lines.append(f"  → JSON: {{\"action_type\": \"build_city\", \"action_payload\": {{\"intersection_id\": {payload.intersection_id}}}}}")
             elif isinstance(payload, PlayDevCardPayload):
                 lines.append(f"- {action_name} ({payload.card_type})")
+                # Add special note for Year of Plenty
+                if payload.card_type == "year_of_plenty" and payload.year_of_plenty_resources:
+                    res_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.year_of_plenty_resources.items()])
+                    lines.append(f"  → Get resources: {res_str}")
+                    lines.append(f"  ⚠️ IMPORTANT: After playing this, you will immediately receive these resources and can use them in the SAME TURN to build! For example, if you get wood+brick, you can then build a settlement in the same turn.")
                 if action_key not in shown_json_examples:
                     lines.append(f"  → JSON: {get_json_example(action, payload)}")
                     shown_json_examples.add(action_key)
@@ -2196,24 +2323,36 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
             for action, payload in group:
                 if isinstance(payload, BuildSettlementPayload):
                     context = get_intersection_context(payload.intersection_id)
-                    lines.append(f"  * At intersection {payload.intersection_id}{context}")
+                    lines.append(f"  * At intersection {payload.intersection_id}{context} (Cost: 1 wood, 1 brick, 1 sheep, 1 wheat)")
                     if not json_shown_for_group:
                         lines.append(f"    → JSON: {get_json_example(action, payload)}")
                         json_shown_for_group = True
                 elif isinstance(payload, BuildRoadPayload):
                     context = get_road_context(payload.road_edge_id)
-                    lines.append(f"  * On road edge {payload.road_edge_id}{context}")
+                    # Check if this is a free road from Road Building
+                    free_roads_remaining = 0
+                    if state and player_id:
+                        free_roads_remaining = state.roads_from_road_building.get(player_id, 0)
+                    if free_roads_remaining > 0:
+                        lines.append(f"  * On road edge {payload.road_edge_id}{context} (FREE from Road Building - no cost!)")
+                    else:
+                        lines.append(f"  * On road edge {payload.road_edge_id}{context} (Cost: 1 wood, 1 brick)")
                     if not json_shown_for_group:
                         lines.append(f"    → JSON: {get_json_example(action, payload)}")
                         json_shown_for_group = True
                 elif isinstance(payload, BuildCityPayload):
                     context = get_intersection_context(payload.intersection_id)
-                    lines.append(f"  * At intersection {payload.intersection_id}{context}")
+                    lines.append(f"  * At intersection {payload.intersection_id}{context} (Cost: 2 wheat, 3 ore - upgrades settlement)")
                     if not json_shown_for_group:
                         lines.append(f"    → JSON: {get_json_example(action, payload)}")
                         json_shown_for_group = True
                 elif isinstance(payload, PlayDevCardPayload):
                     lines.append(f"  * Card: {payload.card_type}")
+                    # Add special note for Year of Plenty
+                    if payload.card_type == "year_of_plenty" and payload.year_of_plenty_resources:
+                        res_str = ", ".join([f"{count} {rt.value}" for rt, count in payload.year_of_plenty_resources.items()])
+                        lines.append(f"    → Get resources: {res_str}")
+                        lines.append(f"    ⚠️ IMPORTANT: After playing this, you will immediately receive these resources and can use them in the SAME TURN to build!")
                     if not json_shown_for_group:
                         lines.append(f"    → JSON: {get_json_example(action, payload)}")
                         json_shown_for_group = True
