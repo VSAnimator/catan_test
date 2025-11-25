@@ -322,6 +322,31 @@ class LLMAgent(BaseAgent):
 - **Settlement placement**: Settlements must be at least 2 edges from any other settlement/city (distance rule)
 - **City placement**: Cities can only be built by upgrading existing settlements
 
+### Building Costs (CRITICAL - Know These Exactly):
+- **Settlement**: 1 wood, 1 brick, 1 sheep, 1 wheat (exactly one of each)
+- **City**: 2 wheat, 3 ore (upgrades existing settlement)
+- **Road**: 1 wood, 1 brick
+- **Development Card**: 1 wheat, 1 sheep, 1 ore
+
+**IMPORTANT - Resource Calculation:**
+- When calculating if you can build after gaining resources, add your current resources + resources you'll gain, then check if you have enough of EACH resource type
+- Example: If you have 1 wood and 2 wheat, and you gain 1 brick and 1 sheep, you will have: 1 wood (need 1) ✓, 1 brick (need 1) ✓, 2 wheat (need 1) ✓, 1 sheep (need 1) ✓ → You CAN build a settlement!
+- Be careful: You only need ONE of each resource for a settlement, not multiple. Having 2 wheat doesn't mean you need 2 wood - you still only need 1 wood.
+- **CRITICAL - Calculating Resources After Trades**: When evaluating a trade, calculate your resources AFTER the trade:
+  - Start with your current resources
+  - SUBTRACT what you GIVE in the trade
+  - ADD what you RECEIVE in the trade
+  - Check ALL resource types needed for what you want to build
+  - **Example 1**: You have 1 brick, 2 wheat. You propose: give 1 brick + 1 wheat, receive 1 sheep.
+    - After trade: 1 brick - 1 brick = 0 brick ❌, 2 wheat - 1 wheat = 1 wheat ✓, 0 sheep + 1 sheep = 1 sheep ✓, 0 wood = 0 wood ❌
+    - For settlement (needs 1 wood, 1 brick, 1 sheep, 1 wheat): You're missing BOTH wood AND brick, not just wood!
+  - **Example 2 (COMMON MISTAKE)**: You have 1 brick, 1 wheat. You propose: give 1 brick + 1 wheat, receive 1 wood + 1 sheep.
+    - After trade: 1 brick - 1 brick = 0 brick ❌, 1 wheat - 1 wheat = 0 wheat ❌, 0 wood + 1 wood = 1 wood ✓, 0 sheep + 1 sheep = 1 sheep ✓
+    - For settlement (needs 1 wood, 1 brick, 1 sheep, 1 wheat): You're missing BOTH brick AND wheat! You do NOT have "exactly the settlement set" - you're missing 2 resources!
+    - **WRONG**: "After trade I'd have wood 1, brick 1, sheep 1, wheat 1" - NO! You gave away your brick and wheat, so you have 0 brick and 0 wheat!
+  - **Always check ALL required resources, not just one!**
+  - **Always SUBTRACT what you give - don't forget you're losing those resources!**
+
 ### Development Cards:
 - **Knight**: Move robber and steal one resource from a player on that tile
 - **Year of Plenty**: Take any 2 resources from the bank. **CRITICAL: After playing Year of Plenty, you immediately receive the resources and can use them in the SAME TURN to build settlements, cities, or roads!** For example, if you need wood+brick to build a settlement, you can play Year of Plenty to get wood+brick, then immediately build the settlement in the same turn. The legal actions you see are for your CURRENT resources - after using Year of Plenty, new build actions will become available.
@@ -342,6 +367,30 @@ class LLMAgent(BaseAgent):
   - Multi-resource trades (give 1 wood + 1 brick, receive 1 sheep)
   - Any other combination you want
 - **CRITICAL - No Repeated Trades**: Check the "Actions Taken This Turn" section in the game state. DO NOT propose the same trade (same give/receive resources to the same players) that you already proposed this turn. If a trade was rejected, try a different trade or different players instead.
+- **CRITICAL - Proposing Trades (Think from Other Player's Perspective)**: When proposing a trade, you MUST think about whether the OTHER player would want to accept it:
+  - **What does the other player NEED?** (resources they're missing for buildings they want to build)
+  - **What does the other player have in ABUNDANCE?** (resources they produce easily - they won't want more of these)
+  - **What does the other player have that's SCARCE?** (rare resources they need - they won't want to give these away)
+  - **Example of BAD reasoning**: "Blake has good wheat income, so offering 1 wheat for 1 ore is attractive for Blake" - WRONG! If Blake has good wheat income, he doesn't need more wheat. If Blake only has 1 ore, he needs it for cities/dev cards and won't trade it away for wheat he can already produce.
+  - **Example of GOOD reasoning**: "Blake has 3 wheat but no brick or sheep. He needs brick+sheep for settlements. I'll offer 1 brick + 1 sheep for 2 wheat - this helps him build settlements while giving me wheat I need for cities."
+  - **Key principle**: Trade what you have in abundance for what the other player has in abundance, but they need what you're giving and you need what they're giving.
+- **CRITICAL - Calculate Your Resources After Trade**: Before proposing a trade, ALWAYS calculate what resources you'll have AFTER the trade:
+  - Start with current resources
+  - SUBTRACT what you GIVE (you lose these!)
+  - ADD what you RECEIVE
+  - **Example**: You have 1 brick, 1 wheat. You propose: give 1 brick + 1 wheat, receive 1 wood + 1 sheep.
+    - After: 0 brick, 0 wheat, 1 wood, 1 sheep
+    - For settlement: You're missing brick AND wheat! You do NOT have all 4 resources!
+  - **Don't forget: When you give resources, you LOSE them!**
+- **CRITICAL - Accepting Trades**: When you accept a trade offer:
+  - The trade executes immediately - you receive the resources right away
+  - After the trade executes, the turn returns to the PROPOSER (not you)
+  - You CANNOT build on the proposer's turn - you must wait for YOUR next turn
+  - **However, you SHOULD accept trades if they give you resources you need for building on YOUR next turn!**
+  - Example: If you have 1 wood and 2 wheat, and someone offers you 1 brick + 1 sheep for 1 ore, you should ACCEPT because:
+    - You'll have: 1 wood, 1 brick, 1 sheep, 2 wheat (after giving 1 ore)
+    - On YOUR next turn, you can build a settlement (1 wood, 1 brick, 1 sheep, 1 wheat)
+    - Don't reject just because you can't build "this turn" (the proposer's turn) - you can build on YOUR turn!
 
 ### Victory:
 - First player to reach 10+ victory points wins
