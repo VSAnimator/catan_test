@@ -358,6 +358,22 @@ class LLMAgent(BaseAgent):
 - **Must move robber**: When a 7 is rolled or you play a Knight card, you must move the robber to a different tile
 - **Steal after moving**: After moving the robber, you can steal one resource from a player who has buildings on that tile (if any)
 
+### Discarding Resources (When 7 is Rolled):
+- **When to discard**: If a 7 is rolled and you have 8 or more resources, you MUST discard exactly half (rounded down) of your resources
+- **How much to discard**: If you have N resources, discard N // 2 (half, rounded down)
+  - Example: 8 resources → discard 4, 9 resources → discard 4, 10 resources → discard 5, 11 resources → discard 5
+- **You choose which resources**: You decide which specific resources to discard (you must discard the exact amount)
+- **CRITICAL - Discard Format**: When discard_resources appears in legal actions, you MUST provide the resources dict:
+  - Format: { "action_type": "discard_resources", "action_payload": { "resources": {"wood": 2, "brick": 1, "sheep": 1} } }
+  - The total of all resource amounts must equal exactly half your resources (rounded down)
+  - Resource types: "wood", "brick", "sheep", "wheat", "ore"
+  - You can only discard resources you actually have
+  - Example: If you have 9 resources total (3 wood, 2 brick, 2 sheep, 1 wheat, 1 ore), you must discard 4:
+    - Valid: {"wood": 2, "brick": 1, "sheep": 1} (total: 4)
+    - Valid: {"wood": 1, "brick": 2, "wheat": 1} (total: 4)
+    - Invalid: {"wood": 3} (only 3, need 4)
+    - Invalid: {"wood": 5} (you only have 3 wood)
+
 ### Trading:
 - **Bank trades**: 4:1 default, 3:1 with matching port, 2:1 with specific resource port
 - **Player trades**: You can propose ANY trade to other players. You specify what resources you give and what resources you receive. You can trade with one or more players at once. They will accept/reject, and if multiple accept, you select which one to trade with.
@@ -441,6 +457,9 @@ When you see actions like "On road edge 6" or "At intersection 44", use these EX
 - For play_dev_card with year_of_plenty: { "card_type": "year_of_plenty", "year_of_plenty_resources": {"wood": 1, "brick": 1} }
 - For play_dev_card with monopoly: { "card_type": "monopoly", "monopoly_resource_type": "wood" }
 - For discard_resources: { "resources": {"wood": 2, "brick": 1} }
+  - **REQUIRED**: You MUST provide the resources dict when discarding
+  - The total must equal exactly half your resources (rounded down)
+  - Example: If you have 9 resources, discard 4: {"wood": 2, "brick": 1, "sheep": 1}
 - For select_trade_partner: { "selected_player_id": "player_1" }
 - Actions without payload: end_turn, buy_dev_card, accept_trade, reject_trade (use null or omit action_payload)
 

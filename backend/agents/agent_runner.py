@@ -172,11 +172,39 @@ class AgentRunner:
                 state_before = copy.deepcopy(self.state)
                 
                 # Automate action if there's only one option
+                # BUT: Don't auto-select DISCARD_RESOURCES - agent needs to provide payload
                 if len(legal_actions_list) == 1:
                     action, payload = legal_actions_list[0]
-                    reasoning = f"Automated: only one legal action available"
-                else:
-                    # Agent chooses an action
+                    if action == Action.DISCARD_RESOURCES:
+                        # Don't auto-select discard - let agent choose which resources to discard
+                        pass  # Fall through to agent.choose_action below
+                    else:
+                        reasoning = f"Automated: only one legal action available"
+                        # Apply the action immediately for non-discard actions
+                        self.state = self.state.step(action, payload, player_id=current_player.id)
+                        processed_any = True
+                        
+                        # Save state if callback provided
+                        if save_state_callback:
+                            action_dict = {
+                                "type": serialize_action(action),
+                            }
+                            if payload:
+                                action_dict["payload"] = serialize_action_payload(payload)
+                            save_state_callback(
+                                self.state.game_id,
+                                state_before,
+                                self.state,
+                                action_dict,
+                                current_player.id
+                            )
+                        
+                        # Continue to next iteration
+                        continue
+                
+                # If we get here, either there are multiple actions or it's a discard action
+                # (discard actions always go through agent to generate payload)
+                # Agent chooses an action
                     # Retry logic for PROPOSE_TRADE parsing errors
                     max_retries = 3
                     retry_count = 0
