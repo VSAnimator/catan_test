@@ -1,0 +1,19 @@
+{
+  "tests": [
+    {
+      "test_id": "test_21fe6375_step51",
+      "game_id": "21fe6375-9825-4b3b-accd-9e7335d87b6f",
+      "step_id": 51,
+      "description": "After rolling 7, player_3 with 9 resources should be able to discard, but no discard actions are available",
+      "expected_behavior": "Player_3 should have DISCARD_RESOURCES in legal actions when dice_roll=7, player has 8+ resources, and hasn't discarded yet",
+      "undesired_behavior": "No discard actions available for player_3 even though they have 9 resources and need to discard",
+      "test_action": null,
+      "llm_validation_prompt": null,
+      "tags": [
+        "bug",
+        "discard",
+        "roll_7"
+      ]
+    }
+  ]
+}

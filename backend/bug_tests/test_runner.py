@@ -13,7 +13,7 @@ import hashlib
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from api.database import get_db_connection, get_steps, get_game_from_db, get_state_at_step
+from api.database import get_db_connection, get_steps, get_state_at_step
 from engine.serialization import (
     deserialize_game_state, 
     serialize_game_state,

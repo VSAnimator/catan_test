@@ -590,12 +590,18 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
             # Check if discard phase is still active
             # Discard phase is over if:
             # 1. Robber has been moved (robber_tile_id != robber_initial_tile_id), OR
-            # 2. Both waiting_for_robber_move and waiting_for_robber_steal are False (robber phase complete)
+            # 2. All players with 8+ resources have discarded
             robber_has_been_moved = (state.robber_initial_tile_id is not None and 
                                      state.robber_tile_id != state.robber_initial_tile_id)
-            discard_phase_complete = robber_has_been_moved or (
-                not state.waiting_for_robber_move and not state.waiting_for_robber_steal
-            )
+            
+            # Check if all players who need to discard have discarded
+            all_players_discarded = True
+            for p in state.players:
+                if sum(p.resources.values()) >= 8 and p.id not in state.players_discarded:
+                    all_players_discarded = False
+                    break
+            
+            discard_phase_complete = robber_has_been_moved or all_players_discarded
             
             # Check if this player needs to discard (has 8+ resources and hasn't discarded yet)
             # BUT only if the discard phase hasn't completed yet
@@ -908,24 +914,23 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
                 pass
             elif state.dice_roll == 7:
                 # Check if discard phase is still active
-                # Discard phase is over if robber has been moved or robber phase is complete
+                # Discard phase is over if:
+                # 1. Robber has been moved (robber_tile_id != robber_initial_tile_id), OR
+                # 2. All players with 8+ resources have discarded
                 robber_has_been_moved = (state.robber_initial_tile_id is not None and 
                                          state.robber_tile_id != state.robber_initial_tile_id)
-                discard_phase_complete = robber_has_been_moved or (
-                    not state.waiting_for_robber_move and not state.waiting_for_robber_steal
-                )
                 
-                # Check if anyone still needs to discard (and hasn't discarded yet)
-                # BUT only if the discard phase hasn't completed yet
-                any_player_needs_discard = False
-                if not discard_phase_complete:
-                    for p in state.players:
-                        if p.id not in state.players_discarded and sum(p.resources.values()) >= 8:
-                            any_player_needs_discard = True
-                            break
+                # Check if all players who need to discard have discarded
+                all_players_discarded = True
+                for p in state.players:
+                    if sum(p.resources.values()) >= 8 and p.id not in state.players_discarded:
+                        all_players_discarded = False
+                        break
                 
-                # Can only end turn if no one needs to discard (or discard phase is complete)
-                if not any_player_needs_discard:
+                discard_phase_complete = robber_has_been_moved or all_players_discarded
+                
+                # Can only end turn if discard phase is complete (all players have discarded or robber moved)
+                if discard_phase_complete:
                     legal.append((Action.END_TURN, None))
             else:
                 # Normal turn - can end
