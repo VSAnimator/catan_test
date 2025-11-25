@@ -1744,12 +1744,28 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
     lines = []
     lines.append("=== Legal Actions ===")
     lines.append("")
-    lines.append("⚠️ CRITICAL: Legal actions shown are based on your CURRENT resources and board state.")
-    lines.append("  - Actions can CHANGE during your turn as you gain resources (from trades, Year of Plenty, etc.)")
-    lines.append("  - If you don't see a build action now, you can still get resources and build in the SAME TURN!")
-    lines.append("  - Example: Use Year of Plenty to get wood+brick+sheep+wheat → then build_settlement becomes available")
-    lines.append("  - Example: Trade to get missing resources → then build actions become available")
-    lines.append("")
+    
+    # Check if discard is the ONLY action (mandatory)
+    has_discard_only = (
+        len(actions) == 1 and 
+        actions[0][0] == Action.DISCARD_RESOURCES
+    )
+    
+    if has_discard_only:
+        # This is a MANDATORY discard - emphasize it strongly
+        lines.append("🚨 MANDATORY ACTION: You MUST discard resources!")
+        lines.append("  - A 7 was rolled and you have 8+ resources")
+        lines.append("  - You MUST discard exactly half (rounded down) of your resources")
+        lines.append("  - This is the ONLY action available - you cannot trade, build, or do anything else until you discard")
+        lines.append("  - After discarding, other actions may become available")
+        lines.append("")
+    else:
+        lines.append("⚠️ CRITICAL: Legal actions shown are based on your CURRENT resources and board state.")
+        lines.append("  - Actions can CHANGE during your turn as you gain resources (from trades, Year of Plenty, etc.)")
+        lines.append("  - If you don't see a build action now, you can still get resources and build in the SAME TURN!")
+        lines.append("  - Example: Use Year of Plenty to get wood+brick+sheep+wheat → then build_settlement becomes available")
+        lines.append("  - Example: Trade to get missing resources → then build actions become available")
+        lines.append("")
     lines.append("Building Costs:")
     lines.append("  - Settlement: 1 wood, 1 brick, 1 sheep, 1 wheat")
     lines.append("  - City: 2 wheat, 3 ore (upgrades existing settlement)")
@@ -1793,17 +1809,24 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
             has_build_city = any(action.value == 'build_city' for action, _ in actions)
             has_build_road = any(action.value == 'build_road' for action, _ in actions)
             
-            if missing_for_settlement and not has_build_settlement:
-                lines.append(f"💡 To enable build_settlement: You need {', '.join(missing_for_settlement)}. Get these resources (via trade, Year of Plenty, etc.) and you can build in the SAME TURN!")
-            if missing_for_city and not has_build_city:
-                # Check if player has any settlements to upgrade
-                has_settlement = any(i.owner == player_id and i.building_type == "settlement" for i in state.intersections) if state else False
-                if has_settlement:
-                    lines.append(f"💡 To enable build_city: You need {', '.join(missing_for_city)}. Get these resources (via trade, Year of Plenty, etc.) and you can build in the SAME TURN!")
-            if missing_for_road and not has_build_road:
-                lines.append(f"💡 To enable build_road: You need {', '.join(missing_for_road)}. Get these resources (via trade, Year of Plenty, etc.) and you can build in the SAME TURN!")
-            if (missing_for_settlement or missing_for_city or missing_for_road) and (not has_build_settlement and not has_build_city and not has_build_road):
-                lines.append("")
+            # Don't show "enable build" tips if discard is mandatory (would be confusing)
+            has_discard_only = (
+                len(actions) == 1 and 
+                any(a == Action.DISCARD_RESOURCES for a, _ in actions)
+            )
+            
+            if not has_discard_only:
+                if missing_for_settlement and not has_build_settlement:
+                    lines.append(f"💡 To enable build_settlement: You need {', '.join(missing_for_settlement)}. Get these resources (via trade, Year of Plenty, etc.) and you can build in the SAME TURN!")
+                if missing_for_city and not has_build_city:
+                    # Check if player has any settlements to upgrade
+                    has_settlement = any(i.owner == player_id and i.building_type == "settlement" for i in state.intersections) if state else False
+                    if has_settlement:
+                        lines.append(f"💡 To enable build_city: You need {', '.join(missing_for_city)}. Get these resources (via trade, Year of Plenty, etc.) and you can build in the SAME TURN!")
+                if missing_for_road and not has_build_road:
+                    lines.append(f"💡 To enable build_road: You need {', '.join(missing_for_road)}. Get these resources (via trade, Year of Plenty, etc.) and you can build in the SAME TURN!")
+                if (missing_for_settlement or missing_for_city or missing_for_road) and (not has_build_settlement and not has_build_city and not has_build_road):
+                    lines.append("")
     
     # Check if Year of Plenty is available and add a helpful note
     has_year_of_plenty = False
@@ -2197,7 +2220,38 @@ def legal_actions_to_text(actions: List[Tuple[Action, Optional[ActionPayload]]],
         if len(group) == 1 and group[0][1] is None:
             # Simple action without payload
             # Make BUY_DEV_CARD more prominent since it's often overlooked
-            if action == Action.BUY_DEV_CARD:
+            if action == Action.DISCARD_RESOURCES:
+                # Special handling for discard - make it very clear
+                if state and player_id:
+                    player = next((p for p in state.players if p.id == player_id), None)
+                    if player:
+                        total_resources = sum(player.resources.values())
+                        discard_count = total_resources // 2
+                        lines.append(f"🚨 {action_name} (MANDATORY - You MUST do this!)")
+                        lines.append(f"  - You have {total_resources} resources, so you must discard exactly {discard_count}")
+                        lines.append(f"  - You choose which specific resources to discard")
+                        lines.append(f"  - Format: {{\"action_type\": \"discard_resources\", \"action_payload\": {{\"resources\": {{\"wood\": 2, \"brick\": 1, \"sheep\": 1}}}}}}")
+                        lines.append(f"  - The total must equal exactly {discard_count} resources")
+                        lines.append(f"  - You can only discard resources you actually have")
+                        if action_key not in shown_json_examples:
+                            # Show example with correct amount
+                            example_resources = {}
+                            remaining = discard_count
+                            for rt, amount in player.resources.items():
+                                if remaining <= 0:
+                                    break
+                                if amount > 0:
+                                    take = min(amount, remaining)
+                                    example_resources[rt.value] = take
+                                    remaining -= take
+                            example_json = json.dumps({"action_type": "discard_resources", "action_payload": {"resources": example_resources}})
+                            lines.append(f"  → Example JSON: {example_json}")
+                            shown_json_examples.add(action_key)
+                else:
+                    lines.append(f"🚨 {action_name} (MANDATORY - You MUST do this!)")
+                    lines.append(f"  → JSON: {get_json_example(action, None)}")
+                    shown_json_examples.add(action_key)
+            elif action == Action.BUY_DEV_CARD:
                 lines.append(f"- {action_name} (Cost: 1 wheat, 1 sheep, 1 ore)")
             elif action == Action.PROPOSE_TRADE:
                 # PROPOSE_TRADE with None payload means the agent can propose any trade

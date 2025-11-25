@@ -359,7 +359,11 @@ class LLMAgent(BaseAgent):
 - **Steal after moving**: After moving the robber, you can steal one resource from a player who has buildings on that tile (if any)
 
 ### Discarding Resources (When 7 is Rolled):
-- **When to discard**: If a 7 is rolled and you have 8 or more resources, you MUST discard exactly half (rounded down) of your resources
+- **MANDATORY**: If a 7 is rolled and you have 8 or more resources, you MUST discard exactly half (rounded down) of your resources
+- **CRITICAL - When discard_resources is the ONLY legal action**: 
+  - This means discarding is MANDATORY and you cannot do anything else (no trading, no building, nothing)
+  - You MUST discard first before any other actions become available
+  - Do NOT try to propose trades or do anything else - discard is the ONLY option
 - **How much to discard**: If you have N resources, discard N // 2 (half, rounded down)
   - Example: 8 resources → discard 4, 9 resources → discard 4, 10 resources → discard 5, 11 resources → discard 5
 - **You choose which resources**: You decide which specific resources to discard (you must discard the exact amount)
