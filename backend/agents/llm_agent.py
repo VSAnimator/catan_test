@@ -857,6 +857,30 @@ Now reason about the best action and respond in JSON format as specified."""
                     print(f"Error: {error_msg}", flush=True)
                     raise ValueError(error_msg)
             
+            # For DISCARD_RESOURCES, handle payload generation if LLM provides resources dict
+            if target_action == Action.DISCARD_RESOURCES and action_payload_dict and "resources" in action_payload_dict:
+                from engine import DiscardResourcesPayload, ResourceType
+                
+                # Convert LLM's resource dict (string keys) to ResourceType keys
+                llm_resources = action_payload_dict["resources"]
+                discard_dict = {}
+                for k, v in llm_resources.items():
+                    if isinstance(k, str):
+                        # Find matching ResourceType
+                        for rt in ResourceType:
+                            if rt.value == k.lower():
+                                discard_dict[rt] = v
+                                break
+                        else:
+                            raise ValueError(f"Invalid resource type: {k}. Valid types: {[rt.value for rt in ResourceType]}")
+                    else:
+                        discard_dict[k] = v
+                
+                # Create payload from LLM's specification
+                constructed_payload = DiscardResourcesPayload(resources=discard_dict)
+                matching_action = (target_action, constructed_payload)
+                print(f"  Constructed DISCARD_RESOURCES payload from LLM: {discard_dict}", flush=True)
+            
             # For other actions, use standard matching
             if not matching_action:
                 for action, payload in legal_actions_list:
@@ -939,6 +963,42 @@ Now reason about the best action and respond in JSON format as specified."""
             
             # Return action, payload, reasoning, and raw response
             action, payload = matching_action
+            
+            # Handle DISCARD_RESOURCES actions that have None payload
+            # Generate a valid discard payload if needed
+            if action == Action.DISCARD_RESOURCES and payload is None:
+                from engine import DiscardResourcesPayload
+                import random
+                
+                # Get the player
+                player = next((p for p in state.players if p.id == self.player_id), None)
+                if player:
+                    total_resources = sum(player.resources.values())
+                    discard_count = total_resources // 2
+                    
+                    # Create a list of all resources the player has
+                    available_resources = []
+                    for resource_type, amount in player.resources.items():
+                        available_resources.extend([resource_type] * amount)
+                    
+                    # Randomly select resources to discard
+                    if len(available_resources) >= discard_count:
+                        resources_to_discard = random.sample(available_resources, discard_count)
+                        
+                        # Count resources by type
+                        discard_dict = {}
+                        for resource in resources_to_discard:
+                            discard_dict[resource] = discard_dict.get(resource, 0) + 1
+                        
+                        # Create payload
+                        payload = DiscardResourcesPayload(resources=discard_dict)
+                        print(f"  Generated DISCARD_RESOURCES payload: {discard_dict}", flush=True)
+                    else:
+                        # Shouldn't happen, but raise error if it does
+                        raise ValueError(f"Cannot discard {discard_count} resources when player only has {len(available_resources)}")
+                else:
+                    raise ValueError(f"Player {self.player_id} not found for DISCARD_RESOURCES")
+            
             return (action, payload, reasoning, response_text)
             
         except json.JSONDecodeError as e:
