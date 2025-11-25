@@ -14,6 +14,21 @@
         "discard",
         "roll_7"
       ]
+    },
+    {
+      "test_id": "test_llm_discard_verification",
+      "game_id": "0ab49856-0674-4fde-a94d-4ca17aa44f4c",
+      "step_id": 0,
+      "description": "LLM agent test: Verify agent can discard resources after rolling 7",
+      "expected_behavior": "LLM agent should successfully choose discard_resources action, generate DiscardResourcesPayload with correct resources, and execute the discard",
+      "undesired_behavior": "Agent fails to discard, generates None payload, or discards incorrect amount",
+      "test_action": null,
+      "llm_validation_prompt": null,
+      "tags": [
+        "llm_agent",
+        "discard",
+        "verification"
+      ]
     }
   ]
 }
