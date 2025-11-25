@@ -78,7 +78,7 @@ def test_llm_agent_discard(game_id: str, player_id: str = "player_3") -> dict:
             os.getenv("GEMINI_API_KEY") or
             os.getenv("LLM_API_KEY")
         )
-        model = os.getenv("LLM_MODEL", "gpt-4o-mini")
+        model = os.getenv("LLM_MODEL", "gpt-5.1")  # Match production default
         
         agent = LLMAgent(
             player_id=player_id,
