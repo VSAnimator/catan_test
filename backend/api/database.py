@@ -402,3 +402,35 @@ def get_step_count(game_id: str) -> int:
     
     return row[0] if row else 0
 
+
+def get_state_at_step(game_id: str, step_idx: int, use_state_before: bool = True) -> Optional[Dict[str, Any]]:
+    """Get game state at a specific step index.
+    
+    Args:
+        game_id: The game ID
+        step_idx: The step index (0-based)
+        use_state_before: If True, returns state_before_json. If False, returns state_after_json.
+        
+    Returns:
+        Game state dictionary, or None if step not found.
+    """
+    # Flush any pending writes for this game first
+    _flush_write_queue(game_id)
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    state_column = "state_before_json" if use_state_before else "state_after_json"
+    cursor.execute(f"""
+        SELECT {state_column}
+        FROM steps
+        WHERE game_id = ? AND step_idx = ?
+    """, (game_id, step_idx))
+    
+    row = cursor.fetchone()
+    # Don't close - keep connection for thread
+    
+    if row and row[0]:
+        return json.loads(row[0])
+    return None
+
