@@ -9,9 +9,10 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from api.database import init_db, get_latest_state
-from engine.serialization import deserialize_game_state, legal_actions
+from api.database import init_db, get_latest_state, save_game_state
+from engine.serialization import deserialize_game_state, serialize_game_state, legal_actions
 from agents.llm_agent import LLMAgent
+from agents.agent_runner import AgentRunner
 
 
 def test_llm_agent_discard(game_id: str, player_id: str = "player_3") -> dict:
@@ -68,41 +69,74 @@ def test_llm_agent_discard(game_id: str, player_id: str = "player_3") -> dict:
         
         result['messages'].append(f"Found {len(discard_actions)} discard action(s)")
         
-        # Create LLM agent
+        # Create LLM agent (using same configuration as production)
         result['messages'].append("Creating LLM agent...")
+        import os
+        api_key = (
+            os.getenv("OPENAI_API_KEY") or
+            os.getenv("ANTHROPIC_API_KEY") or
+            os.getenv("GEMINI_API_KEY") or
+            os.getenv("LLM_API_KEY")
+        )
+        model = os.getenv("LLM_MODEL", "gpt-4o-mini")
+        
         agent = LLMAgent(
             player_id=player_id,
-            model="gpt-4o-mini",
+            api_key=api_key,
+            model=model,
             enable_retrieval=False  # Disable retrieval for faster testing
         )
         
-        # Have agent choose action
-        result['messages'].append("Agent choosing action...")
-        result_obj = agent.choose_action(state, legal_actions_list)
+        # Use AgentRunner to test the EXACT same code path as production
+        # This ensures we're testing the real game engine with real agent runner logic
+        result['messages'].append("Using AgentRunner (production code path)...")
+        agents = {player_id: agent}
+        runner = AgentRunner(state, agents, max_turns=1)
         
-        if len(result_obj) == 4:
-            action, payload, reasoning, raw_response = result_obj
-        elif len(result_obj) == 3:
-            action, payload, reasoning = result_obj
-            raw_response = None
-        else:
-            action, payload = result_obj
-            reasoning = None
-            raw_response = None
+        # Track the action that was chosen
+        chosen_action_info = {'action': None, 'payload': None, 'reasoning': None}
         
-        result['messages'].append(f"Action chosen: {action.value}")
+        def track_action_callback(game_id, state_before, state_after, action_dict, player_id_cb):
+            """Track the action that was executed."""
+            chosen_action_info['action'] = action_dict.get('type')
+            chosen_action_info['payload'] = action_dict.get('payload')
         
-        if not payload:
+        # Run one step using AgentRunner (this is the EXACT production code path)
+        result['messages'].append("Running agent step via AgentRunner...")
+        try:
+            # run_step returns (state, game_continues, error_message, player_id) - 4 values
+            new_state, game_continues, error_message, step_player_id = runner.run_step(save_state_callback=track_action_callback)
+            
+            if not game_continues and error_message:
+                result['error'] = f"AgentRunner failed: {error_message}"
+                return result
+            
+            result['messages'].append("AgentRunner executed successfully")
+            
+        except Exception as e:
+            result['error'] = f"AgentRunner exception: {str(e)}"
+            import traceback
+            result['messages'].append(f"Traceback: {traceback.format_exc()}")
+            return result
+        
+        # Verify the action was discard_resources
+        if chosen_action_info['action'] != 'discard_resources':
+            result['error'] = f"Expected discard_resources, got {chosen_action_info['action']}"
+            return result
+        
+        result['messages'].append(f"Action chosen: {chosen_action_info['action']}")
+        
+        # Check payload
+        payload_dict = chosen_action_info.get('payload')
+        if not payload_dict:
             result['error'] = "Agent did not generate payload for discard action"
             return result
         
-        result['messages'].append(f"Payload type: {type(payload).__name__}")
-        
-        if not hasattr(payload, 'resources'):
-            result['error'] = "Payload does not have resources attribute"
+        if 'resources' not in payload_dict:
+            result['error'] = "Payload does not have resources field"
             return result
         
-        resources_to_discard = dict(payload.resources)
+        resources_to_discard = payload_dict['resources']
         total_discard = sum(resources_to_discard.values())
         expected_discard = total_resources // 2
         
@@ -113,12 +147,7 @@ def test_llm_agent_discard(game_id: str, player_id: str = "player_3") -> dict:
             result['error'] = f"Wrong discard amount: got {total_discard}, expected {expected_discard}"
             return result
         
-        # Try to execute the action
-        result['messages'].append("Executing action...")
-        new_state = state.step(action, payload, player_id=player_id)
-        result['messages'].append("Action executed successfully")
-        
-        # Check results
+        # Check results from the new state
         new_player = next((p for p in new_state.players if p.id == player_id), None)
         if not new_player:
             result['error'] = "Player not found in new state"

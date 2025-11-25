@@ -880,25 +880,47 @@ Now reason about the best action and respond in JSON format as specified."""
             if target_action == Action.DISCARD_RESOURCES and action_payload_dict and "resources" in action_payload_dict:
                 from engine import DiscardResourcesPayload, ResourceType
                 
-                # Convert LLM's resource dict (string keys) to ResourceType keys
-                llm_resources = action_payload_dict["resources"]
-                discard_dict = {}
-                for k, v in llm_resources.items():
-                    if isinstance(k, str):
-                        # Find matching ResourceType
-                        for rt in ResourceType:
-                            if rt.value == k.lower():
-                                discard_dict[rt] = v
-                                break
+                # Get the player to validate discard amount
+                player = next((p for p in state.players if p.id == self.player_id), None)
+                if player:
+                    total_resources = sum(player.resources.values())
+                    expected_discard = total_resources // 2
+                    
+                    # Convert LLM's resource dict (string keys) to ResourceType keys
+                    llm_resources = action_payload_dict["resources"]
+                    discard_dict = {}
+                    for k, v in llm_resources.items():
+                        if isinstance(k, str):
+                            # Find matching ResourceType
+                            for rt in ResourceType:
+                                if rt.value == k.lower():
+                                    discard_dict[rt] = v
+                                    break
+                            else:
+                                raise ValueError(f"Invalid resource type: {k}. Valid types: {[rt.value for rt in ResourceType]}")
                         else:
-                            raise ValueError(f"Invalid resource type: {k}. Valid types: {[rt.value for rt in ResourceType]}")
+                            discard_dict[k] = v
+                    
+                    # Validate discard amount
+                    total_discard = sum(discard_dict.values())
+                    if total_discard != expected_discard:
+                        # LLM provided wrong amount - log warning and fall through to fallback generation
+                        print(f"  Warning: LLM provided discard amount {total_discard}, but expected {expected_discard}. Using fallback generation.", flush=True)
+                        # Don't set matching_action - let it fall through to fallback generation below
                     else:
-                        discard_dict[k] = v
-                
-                # Create payload from LLM's specification
-                constructed_payload = DiscardResourcesPayload(resources=discard_dict)
-                matching_action = (target_action, constructed_payload)
-                print(f"  Constructed DISCARD_RESOURCES payload from LLM: {discard_dict}", flush=True)
+                        # Validate player has enough of each resource
+                        valid = True
+                        for resource_type, amount in discard_dict.items():
+                            if player.resources.get(resource_type, 0) < amount:
+                                print(f"  Warning: LLM wants to discard {amount} {resource_type.value}, but player only has {player.resources.get(resource_type, 0)}. Using fallback generation.", flush=True)
+                                valid = False
+                                break
+                        
+                        if valid:
+                            # Create payload from LLM's specification
+                            constructed_payload = DiscardResourcesPayload(resources=discard_dict)
+                            matching_action = (target_action, constructed_payload)
+                            print(f"  Constructed DISCARD_RESOURCES payload from LLM: {discard_dict}", flush=True)
             
             # For other actions, use standard matching
             if not matching_action:
