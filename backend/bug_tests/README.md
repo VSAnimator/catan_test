@@ -17,6 +17,9 @@ This directory contains an automated system for testing bugs discovered during g
 - `llm_validator.py`: LLM-based validation of test results
 - `manage_tests.py`: Command-line tool for managing tests
 - `test_registry.json`: JSON file storing all test cases (auto-generated)
+- `test_*.py`: Standalone test scripts for specific scenarios (e.g., `test_llm_discard.py`)
+
+**IMPORTANT**: All test files should be preserved and integrated into the test suite. Never delete test files - they are part of the regression testing database.
 
 ## Usage
 
@@ -187,6 +190,29 @@ The system integrates with the existing game engine:
 3. **Fix Bug**: Implement the fix
 4. **Run Test**: Verify the test now passes
 5. **Keep Test**: Keep the test in the registry to prevent regression
+
+## Test Scripts
+
+In addition to registry-based tests, you can create standalone test scripts (e.g., `test_llm_discard.py`) that test specific scenarios. These scripts:
+
+- Should be stored in the `bug_tests/` directory
+- Can be run directly: `python -m bug_tests.test_llm_discard`
+- Should follow a consistent structure for integration into automated test suites
+- **NEVER DELETE TEST FILES** - they are part of the regression testing database
+
+Example test script structure:
+```python
+def test_specific_scenario(game_id: str, ...) -> dict:
+    """Test description."""
+    result = {'success': False, 'error': None, 'messages': []}
+    # ... test logic ...
+    return result
+
+if __name__ == "__main__":
+    # Run test
+    result = test_specific_scenario(...)
+    sys.exit(0 if result['success'] else 1)
+```
 
 ## Limitations
 
