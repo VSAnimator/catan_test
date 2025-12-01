@@ -70,6 +70,9 @@ export interface GameState {
   } | null
   pending_trade_responses?: Record<string, boolean>  // Player ID -> True if accepted, False if rejected
   pending_trade_current_responder_index?: number  // Index into target_player_ids for current responder
+  // Card counts
+  resource_card_counts?: Record<string, number>  // Resource type -> count available
+  dev_card_counts?: Record<string, number>  // Dev card type -> count available
 }
 
 export interface LegalAction {

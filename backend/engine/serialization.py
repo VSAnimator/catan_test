@@ -76,6 +76,9 @@ def serialize_game_state(state: GameState) -> Dict[str, Any]:
     # Add turn tracking fields
     result["actions_taken_this_turn"] = state.actions_taken_this_turn
     result["consecutive_rejected_trades"] = state.consecutive_rejected_trades
+    # Add card counts
+    result["resource_card_counts"] = {rt.value: count for rt, count in state.resource_card_counts.items()}
+    result["dev_card_counts"] = state.dev_card_counts
     return result
 
 
@@ -129,6 +132,19 @@ def deserialize_game_state(data: Dict[str, Any]) -> GameState:
         pending_trade_current_responder_index=data.get("pending_trade_current_responder_index", 0),
         actions_taken_this_turn=list(data.get("actions_taken_this_turn", [])),
         consecutive_rejected_trades=dict(data.get("consecutive_rejected_trades", {})),
+        resource_card_counts={
+            ResourceType(rt): count 
+            for rt, count in data.get("resource_card_counts", {
+                "wood": 19, "brick": 19, "wheat": 19, "sheep": 19, "ore": 19
+            }).items()
+        },
+        dev_card_counts=dict(data.get("dev_card_counts", {
+            "year_of_plenty": 2,
+            "monopoly": 2,
+            "road_building": 2,
+            "victory_point": 5,
+            "knight": 14,
+        })),
     )
 
 
@@ -1041,16 +1057,20 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
             dev_card_count = len(p.dev_cards)
             if dev_card_count > 0:
                 lines.append(f"  Development Cards: {dev_card_count} (hidden)")
+            # Knights played (visible information) - always show if > 0
+            if p.knights_played > 0:
+                if p.largest_army:
+                    lines.append(f"  Knights Played: {p.knights_played} (* Has Largest Army)")
+                elif p.knights_played >= 3:
+                    lines.append(f"  Knights Played: {p.knights_played} (needs 3+ for Largest Army)")
+                else:
+                    lines.append(f"  Knights Played: {p.knights_played}")
             # Longest road details - calculate actual longest road length
             longest_road_length = _calculate_longest_road_length(state, p.id)
             if p.longest_road:
                 lines.append(f"  * Has Longest Road ({longest_road_length} road segments)")
             elif longest_road_length > 0:
                 lines.append(f"  Longest Road: {longest_road_length} segments (needs 5+ for card)")
-            # Largest army details
-            if p.largest_army:
-                knight_count = sum(1 for card in p.dev_cards if card == "knight")
-                lines.append(f"  * Has Largest Army ({knight_count} knights played)")
             # Show opponent building locations
             opponent_buildings = [i for i in state.intersections if i.owner == p.id]
             if opponent_buildings:
@@ -1082,6 +1102,26 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
         lines.append("Resource Scarcity (tiles per resource type):")
         scarcity_str = ", ".join([f"{rt.value}: {count} tiles" for rt, count in sorted(resource_counts.items(), key=lambda x: -x[1])])
         lines.append(f"  {scarcity_str}")
+        lines.append("")
+    
+    # Available card counts (bank supply)
+    lines.append("=== Available Cards in Bank ===")
+    if state.resource_card_counts:
+        lines.append("Resource Cards Available:")
+        for rt in ResourceType:
+            count = state.resource_card_counts.get(rt, 0)
+            scarcity_indicator = " (LOW)" if count < 5 else " (OK)" if count < 10 else ""
+            lines.append(f"  {rt.value.capitalize()}: {count}/19{scarcity_indicator}")
+        lines.append("  Note: If there aren't enough cards available when resources are distributed, no one gets those resources.")
+        lines.append("")
+    
+    if state.dev_card_counts:
+        lines.append("Development Cards Available:")
+        total_dev = sum(state.dev_card_counts.values())
+        for card_type, count in sorted(state.dev_card_counts.items()):
+            lines.append(f"  {card_type.replace('_', ' ').title()}: {count}")
+        lines.append(f"  Total: {total_dev}/25")
+        lines.append("  Note: Once cards are purchased, they are removed from the bank (not reshuffled).")
         lines.append("")
     
     # Dice probability reference

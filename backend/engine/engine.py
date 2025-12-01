@@ -116,6 +116,24 @@ class GameState:
     actions_taken_this_turn: List[Dict[str, Any]] = field(default_factory=list)  # List of actions taken this turn: [{"player_id": str, "action": str, "payload": dict}]
     consecutive_rejected_trades: Dict[str, int] = field(default_factory=dict)  # Player ID -> count of consecutive rejected trades this turn
     
+    # Resource card counts (19 of each resource type available)
+    resource_card_counts: Dict[ResourceType, int] = field(default_factory=lambda: {
+        ResourceType.WOOD: 19,
+        ResourceType.BRICK: 19,
+        ResourceType.WHEAT: 19,
+        ResourceType.SHEEP: 19,
+        ResourceType.ORE: 19,
+    })
+    
+    # Development card counts (finite supply)
+    dev_card_counts: Dict[str, int] = field(default_factory=lambda: {
+        "year_of_plenty": 2,
+        "monopoly": 2,
+        "road_building": 2,
+        "victory_point": 5,
+        "knight": 14,
+    })
+    
     def step(self, action: 'Action', payload: Optional['ActionPayload'] = None, player_id: Optional[str] = None) -> 'GameState':
         """
         Pure function that takes an action and returns a new GameState.
@@ -243,6 +261,9 @@ class GameState:
         
         Resources are additive - if a player has multiple buildings on a tile,
         they get resources for each building (1 per settlement, 2 per city).
+        
+        Resource scarcity: If there aren't enough cards available to distribute
+        to all players, no one gets resources from that tile.
         """
         for tile in state.tiles:
             # Skip if robber is on this tile
@@ -269,10 +290,22 @@ class GameState:
                             elif intersection.building_type == "city":
                                 player_resources[player_id] += 2
                 
-                # Distribute the resources
-                for player_id, amount in player_resources.items():
-                    player = next(p for p in state.players if p.id == player_id)
-                    player.resources[tile.resource_type] += amount
+                # Calculate total resources needed
+                total_needed = sum(player_resources.values())
+                
+                # Check if there are enough cards available
+                available_cards = state.resource_card_counts.get(tile.resource_type, 0)
+                
+                # Only distribute if we have enough cards for everyone
+                if total_needed > 0 and available_cards >= total_needed:
+                    # Distribute the resources
+                    for player_id, amount in player_resources.items():
+                        player = next(p for p in state.players if p.id == player_id)
+                        player.resources[tile.resource_type] += amount
+                    
+                    # Decrement available cards
+                    state.resource_card_counts[tile.resource_type] -= total_needed
+                # If not enough cards, no one gets resources (scarcity rule)
     
     def _handle_build_road(self, new_state: 'GameState', payload: Optional['ActionPayload']) -> 'GameState':
         """Handle building a road."""
@@ -427,14 +460,31 @@ class GameState:
             current_player.resources[ResourceType.ORE] < 1):
             raise ValueError("Insufficient resources to buy development card")
         
+        # Check if any dev cards are available
+        total_available = sum(new_state.dev_card_counts.values())
+        if total_available == 0:
+            raise ValueError("No development cards available")
+        
+        # Build weighted list of available cards
+        available_cards = []
+        for card_type, count in new_state.dev_card_counts.items():
+            available_cards.extend([card_type] * count)
+        
+        if not available_cards:
+            raise ValueError("No development cards available")
+        
+        # Randomly select from available cards
+        card_type = random.choice(available_cards)
+        
+        # Decrement the card count
+        new_state.dev_card_counts[card_type] -= 1
+        
         # Deduct resources
         current_player.resources[ResourceType.WHEAT] -= 1
         current_player.resources[ResourceType.SHEEP] -= 1
         current_player.resources[ResourceType.ORE] -= 1
         
-        # Add a random dev card (simplified)
-        dev_card_types = ["knight", "victory_point", "road_building", "year_of_plenty", "monopoly"]
-        card_type = random.choice(dev_card_types)
+        # Add the card to player's hand
         current_player.dev_cards.append(card_type)
         
         # Track that this player bought a dev card this turn
@@ -489,10 +539,18 @@ class GameState:
             if total_resources != 2:
                 raise ValueError(f"year_of_plenty must give exactly 2 resources, got {total_resources}")
             
-            # Add the resources to player
+            # Check if all requested resources are available
+            for resource, amount in payload.year_of_plenty_resources.items():
+                if amount > 0:
+                    available = new_state.resource_card_counts.get(resource, 0)
+                    if available < amount:
+                        raise ValueError(f"Insufficient {resource.value} cards available (need {amount}, have {available})")
+            
+            # Add the resources to player and decrement card counts
             for resource, amount in payload.year_of_plenty_resources.items():
                 if amount > 0:
                     current_player.resources[resource] += amount
+                    new_state.resource_card_counts[resource] -= amount
         elif payload.card_type == "monopoly":
             # Monopoly lets player steal all of a resource type from other players
             if not payload.monopoly_resource_type:
@@ -597,13 +655,26 @@ class GameState:
             if total_give != 4 or total_receive != 1:
                 raise ValueError("Standard bank trades must be 4:1 ratio")
         
-        # Execute trade - remove given resources
+        # Check if all received resources are available
+        for resource, amount in payload.receive_resources.items():
+            if amount > 0:
+                available = new_state.resource_card_counts.get(resource, 0)
+                if available < amount:
+                    raise ValueError(f"Insufficient {resource.value} cards available (need {amount}, have {available})")
+        
+        # Execute trade - remove given resources (these go back to the bank pool)
         for resource, amount in payload.give_resources.items():
             current_player.resources[resource] -= amount
+            # Return resources to the bank pool
+            new_state.resource_card_counts[resource] += amount
         
-        # Add received resources
+        # Add received resources (these come from the bank pool)
         for resource, amount in payload.receive_resources.items():
+            if resource not in current_player.resources:
+                current_player.resources[resource] = 0
             current_player.resources[resource] += amount
+            # Remove resources from the bank pool
+            new_state.resource_card_counts[resource] -= amount
         
         return new_state
     
@@ -1857,7 +1928,12 @@ class GameState:
             for tile_id in intersection.adjacent_tiles:
                 tile = next((t for t in new_state.tiles if t.id == tile_id), None)
                 if tile and tile.resource_type:  # Not desert
-                    current_player.resources[tile.resource_type] += 1
+                    # Check if resource is available
+                    available = new_state.resource_card_counts.get(tile.resource_type, 0)
+                    if available > 0:
+                        current_player.resources[tile.resource_type] += 1
+                        new_state.resource_card_counts[tile.resource_type] -= 1
+                    # If not available, player doesn't get the resource (scarcity rule)
         
         return new_state
     

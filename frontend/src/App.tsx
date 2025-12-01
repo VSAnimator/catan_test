@@ -2998,6 +2998,78 @@ function App() {
               )}
             </div>
 
+            {/* Card Counts Display */}
+            {gameState && (gameState.resource_card_counts || gameState.dev_card_counts) && (
+              <div className="card-counts-panel" style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#f5f5f5', borderRadius: '8px' }}>
+                <h2>Available Cards</h2>
+                
+                {gameState.resource_card_counts && (
+                  <div style={{ marginBottom: '1rem' }}>
+                    <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '1rem' }}>Resource Cards</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: '0.5rem' }}>
+                      {Object.entries(gameState.resource_card_counts).map(([resource, count]) => (
+                        <div 
+                          key={resource}
+                          style={{
+                            padding: '0.5rem',
+                            backgroundColor: '#fff',
+                            borderRadius: '4px',
+                            border: '1px solid #ddd',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center'
+                          }}
+                        >
+                          <span style={{ textTransform: 'capitalize', fontWeight: '500' }}>{resource}:</span>
+                          <span style={{ 
+                            fontWeight: 'bold',
+                            color: count === 0 ? '#d32f2f' : count < 5 ? '#f57c00' : '#2e7d32'
+                          }}>
+                            {count}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {gameState.dev_card_counts && (
+                  <div>
+                    <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '1rem' }}>Development Cards</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.5rem' }}>
+                      {Object.entries(gameState.dev_card_counts).map(([cardType, count]) => (
+                        <div 
+                          key={cardType}
+                          style={{
+                            padding: '0.5rem',
+                            backgroundColor: '#fff',
+                            borderRadius: '4px',
+                            border: '1px solid #ddd',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center'
+                          }}
+                        >
+                          <span style={{ textTransform: 'capitalize', fontWeight: '500' }}>
+                            {cardType.replace('_', ' ')}:
+                          </span>
+                          <span style={{ 
+                            fontWeight: 'bold',
+                            color: count === 0 ? '#d32f2f' : '#2e7d32'
+                          }}>
+                            {count}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: '#666' }}>
+                      Total: {Object.values(gameState.dev_card_counts).reduce((a, b) => a + b, 0)} / 25
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="all-players">
               <h2>All Players</h2>
               {gameState?.players.map(player => (
@@ -3005,15 +3077,26 @@ function App() {
                   key={player.id} 
                   className={`player-card ${player.id === playerId ? 'current' : ''} ${activePlayer?.id === player.id ? 'active-turn' : ''}`}
                   style={{
-                    borderLeft: `4px solid ${player.color || '#ccc'}`
+                    borderLeft: `4px solid ${player.color || '#ccc'}`,
+                    padding: '0.75rem',
+                    marginBottom: '0.5rem',
+                    backgroundColor: '#fff',
+                    borderRadius: '4px',
+                    border: '1px solid #ddd'
                   }}
                 >
                   <div>
                     <strong>{player.name}</strong> ({player.id})
                     {activePlayer?.id === player.id && <span className="turn-indicator"> [Current Turn]</span>}
                   </div>
-                  <div>VP: {player.victory_points}</div>
-                  <div>Resources: {Object.values(player.resources).reduce((a, b) => a + b, 0)}</div>
+                  <div style={{ marginTop: '0.5rem', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem', fontSize: '0.9rem' }}>
+                    <div><strong>VP:</strong> {player.victory_points}</div>
+                    <div><strong>Resources:</strong> {Object.values(player.resources).reduce((a, b) => a + b, 0)}</div>
+                    <div><strong>Dev Cards:</strong> {player.dev_cards?.length || 0}</div>
+                    <div><strong>Knights Played:</strong> {player.knights_played || 0}</div>
+                  </div>
+                  {player.longest_road && <div style={{ marginTop: '0.25rem', fontSize: '0.85rem', color: '#1976d2' }}>🏆 Longest Road</div>}
+                  {player.largest_army && <div style={{ marginTop: '0.25rem', fontSize: '0.85rem', color: '#1976d2' }}>⚔️ Largest Army</div>}
                 </div>
               ))}
             </div>
