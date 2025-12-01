@@ -33,7 +33,7 @@ from engine.serialization import deserialize_game_state, legal_actions, serializ
 
 
 def get_player_color(index: int) -> str:
-    colors = ["#FF0000", "#00AA00", "#2196F3", "#F5F5F5"]
+    colors = ["#FF0000", "#00AA00", "#2196F3", "#FF8C00"]
     return colors[index % len(colors)]
 
 

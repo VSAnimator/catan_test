@@ -21,6 +21,15 @@ import {
 
 type View = 'main' | 'game' | 'replay' | 'agent-watch' | 'event-query'
 
+// Resource icons mapping
+const RESOURCE_ICONS: Record<string, string> = {
+  'wood': '🌲',
+  'brick': '🧱',
+  'wheat': '🌾',
+  'sheep': '🐑',
+  'ore': '⛏️'
+}
+
 function App() {
   const [view, setView] = useState<View>('main')
   const [gameState, setGameState] = useState<GameState | null>(null)
@@ -618,12 +627,12 @@ function App() {
     // Hex coordinate to pixel conversion (pointy-top hexagons)
     // Using axial coordinates (q, r) to pixel conversion
     const hexToPixel = (q: number, r: number) => {
-      const hexSize = 70  // Size of hex (radius) - increased from 45
+      const hexSize = 65  // Size of hex (radius) - slightly larger for better visibility
       const sqrt3 = Math.sqrt(3)
       // Pointy-top hex conversion
       const x = hexSize * (sqrt3 * q + sqrt3 / 2 * r)
       const y = hexSize * (3.0 / 2.0 * r)
-      return { x: x + 600, y: y + 450 }  // Center offset for 19-tile board - increased
+      return { x: x + 450, y: y + 390 }  // Center offset for 19-tile board
     }
 
     return (
@@ -656,13 +665,13 @@ function App() {
             <div className={`hex-resource ${tile.resource_type || 'desert'}`}>
               {tile.resource_type ? (
                 <>
-                  <div className="resource-name">{tile.resource_type}</div>
+                  <div className="resource-name">{RESOURCE_ICONS[tile.resource_type] || ''} {tile.resource_type}</div>
                   {tile.number_token && (
                     <div className="number-token">{tile.number_token}</div>
                   )}
                 </>
               ) : (
-                <div className="resource-name">Desert</div>
+                <div className="resource-name">🏜️ Desert</div>
               )}
               {hasRobber && (
                 <div className="robber-icon" title="Robber">👹</div>
@@ -696,22 +705,51 @@ function App() {
           const ownerColor = ownerPlayer?.color || null
           
           return (
-          <div
-            key={intersection.id}
-            className={`intersection ${intersection.owner === highlightPlayerId ? 'owned-by-me' : intersection.owner ? 'owned' : ''} ${hasLegalAction ? 'clickable' : ''}`}
-            style={{
-              left: `${x}px`,
-              top: `${y}px`,
-              ...(ownerColor && {
-                backgroundColor: ownerColor,
-                borderColor: ownerColor
-              })
-            }}
-            onClick={() => handleIntersectionClick(intersection.id)}
-            title={`Intersection ${intersection.id}${intersection.owner ? ` (${ownerPlayer?.name || intersection.owner})` : ''}${intersection.building_type ? ` - ${intersection.building_type}` : ''}${intersection.port_type ? ` - Port: ${intersection.port_type}` : ''}${hasLegalAction ? ' - Click to build' : ''}`}
-          >
-            {intersection.building_type === 'city' ? '🏰' : intersection.building_type === 'settlement' ? '🏠' : '○'}
-          </div>
+          <React.Fragment key={intersection.id}>
+            <div
+              className={`intersection ${intersection.owner === highlightPlayerId ? 'owned-by-me' : intersection.owner ? 'owned' : ''} ${hasLegalAction ? 'clickable' : ''}`}
+              style={{
+                left: `${x}px`,
+                top: `${y}px`,
+                ...(ownerColor && {
+                  backgroundColor: ownerColor,
+                  borderColor: ownerColor
+                })
+              }}
+              onClick={() => handleIntersectionClick(intersection.id)}
+              title={`Intersection ${intersection.id}${intersection.owner ? ` (${ownerPlayer?.name || intersection.owner})` : ''}${intersection.building_type ? ` - ${intersection.building_type}` : ''}${intersection.port_type ? ` - Port: ${intersection.port_type}` : ''}${hasLegalAction ? ' - Click to build' : ''}`}
+            >
+              {!intersection.building_type && '○'}
+            </div>
+            {intersection.building_type && (
+              <div
+                onClick={() => handleIntersectionClick(intersection.id)}
+                style={{
+                  position: 'absolute',
+                  left: `${x}px`,
+                  top: `${y}px`,
+                  transform: 'translate(-50%, -50%)',
+                  fontSize: intersection.building_type === 'city' ? '36px' : '30px',
+                  lineHeight: '1',
+                  zIndex: 21,
+                  cursor: hasLegalAction ? 'pointer' : 'default',
+                  filter: 'drop-shadow(2px 2px 4px rgba(0, 0, 0, 0.5))',
+                  padding: intersection.building_type === 'city' ? '4px' : '3px',
+                  borderRadius: '50%',
+                  backgroundColor: ownerColor ? `${ownerColor}40` : 'rgba(255, 255, 255, 0.3)',
+                  border: ownerColor ? `3px solid ${ownerColor}` : '3px solid #666',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: intersection.building_type === 'city' ? '44px' : '36px',
+                  height: intersection.building_type === 'city' ? '44px' : '36px'
+                }}
+                title={`${intersection.building_type === 'city' ? 'City' : 'Settlement'} - ${ownerPlayer?.name || intersection.owner || 'Unknown'}${hasLegalAction ? ' - Click to build' : ''}`}
+              >
+                {intersection.building_type === 'city' ? '🏰' : '🏠'}
+              </div>
+            )}
+          </React.Fragment>
           )
         })}
         
@@ -2298,6 +2336,7 @@ function App() {
           </div>
 
           <div className="game-sidebar">
+            <div className="game-sidebar-column">
             {devMode && gameState && activePlayer && (
               <div className="dev-mode-controls">
                 <h2>🛠️ Dev Mode - Switch to Current Player</h2>
@@ -2349,41 +2388,427 @@ function App() {
               </div>
             )}
 
-            {currentPlayer && (
-              <div className="player-info" style={{ borderLeft: `4px solid ${currentPlayer.color || '#ccc'}` }}>
-                <h2>Your Status ({currentPlayer.name})</h2>
-                <div className="info-section">
-                  <div><strong>Victory Points:</strong> {currentPlayer.victory_points}</div>
-                  <div className="resources-list">
-                    <strong>Resources:</strong>
-                    <ul>
-                      {Object.entries(currentPlayer.resources).map(([resource, amount]) => (
-                        <li key={resource}>
-                          {resource}: {amount}
-                        </li>
+            {/* Combined Players Status */}
+            <div className="all-players">
+              <h2>Players</h2>
+              {gameState?.players.map(player => {
+                const isCurrentPlayer = player.id === playerId
+                const isActiveTurn = activePlayer?.id === player.id
+                const totalResources = Object.values(player.resources).reduce((a, b) => a + b, 0)
+                const resourceEntries = Object.entries(player.resources)
+                const resourcesDisplay = isCurrentPlayer 
+                  ? resourceEntries.map(([resource, amount]) => `${RESOURCE_ICONS[resource] || ''} ${resource}: ${amount}`).join(', ')
+                  : `${totalResources} total`
+                
+                return (
+                  <div 
+                    key={player.id} 
+                    className={`player-card ${isCurrentPlayer ? 'current' : ''} ${isActiveTurn ? 'active-turn' : ''}`}
+                    style={{
+                      borderLeft: `6px solid ${player.color || '#ccc'}`,
+                      padding: '0.5rem',
+                      marginBottom: '0.5rem',
+                      backgroundColor: isCurrentPlayer ? '#e3f2fd' : '#fff',
+                      borderRadius: '4px',
+                      border: `2px solid ${player.color || '#ddd'}`,
+                      fontSize: '0.85rem'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.15rem' }}>
+                      <div>
+                        <strong style={{ color: player.color || '#333' }}>{player.name}</strong>
+                        {isCurrentPlayer && <span style={{ color: '#1976d2', marginLeft: '0.5rem' }}>(You)</span>}
+                        {isActiveTurn && <span className="turn-indicator"> [Current Turn]</span>}
+                      </div>
+                      <div><strong>VP:</strong> {player.victory_points}</div>
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', fontSize: '0.8rem', alignItems: 'center' }}>
+                      <div><strong>Resources:</strong> {resourcesDisplay}</div>
+                      <div>
+                        <strong>Dev Cards:</strong> {player.dev_cards?.length || 0}
+                        {isCurrentPlayer && player.dev_cards && player.dev_cards.length > 0 && (
+                          <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: '#666' }}>
+                            ({player.dev_cards.join(', ')})
+                          </span>
+                        )}
+                      </div>
+                      <div>Buildings: {player.settlements_built}S/{player.cities_built}C</div>
+                      <div>Roads: {player.roads_built}</div>
+                      {player.longest_road && <div style={{ color: '#1976d2' }}>🏆</div>}
+                      {player.largest_army && <div style={{ color: '#1976d2' }}>⚔️</div>}
+                      {player.knights_played > 0 && <div style={{ color: '#1976d2' }}>⚔️{player.knights_played}</div>}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="legal-actions">
+              <h2>Legal Actions</h2>
+              {loading ? (
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading actions...</div>
+              ) : legalActions.length === 0 ? (
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>No legal actions available</div>
+              ) : (
+                <>
+                  {/* Show trade offer details if accept/reject trade actions are present */}
+                  {gameState?.pending_trade_offer && legalActions.some(a => a.type === 'accept_trade' || a.type === 'reject_trade') && (() => {
+                    const offer = gameState.pending_trade_offer
+                    const proposer = gameState.players.find(p => p.id === offer.proposer_id)
+                    const proposerName = proposer?.name || offer.proposer_id
+                    const giveResources = Object.entries(offer.give_resources || {})
+                      .filter(([_, count]) => (count as number) > 0)
+                      .map(([resource, count]) => `${count} ${resource}`)
+                      .join(', ')
+                    const receiveResources = Object.entries(offer.receive_resources || {})
+                      .filter(([_, count]) => (count as number) > 0)
+                      .map(([resource, count]) => `${count} ${resource}`)
+                      .join(', ')
+                    
+                    return (
+                      <div style={{
+                        padding: '0.75rem',
+                        backgroundColor: '#e3f2fd',
+                        border: '1px solid #2196F3',
+                        borderRadius: '4px',
+                        marginBottom: '1rem',
+                        fontSize: '0.9rem'
+                      }}>
+                        <strong style={{ display: 'block', marginBottom: '0.5rem', color: '#1976D2' }}>
+                          💼 Trade Offer from {proposerName}
+                        </strong>
+                        <div style={{ marginBottom: '0.25rem' }}>
+                          <strong>You give:</strong> {receiveResources || 'Nothing'}
+                        </div>
+                        <div>
+                          <strong>You receive:</strong> {giveResources || 'Nothing'}
+                        </div>
+                      </div>
+                    )
+                  })()}
+                  <div className="actions-list">
+                    {legalActions
+                      .filter(a => 
+                        a.type !== 'trade_bank' && 
+                        a.type !== 'trade_player' &&
+                        a.type !== 'discard_resources'  // Hide discard from main list, show in discard panel
+                      )
+                      .map((action, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => {
+                            console.log('Action button clicked:', action)
+                            handleExecuteAction(action)
+                          }}
+                          disabled={loading || (activePlayer?.id !== playerId && action.type !== 'discard_resources')}
+                          className="action-button"
+                        >
+                          {formatActionName(action)}
+                        </button>
                       ))}
-                    </ul>
                   </div>
-                  <div>
-                    <strong>Buildings:</strong> {currentPlayer.settlements_built} settlements, {currentPlayer.cities_built} cities
-                  </div>
-                  <div>
-                    <strong>Roads:</strong> {currentPlayer.roads_built}
-                  </div>
-                  <div>
-                    <strong>Dev Cards:</strong> {currentPlayer.dev_cards.length}
-                    {currentPlayer.dev_cards.length > 0 && (
-                      <ul>
-                        {currentPlayer.dev_cards.map((card, idx) => (
-                          <li key={idx}>{card}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                  {currentPlayer.longest_road && <div>🏆 Longest Road (+2 VP)</div>}
-                  {currentPlayer.largest_army && <div>⚔️ Largest Army (+2 VP)</div>}
-                  {currentPlayer.knights_played > 0 && <div>Knights Played: {currentPlayer.knights_played}</div>}
+                </>
+              )}
+            </div>
+
+            {/* Discard Resources Panel (when 7 is rolled) */}
+            {gameState && gameState.dice_roll === 7 && currentPlayer && (() => {
+              // Check if robber has been moved (discard phase is over)
+              const robberHasBeenMoved = gameState.robber_initial_tile_id !== undefined && 
+                                          gameState.robber_initial_tile_id !== null &&
+                                          gameState.robber_tile_id !== gameState.robber_initial_tile_id
+              
+              if (gameState.waiting_for_robber_move || gameState.waiting_for_robber_steal || robberHasBeenMoved) {
+                return null  // Discard phase is over
+              }
+              
+              const totalResources = Object.values(currentPlayer.resources).reduce((a, b) => a + b, 0)
+              const hasAlreadyDiscarded = gameState.players_discarded?.includes(playerId) || false
+              const needsDiscard = totalResources >= 8 && !hasAlreadyDiscarded
+              const discardCount = needsDiscard ? Math.floor(totalResources / 2) : 0
+              const currentDiscardTotal = Object.values(discardResources).reduce((a, b) => a + b, 0)
+              
+              // Check if any other players still need to discard (and haven't discarded yet)
+              const otherPlayersNeedDiscard = gameState.players.some(p => {
+                const pResources = Object.values(p.resources).reduce((a, b) => a + b, 0)
+                const pDiscarded = gameState.players_discarded?.includes(p.id) || false
+                return p.id !== playerId && pResources >= 8 && !pDiscarded
+              })
+              
+              if (!needsDiscard) {
+                // Show status message if other players need to discard
+                if (otherPlayersNeedDiscard) {
+                  return (
+                    <div className="trading-panel" style={{ backgroundColor: '#e3f2fd', borderColor: '#2196F3' }}>
+                      <h2>⏳ Waiting for Other Players to Discard</h2>
+                      <p style={{ margin: 0, color: '#666' }}>
+                        A 7 was rolled. Other players with 8+ resources must discard half their resources before the robber can be moved.
+                      </p>
+                    </div>
+                  )
+                }
+                return null
+              }
+              
+              return (
+                <div className="trading-panel" style={{ backgroundColor: '#fff3cd', borderColor: '#ffc107' }}>
+                  <h2>
+                    ⚠️ Discard Resources (7 Rolled)
+                    <button
+                      onClick={() => setShowDiscardPanel(!showDiscardPanel)}
+                      className="toggle-button"
+                      style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}
+                    >
+                      {showDiscardPanel ? '▼' : '▶'}
+                    </button>
+                  </h2>
+                  {true && (  // Always show when needed - panel should be open
+                    <div className="trading-content">
+                      <div style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#fff', borderRadius: '4px' }}>
+                        <p style={{ margin: 0 }}>
+                          <strong>You have {totalResources} resources.</strong> You must discard <strong>{discardCount} resources</strong> (half, rounded down).
+                        </p>
+                        <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem', color: '#666' }}>
+                          Currently selected: <strong>{currentDiscardTotal} / {discardCount}</strong>
+                        </p>
+                      </div>
+                      
+                      {(() => {
+                        const resourceTypes = ['wood', 'brick', 'wheat', 'sheep', 'ore']
+                        
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                            <div>
+                              <h4 style={{ marginBottom: '0.5rem' }}>Resources to Discard</h4>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                {resourceTypes.map(resource => {
+                                  const currentAmount = discardResources[resource] || 0
+                                  const available = currentPlayer.resources[resource] || 0
+                                  return (
+                                    <div key={resource} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                      <span style={{ width: '80px' }}>{RESOURCE_ICONS[resource]} {resource}:</span>
+                                      <button
+                                        onClick={() => {
+                                          if (currentAmount > 0) {
+                                            setDiscardResources({ ...discardResources, [resource]: currentAmount - 1 })
+                                          }
+                                        }}
+                                        disabled={currentAmount === 0}
+                                        style={{ width: '30px', height: '30px' }}
+                                      >
+                                        -
+                                      </button>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        max={available}
+                                        value={currentAmount}
+                                        onChange={(e) => {
+                                          const val = Math.max(0, Math.min(available, parseInt(e.target.value) || 0))
+                                          setDiscardResources({ ...discardResources, [resource]: val })
+                                        }}
+                                        style={{ width: '60px', textAlign: 'center' }}
+                                      />
+                                      <button
+                                        onClick={() => {
+                                          if (currentAmount < available && currentDiscardTotal < discardCount) {
+                                            setDiscardResources({ ...discardResources, [resource]: currentAmount + 1 })
+                                          }
+                                        }}
+                                        disabled={currentAmount >= available || currentDiscardTotal >= discardCount}
+                                        style={{ width: '30px', height: '30px' }}
+                                      >
+                                        +
+                                      </button>
+                                      <span style={{ color: '#666', fontSize: '0.85rem' }}>
+                                        (You have {available})
+                                      </span>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                            
+                            <div style={{ marginTop: '1rem' }}>
+                              <button
+                                onClick={async () => {
+                                  if (currentDiscardTotal !== discardCount) {
+                                    setError(`You must discard exactly ${discardCount} resources (currently ${currentDiscardTotal})`)
+                                    return
+                                  }
+                                  
+                                  // Validate player has enough of each resource
+                                  for (const [resource, amount] of Object.entries(discardResources)) {
+                                    if (amount > 0 && (currentPlayer.resources[resource] || 0) < amount) {
+                                      setError(`You don't have enough ${resource} to discard`)
+                                      return
+                                    }
+                                  }
+                                  
+                                  setLoading(true)
+                                  setError(null)
+                                  
+                                  try {
+                                    // Filter out zero amounts
+                                    const filteredDiscardResources: Record<string, number> = {}
+                                    for (const [resource, amount] of Object.entries(discardResources)) {
+                                      if (amount > 0) {
+                                        filteredDiscardResources[resource] = amount
+                                      }
+                                    }
+                                    
+                                    // Ensure we have resources to discard
+                                    if (Object.keys(filteredDiscardResources).length === 0) {
+                                      setError('No resources selected to discard')
+                                      setLoading(false)
+                                      return
+                                    }
+                                    
+                                    const discardAction: LegalAction = {
+                                      type: 'discard_resources',
+                                      payload: {
+                                        type: 'DiscardResourcesPayload',
+                                        resources: filteredDiscardResources
+                                      }
+                                    }
+                                    
+                                    console.log('Executing discard action:', discardAction)
+                                    const newState = await postAction(gameState.game_id, playerId, discardAction)
+                                    setGameState(newState)
+                                    
+                                    // Clear the discard form
+                                    setDiscardResources({})
+                                    setShowDiscardPanel(false)
+                                    
+                                    // Dev mode: Auto-switch to next player who needs to discard, or back to player who rolled 7
+                                    if (devMode && isAutoDiscarding) {
+                                      // Find all players who still need to discard (and haven't discarded yet)
+                                      const playersStillNeedingDiscard = newState.players.filter(p => {
+                                        const totalResources = Object.values(p.resources).reduce((a, b) => a + b, 0)
+                                        const hasDiscarded = newState.players_discarded?.includes(p.id) || false
+                                        return totalResources >= 8 && !hasDiscarded
+                                      })
+                                      
+                                      if (playersStillNeedingDiscard.length > 0) {
+                                        // Switch to next player who needs to discard
+                                        const currentIndex = playersStillNeedingDiscard.findIndex(p => p.id === playerId)
+                                        const nextIndex = (currentIndex + 1) % playersStillNeedingDiscard.length
+                                        setPlayerId(playersStillNeedingDiscard[nextIndex].id)
+                                      } else {
+                                        // All discards done, switch back to player who rolled 7
+                                        if (playerWhoRolled7) {
+                                          setPlayerId(playerWhoRolled7)
+                                          setIsAutoDiscarding(false)
+                                        }
+                                      }
+                                    }
+                                  } catch (err) {
+                                    setError(err instanceof Error ? err.message : 'Failed to discard resources')
+                                  } finally {
+                                    setLoading(false)
+                                  }
+                                }}
+                                disabled={loading || currentDiscardTotal !== discardCount}
+                                className="action-button"
+                                style={{
+                                  width: '100%',
+                                  padding: '0.75rem',
+                                  fontSize: '1rem',
+                                  fontWeight: 'bold',
+                                  backgroundColor: currentDiscardTotal === discardCount ? '#4CAF50' : '#ccc',
+                                  color: 'white'
+                                }}
+                              >
+                                {loading ? 'Discarding...' : `Discard ${discardCount} Resources`}
+                              </button>
+                              {currentDiscardTotal !== discardCount && (
+                                <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: '#d32f2f' }}>
+                                  Please select exactly {discardCount} resources to discard.
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })()}
+                    </div>
+                  )}
                 </div>
+              )
+            })()}
+            </div>
+
+            <div className="game-sidebar-column">
+            {/* Card Counts Display */}
+            {gameState && (gameState.resource_card_counts || gameState.dev_card_counts) && (
+              <div className="card-counts-panel" style={{ marginBottom: '0.75rem', padding: '0.75rem', backgroundColor: '#f5f5f5', borderRadius: '8px', fontSize: '0.85rem' }}>
+                <h2 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '1rem' }}>Available Cards</h2>
+                
+                {gameState.resource_card_counts && (
+                  <div style={{ marginBottom: '0.75rem' }}>
+                    <h3 style={{ marginTop: 0, marginBottom: '0.4rem', fontSize: '0.9rem' }}>Resource Cards</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(80px, 1fr))', gap: '0.4rem' }}>
+                      {Object.entries(gameState.resource_card_counts).map(([resource, count]) => (
+                        <div 
+                          key={resource}
+                          style={{
+                            padding: '0.4rem',
+                            backgroundColor: '#fff',
+                            borderRadius: '4px',
+                            border: '1px solid #ddd',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            fontSize: '0.8rem'
+                          }}
+                        >
+                          <span style={{ textTransform: 'capitalize', fontWeight: '500' }}>{RESOURCE_ICONS[resource] || ''} {resource}:</span>
+                          <span style={{ 
+                            fontWeight: 'bold',
+                            color: count === 0 ? '#d32f2f' : count < 5 ? '#f57c00' : '#2e7d32'
+                          }}>
+                            {count}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {gameState.dev_card_counts && (
+                  <div>
+                    <h3 style={{ marginTop: 0, marginBottom: '0.4rem', fontSize: '0.9rem' }}>Development Cards</h3>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: '0.4rem' }}>
+                      {Object.entries(gameState.dev_card_counts).map(([cardType, count]) => (
+                        <div 
+                          key={cardType}
+                          style={{
+                            padding: '0.4rem',
+                            backgroundColor: '#fff',
+                            borderRadius: '4px',
+                            border: '1px solid #ddd',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            fontSize: '0.8rem'
+                          }}
+                        >
+                          <span style={{ textTransform: 'capitalize', fontWeight: '500' }}>
+                            {cardType.replace('_', ' ')}:
+                          </span>
+                          <span style={{ 
+                            fontWeight: 'bold',
+                            color: count === 0 ? '#d32f2f' : '#2e7d32'
+                          }}>
+                            {count}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: '#666' }}>
+                      Total: {Object.values(gameState.dev_card_counts).reduce((a, b) => a + b, 0)} / 25
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -2404,7 +2829,7 @@ function App() {
                   <div className="trading-content">
                     {/* Quick Trade Actions (from legal actions) */}
                     <div className="quick-trades">
-                      <h3>Quick Trades</h3>
+                      <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '0.9rem' }}>Quick Trades</h3>
                       {legalActions
                         .filter(a => a.type === 'trade_bank' || a.type === 'trade_player')
                         .map((action, idx) => (
@@ -2424,32 +2849,25 @@ function App() {
                     </div>
                     
                     {/* Custom Trade Builder */}
-                    <div className="custom-trade" style={{ marginTop: '1rem', padding: '1rem', border: '1px solid #ccc', borderRadius: '4px', backgroundColor: '#fff' }}>
-                      <h3>Custom Trade</h3>
+                    <div className="custom-trade" style={{ marginTop: '0.75rem', padding: '0.75rem', border: '1px solid #ccc', borderRadius: '4px', backgroundColor: '#fff' }}>
+                      <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '0.9rem' }}>Custom Trade</h3>
                       
                       {/* Resource Types */}
                       {(() => {
                         const resourceTypes = ['wood', 'brick', 'wheat', 'sheep', 'ore']
-                        const resourceIcons: Record<string, string> = {
-                          'wood': '🌲',
-                          'brick': '🧱',
-                          'wheat': '🌾',
-                          'sheep': '🐑',
-                          'ore': '⛏️'
-                        }
                         
                         return (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                             {/* Give Resources */}
                             <div>
-                              <h4 style={{ marginBottom: '0.5rem' }}>Resources to Give</h4>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                              <h4 style={{ marginBottom: '0.4rem', fontSize: '0.85rem' }}>Resources to Give</h4>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                                 {resourceTypes.map(resource => {
                                   const currentAmount = giveResources[resource] || 0
                                   const available = currentPlayer?.resources[resource] || 0
                                   return (
-                                    <div key={resource} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                      <span style={{ width: '80px' }}>{resourceIcons[resource]} {resource}:</span>
+                                    <div key={resource} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'nowrap' }}>
+                                      <span style={{ width: '75px', flexShrink: 0 }}>{RESOURCE_ICONS[resource]} {resource}:</span>
                                       <button
                                         onClick={() => {
                                           if (currentAmount > 0) {
@@ -2457,7 +2875,7 @@ function App() {
                                           }
                                         }}
                                         disabled={currentAmount === 0}
-                                        style={{ width: '30px', height: '30px' }}
+                                        style={{ width: '28px', height: '28px', flexShrink: 0, fontSize: '0.8rem' }}
                                       >
                                         -
                                       </button>
@@ -2470,7 +2888,7 @@ function App() {
                                           const val = Math.max(0, Math.min(available, parseInt(e.target.value) || 0))
                                           setGiveResources({ ...giveResources, [resource]: val })
                                         }}
-                                        style={{ width: '60px', textAlign: 'center' }}
+                                        style={{ width: '50px', textAlign: 'center', flexShrink: 0, fontSize: '0.8rem' }}
                                       />
                                       <button
                                         onClick={() => {
@@ -2479,12 +2897,12 @@ function App() {
                                           }
                                         }}
                                         disabled={currentAmount >= available}
-                                        style={{ width: '30px', height: '30px' }}
+                                        style={{ width: '28px', height: '28px', flexShrink: 0, fontSize: '0.8rem' }}
                                       >
                                         +
                                       </button>
-                                      <span style={{ color: '#666', fontSize: '0.85rem' }}>
-                                        (You have {available})
+                                      <span style={{ color: '#666', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>
+                                        (have {available})
                                       </span>
                       </div>
                                   )
@@ -2494,13 +2912,13 @@ function App() {
                             
                             {/* Receive Resources */}
                             <div>
-                              <h4 style={{ marginBottom: '0.5rem' }}>Resources to Receive</h4>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                              <h4 style={{ marginBottom: '0.4rem', fontSize: '0.85rem' }}>Resources to Receive</h4>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                                 {resourceTypes.map(resource => {
                                   const currentAmount = receiveResources[resource] || 0
                                   return (
                                     <div key={resource} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                      <span style={{ width: '80px' }}>{resourceIcons[resource]} {resource}:</span>
+                                      <span style={{ width: '80px' }}>{RESOURCE_ICONS[resource]} {resource}:</span>
                                       <button
                                         onClick={() => {
                                           if (currentAmount > 0) {
@@ -2539,8 +2957,8 @@ function App() {
                             {/* Player Selection */}
                             {gameState && (
                               <div>
-                                <h4 style={{ marginBottom: '0.5rem' }}>Trade With Players</h4>
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                <h4 style={{ marginBottom: '0.4rem', fontSize: '0.85rem' }}>Trade With Players</h4>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                                   {gameState.players
                                     .filter(p => p.id !== playerId)
                                     .map(player => {
@@ -2697,408 +3115,6 @@ function App() {
                 )}
               </div>
             )}
-
-            {/* Discard Resources Panel (when 7 is rolled) */}
-            {gameState && gameState.dice_roll === 7 && currentPlayer && (() => {
-              // Check if robber has been moved (discard phase is over)
-              const robberHasBeenMoved = gameState.robber_initial_tile_id !== undefined && 
-                                          gameState.robber_initial_tile_id !== null &&
-                                          gameState.robber_tile_id !== gameState.robber_initial_tile_id
-              
-              if (gameState.waiting_for_robber_move || gameState.waiting_for_robber_steal || robberHasBeenMoved) {
-                return null  // Discard phase is over
-              }
-              
-              const totalResources = Object.values(currentPlayer.resources).reduce((a, b) => a + b, 0)
-              const hasAlreadyDiscarded = gameState.players_discarded?.includes(playerId) || false
-              const needsDiscard = totalResources >= 8 && !hasAlreadyDiscarded
-              const discardCount = needsDiscard ? Math.floor(totalResources / 2) : 0
-              const currentDiscardTotal = Object.values(discardResources).reduce((a, b) => a + b, 0)
-              
-              // Check if any other players still need to discard (and haven't discarded yet)
-              const otherPlayersNeedDiscard = gameState.players.some(p => {
-                const pResources = Object.values(p.resources).reduce((a, b) => a + b, 0)
-                const pDiscarded = gameState.players_discarded?.includes(p.id) || false
-                return p.id !== playerId && pResources >= 8 && !pDiscarded
-              })
-              
-              if (!needsDiscard) {
-                // Show status message if other players need to discard
-                if (otherPlayersNeedDiscard) {
-                  return (
-                    <div className="trading-panel" style={{ backgroundColor: '#e3f2fd', borderColor: '#2196F3' }}>
-                      <h2>⏳ Waiting for Other Players to Discard</h2>
-                      <p style={{ margin: 0, color: '#666' }}>
-                        A 7 was rolled. Other players with 8+ resources must discard half their resources before the robber can be moved.
-                      </p>
-                    </div>
-                  )
-                }
-                return null
-              }
-              
-              return (
-                <div className="trading-panel" style={{ backgroundColor: '#fff3cd', borderColor: '#ffc107' }}>
-                  <h2>
-                    ⚠️ Discard Resources (7 Rolled)
-                    <button
-                      onClick={() => setShowDiscardPanel(!showDiscardPanel)}
-                      className="toggle-button"
-                      style={{ marginLeft: '0.5rem', fontSize: '0.8rem' }}
-                    >
-                      {showDiscardPanel ? '▼' : '▶'}
-                    </button>
-                  </h2>
-                  {true && (  // Always show when needed - panel should be open
-                    <div className="trading-content">
-                      <div style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#fff', borderRadius: '4px' }}>
-                        <p style={{ margin: 0 }}>
-                          <strong>You have {totalResources} resources.</strong> You must discard <strong>{discardCount} resources</strong> (half, rounded down).
-                        </p>
-                        <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem', color: '#666' }}>
-                          Currently selected: <strong>{currentDiscardTotal} / {discardCount}</strong>
-                        </p>
-                      </div>
-                      
-                      {(() => {
-                        const resourceTypes = ['wood', 'brick', 'wheat', 'sheep', 'ore']
-                        const resourceIcons: Record<string, string> = {
-                          'wood': '🌲',
-                          'brick': '🧱',
-                          'wheat': '🌾',
-                          'sheep': '🐑',
-                          'ore': '⛏️'
-                        }
-                        
-                        return (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                            <div>
-                              <h4 style={{ marginBottom: '0.5rem' }}>Resources to Discard</h4>
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                                {resourceTypes.map(resource => {
-                                  const currentAmount = discardResources[resource] || 0
-                                  const available = currentPlayer.resources[resource] || 0
-                                  return (
-                                    <div key={resource} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                      <span style={{ width: '80px' }}>{resourceIcons[resource]} {resource}:</span>
-                                      <button
-                                        onClick={() => {
-                                          if (currentAmount > 0) {
-                                            setDiscardResources({ ...discardResources, [resource]: currentAmount - 1 })
-                                          }
-                                        }}
-                                        disabled={currentAmount === 0}
-                                        style={{ width: '30px', height: '30px' }}
-                                      >
-                                        -
-                                      </button>
-                                      <input
-                                        type="number"
-                                        min="0"
-                                        max={available}
-                                        value={currentAmount}
-                                        onChange={(e) => {
-                                          const val = Math.max(0, Math.min(available, parseInt(e.target.value) || 0))
-                                          setDiscardResources({ ...discardResources, [resource]: val })
-                                        }}
-                                        style={{ width: '60px', textAlign: 'center' }}
-                                      />
-                                      <button
-                                        onClick={() => {
-                                          if (currentAmount < available && currentDiscardTotal < discardCount) {
-                                            setDiscardResources({ ...discardResources, [resource]: currentAmount + 1 })
-                                          }
-                                        }}
-                                        disabled={currentAmount >= available || currentDiscardTotal >= discardCount}
-                                        style={{ width: '30px', height: '30px' }}
-                                      >
-                                        +
-                                      </button>
-                                      <span style={{ color: '#666', fontSize: '0.85rem' }}>
-                                        (You have {available})
-                                      </span>
-                                    </div>
-                                  )
-                                })}
-                              </div>
-                            </div>
-                            
-                            <div style={{ marginTop: '1rem' }}>
-                              <button
-                                onClick={async () => {
-                                  if (currentDiscardTotal !== discardCount) {
-                                    setError(`You must discard exactly ${discardCount} resources (currently ${currentDiscardTotal})`)
-                                    return
-                                  }
-                                  
-                                  // Validate player has enough of each resource
-                                  for (const [resource, amount] of Object.entries(discardResources)) {
-                                    if (amount > 0 && (currentPlayer.resources[resource] || 0) < amount) {
-                                      setError(`You don't have enough ${resource} to discard`)
-                                      return
-                                    }
-                                  }
-                                  
-                                  setLoading(true)
-                                  setError(null)
-                                  
-                                  try {
-                                    // Filter out zero amounts
-                                    const filteredDiscardResources: Record<string, number> = {}
-                                    for (const [resource, amount] of Object.entries(discardResources)) {
-                                      if (amount > 0) {
-                                        filteredDiscardResources[resource] = amount
-                                      }
-                                    }
-                                    
-                                    // Ensure we have resources to discard
-                                    if (Object.keys(filteredDiscardResources).length === 0) {
-                                      setError('No resources selected to discard')
-                                      setLoading(false)
-                                      return
-                                    }
-                                    
-                                    const discardAction: LegalAction = {
-                                      type: 'discard_resources',
-                                      payload: {
-                                        type: 'DiscardResourcesPayload',
-                                        resources: filteredDiscardResources
-                                      }
-                                    }
-                                    
-                                    console.log('Executing discard action:', discardAction)
-                                    const newState = await postAction(gameState.game_id, playerId, discardAction)
-                                    setGameState(newState)
-                                    
-                                    // Clear the discard form
-                                    setDiscardResources({})
-                                    setShowDiscardPanel(false)
-                                    
-                                    // Dev mode: Auto-switch to next player who needs to discard, or back to player who rolled 7
-                                    if (devMode && isAutoDiscarding) {
-                                      // Find all players who still need to discard (and haven't discarded yet)
-                                      const playersStillNeedingDiscard = newState.players.filter(p => {
-                                        const totalResources = Object.values(p.resources).reduce((a, b) => a + b, 0)
-                                        const hasDiscarded = newState.players_discarded?.includes(p.id) || false
-                                        return totalResources >= 8 && !hasDiscarded
-                                      })
-                                      
-                                      if (playersStillNeedingDiscard.length > 0) {
-                                        // Switch to next player who needs to discard
-                                        const currentIndex = playersStillNeedingDiscard.findIndex(p => p.id === playerId)
-                                        const nextIndex = (currentIndex + 1) % playersStillNeedingDiscard.length
-                                        setPlayerId(playersStillNeedingDiscard[nextIndex].id)
-                                      } else {
-                                        // All discards done, switch back to player who rolled 7
-                                        if (playerWhoRolled7) {
-                                          setPlayerId(playerWhoRolled7)
-                                          setIsAutoDiscarding(false)
-                                        }
-                                      }
-                                    }
-                                  } catch (err) {
-                                    setError(err instanceof Error ? err.message : 'Failed to discard resources')
-                                  } finally {
-                                    setLoading(false)
-                                  }
-                                }}
-                                disabled={loading || currentDiscardTotal !== discardCount}
-                                className="action-button"
-                                style={{
-                                  width: '100%',
-                                  padding: '0.75rem',
-                                  fontSize: '1rem',
-                                  fontWeight: 'bold',
-                                  backgroundColor: currentDiscardTotal === discardCount ? '#4CAF50' : '#ccc',
-                                  color: 'white'
-                                }}
-                              >
-                                {loading ? 'Discarding...' : `Discard ${discardCount} Resources`}
-                              </button>
-                              {currentDiscardTotal !== discardCount && (
-                                <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: '#d32f2f' }}>
-                                  Please select exactly {discardCount} resources to discard.
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )
-                      })()}
-                    </div>
-                  )}
-                </div>
-              )
-            })()}
-
-            <div className="legal-actions">
-              <h2>Legal Actions</h2>
-              {loading ? (
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading actions...</div>
-              ) : legalActions.length === 0 ? (
-                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>No legal actions available</div>
-              ) : (
-                <>
-                  {/* Show trade offer details if accept/reject trade actions are present */}
-                  {gameState?.pending_trade_offer && legalActions.some(a => a.type === 'accept_trade' || a.type === 'reject_trade') && (() => {
-                    const offer = gameState.pending_trade_offer
-                    const proposer = gameState.players.find(p => p.id === offer.proposer_id)
-                    const proposerName = proposer?.name || offer.proposer_id
-                    const giveResources = Object.entries(offer.give_resources || {})
-                      .filter(([_, count]) => (count as number) > 0)
-                      .map(([resource, count]) => `${count} ${resource}`)
-                      .join(', ')
-                    const receiveResources = Object.entries(offer.receive_resources || {})
-                      .filter(([_, count]) => (count as number) > 0)
-                      .map(([resource, count]) => `${count} ${resource}`)
-                      .join(', ')
-                    
-                    return (
-                      <div style={{
-                        padding: '0.75rem',
-                        backgroundColor: '#e3f2fd',
-                        border: '1px solid #2196F3',
-                        borderRadius: '4px',
-                        marginBottom: '1rem',
-                        fontSize: '0.9rem'
-                      }}>
-                        <strong style={{ display: 'block', marginBottom: '0.5rem', color: '#1976D2' }}>
-                          💼 Trade Offer from {proposerName}
-                        </strong>
-                        <div style={{ marginBottom: '0.25rem' }}>
-                          <strong>You give:</strong> {receiveResources || 'Nothing'}
-                        </div>
-                        <div>
-                          <strong>You receive:</strong> {giveResources || 'Nothing'}
-                        </div>
-                      </div>
-                    )
-                  })()}
-                  <div className="actions-list">
-                    {legalActions
-                      .filter(a => 
-                        a.type !== 'trade_bank' && 
-                        a.type !== 'trade_player' &&
-                        a.type !== 'discard_resources'  // Hide discard from main list, show in discard panel
-                      )
-                      .map((action, idx) => (
-                        <button
-                          key={idx}
-                          onClick={() => {
-                            console.log('Action button clicked:', action)
-                            handleExecuteAction(action)
-                          }}
-                          disabled={loading || (activePlayer?.id !== playerId && action.type !== 'discard_resources')}
-                          className="action-button"
-                        >
-                          {formatActionName(action)}
-                        </button>
-                      ))}
-                  </div>
-                </>
-              )}
-            </div>
-
-            {/* Card Counts Display */}
-            {gameState && (gameState.resource_card_counts || gameState.dev_card_counts) && (
-              <div className="card-counts-panel" style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#f5f5f5', borderRadius: '8px' }}>
-                <h2>Available Cards</h2>
-                
-                {gameState.resource_card_counts && (
-                  <div style={{ marginBottom: '1rem' }}>
-                    <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '1rem' }}>Resource Cards</h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(100px, 1fr))', gap: '0.5rem' }}>
-                      {Object.entries(gameState.resource_card_counts).map(([resource, count]) => (
-                        <div 
-                          key={resource}
-                          style={{
-                            padding: '0.5rem',
-                            backgroundColor: '#fff',
-                            borderRadius: '4px',
-                            border: '1px solid #ddd',
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center'
-                          }}
-                        >
-                          <span style={{ textTransform: 'capitalize', fontWeight: '500' }}>{resource}:</span>
-                          <span style={{ 
-                            fontWeight: 'bold',
-                            color: count === 0 ? '#d32f2f' : count < 5 ? '#f57c00' : '#2e7d32'
-                          }}>
-                            {count}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                
-                {gameState.dev_card_counts && (
-                  <div>
-                    <h3 style={{ marginTop: 0, marginBottom: '0.5rem', fontSize: '1rem' }}>Development Cards</h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '0.5rem' }}>
-                      {Object.entries(gameState.dev_card_counts).map(([cardType, count]) => (
-                        <div 
-                          key={cardType}
-                          style={{
-                            padding: '0.5rem',
-                            backgroundColor: '#fff',
-                            borderRadius: '4px',
-                            border: '1px solid #ddd',
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center'
-                          }}
-                        >
-                          <span style={{ textTransform: 'capitalize', fontWeight: '500' }}>
-                            {cardType.replace('_', ' ')}:
-                          </span>
-                          <span style={{ 
-                            fontWeight: 'bold',
-                            color: count === 0 ? '#d32f2f' : '#2e7d32'
-                          }}>
-                            {count}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                    <div style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: '#666' }}>
-                      Total: {Object.values(gameState.dev_card_counts).reduce((a, b) => a + b, 0)} / 25
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className="all-players">
-              <h2>All Players</h2>
-              {gameState?.players.map(player => (
-                <div 
-                  key={player.id} 
-                  className={`player-card ${player.id === playerId ? 'current' : ''} ${activePlayer?.id === player.id ? 'active-turn' : ''}`}
-                  style={{
-                    borderLeft: `4px solid ${player.color || '#ccc'}`,
-                    padding: '0.75rem',
-                    marginBottom: '0.5rem',
-                    backgroundColor: '#fff',
-                    borderRadius: '4px',
-                    border: '1px solid #ddd'
-                  }}
-                >
-                  <div>
-                    <strong>{player.name}</strong> ({player.id})
-                    {activePlayer?.id === player.id && <span className="turn-indicator"> [Current Turn]</span>}
-                  </div>
-                  <div style={{ marginTop: '0.5rem', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.5rem', fontSize: '0.9rem' }}>
-                    <div><strong>VP:</strong> {player.victory_points}</div>
-                    <div><strong>Resources:</strong> {Object.values(player.resources).reduce((a, b) => a + b, 0)}</div>
-                    <div><strong>Dev Cards:</strong> {player.dev_cards?.length || 0}</div>
-                    <div><strong>Knights Played:</strong> {player.knights_played || 0}</div>
-                  </div>
-                  {player.longest_road && <div style={{ marginTop: '0.25rem', fontSize: '0.85rem', color: '#1976d2' }}>🏆 Longest Road</div>}
-                  {player.largest_army && <div style={{ marginTop: '0.25rem', fontSize: '0.85rem', color: '#1976d2' }}>⚔️ Largest Army</div>}
-                </div>
-              ))}
             </div>
           </div>
         </div>

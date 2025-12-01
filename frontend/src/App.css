@@ -1,12 +1,12 @@
 .app {
-  max-width: 1400px;
+  max-width: 1600px;
   margin: 0 auto;
-  padding: 2rem;
+  padding: 0.5rem;
 }
 
 header {
   text-align: center;
-  margin-bottom: 2rem;
+  margin-bottom: 0.5rem;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -72,7 +72,7 @@ header h1 {
 main {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 0.75rem;
 }
 
 button {
@@ -179,16 +179,17 @@ button.secondary:hover:not(:disabled) {
 .game-main {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 0.5rem;
 }
 
 .game-info-bar {
   display: flex;
-  gap: 2rem;
-  padding: 1rem;
+  gap: 1rem;
+  padding: 0.5rem;
   background-color: #f5f5f5;
   border-radius: 4px;
   flex-wrap: wrap;
+  font-size: 0.9rem;
 }
 
 .game-info-bar > div {
@@ -198,43 +199,48 @@ button.secondary:hover:not(:disabled) {
 
 .game-layout {
   display: grid;
-  grid-template-columns: 1fr 350px;
-  gap: 2rem;
+  grid-template-columns: auto 750px;
+  gap: 0.75rem;
+  align-items: start;
 }
 
 .game-board-section {
   background-color: #fff;
   border: 1px solid #ddd;
   border-radius: 4px;
-  padding: 1.5rem;
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  width: 901px;
 }
 
 .game-board-section h2 {
   margin-top: 0;
+  margin-bottom: 0.5rem;
   color: #333;
+  font-size: 1.1rem;
 }
 
 .board-container {
   position: relative;
-  min-height: 900px;
   background-color: #e8f5e9;
   border-radius: 4px;
-  overflow: auto;
-  padding: 2rem;
+  overflow: hidden;
+  padding: 0;
+  width: 900px;
 }
 
 .hex-board {
   position: relative;
-  width: 100%;
-  height: 100%;
-  min-height: 900px;
-  min-width: 1200px;
+  width: 900px;
+  height: 780px;
+  margin: 0;
 }
 
 .hex-tile {
   position: absolute;
-  width: 120px;
-  height: 138px;
+  width: 110px;
+  height: 127px;
   transform: translate(-50%, -50%);
   cursor: default;
   z-index: 1; /* Tiles behind intersections and roads */
@@ -270,9 +276,9 @@ button.secondary:hover:not(:disabled) {
   align-items: center;
   justify-content: center;
   border: 2px solid #333;
-  font-size: 1rem;
+  font-size: 0.85rem;
   text-align: center;
-  padding: 0.75rem;
+  padding: 0.5rem;
   box-sizing: border-box;
   position: relative;
 }
@@ -315,15 +321,15 @@ button.secondary:hover:not(:disabled) {
 .number-token {
   background-color: white;
   border-radius: 50%;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: bold;
   margin-top: 0.25rem;
   color: #333;
-  font-size: 1rem;
+  font-size: 0.85rem;
 }
 
 .robber-icon {
@@ -347,8 +353,8 @@ button.secondary:hover:not(:disabled) {
 
 .intersection {
   position: absolute;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   background-color: #fff;
   border: 2px solid #333;
@@ -357,15 +363,16 @@ button.secondary:hover:not(:disabled) {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 9px;
+  overflow: visible;
 }
 
 .intersection.clickable {
   cursor: pointer;
   border-color: #4CAF50;
   border-width: 3px;
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   box-shadow: 0 0 8px rgba(76, 175, 80, 0.6);
 }
 
@@ -386,13 +393,13 @@ button.secondary:hover:not(:disabled) {
 .port-edge-indicator {
   position: absolute;
   transform: translate(-50%, -50%);
-  font-size: 1.2rem;
+  font-size: 1rem;
   z-index: 18; /* Between roads and intersections */
   filter: drop-shadow(2px 2px 4px rgba(0, 0, 0, 0.8));
   background-color: rgba(255, 255, 255, 0.95);
   border-radius: 50%;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -407,17 +414,20 @@ button.secondary:hover:not(:disabled) {
 }
 
 .trading-panel {
-  margin-bottom: 1.5rem;
-  padding: 1rem;
+  margin-bottom: 0.75rem;
+  padding: 0.75rem;
   background-color: #f9f9f9;
   border-radius: 8px;
   border: 1px solid #ddd;
+  font-size: 0.9rem;
 }
 
 .trading-panel h2 {
   margin-top: 0;
+  margin-bottom: 0.5rem;
   display: flex;
   align-items: center;
+  font-size: 1rem;
 }
 
 .toggle-button {
@@ -426,21 +436,24 @@ button.secondary:hover:not(:disabled) {
   cursor: pointer;
   padding: 0.25rem 0.5rem;
   color: #666;
+  font-size: 0.8rem;
 }
 
 .trading-content {
-  margin-top: 1rem;
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
 }
 
 .quick-trades {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
 }
 
 .road {
   position: absolute;
-  height: 8px;
+  height: 6px;
   background-color: #ccc;
   z-index: 15; /* Roads above tiles but below intersections */
   transform-origin: 0 50%;
@@ -450,13 +463,13 @@ button.secondary:hover:not(:disabled) {
 .road.clickable {
   cursor: pointer;
   background-color: #4CAF50;
-  height: 10px;
+  height: 8px;
   box-shadow: 0 0 4px rgba(76, 175, 80, 0.8);
 }
 
 .road.clickable:hover {
   background-color: #66BB6A;
-  height: 12px;
+  height: 10px;
 }
 
 .road.owned {
@@ -475,9 +488,19 @@ button.secondary:hover:not(:disabled) {
 
 /* Sidebar */
 .game-sidebar {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  max-height: calc(100vh - 200px);
+  overflow-y: auto;
+  align-items: start;
+}
+
+.game-sidebar-column {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
+  gap: 0.75rem;
+  min-width: 0;
 }
 
 .player-info,
@@ -487,13 +510,13 @@ button.secondary:hover:not(:disabled) {
   background-color: #fff;
   border: 1px solid #ddd;
   border-radius: 4px;
-  padding: 1.5rem;
+  padding: 0.75rem;
 }
 
 .legal-actions {
   display: flex;
   flex-direction: column;
-  height: 400px;
+  max-height: 300px;
 }
 
 .legal-actions h2 {
@@ -509,8 +532,9 @@ button.secondary:hover:not(:disabled) {
 
 .dev-mode-controls h2 {
   margin-top: 0;
+  margin-bottom: 0.5rem;
   color: #856404;
-  font-size: 1.2rem;
+  font-size: 1rem;
 }
 
 .dev-mode-warning {
@@ -527,14 +551,16 @@ button.secondary:hover:not(:disabled) {
 .legal-actions h2,
 .all-players h2 {
   margin-top: 0;
+  margin-bottom: 0.5rem;
   color: #333;
-  font-size: 1.2rem;
+  font-size: 1rem;
 }
 
 .info-section {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.5rem;
+  font-size: 0.9rem;
 }
 
 .resources-list ul {
@@ -552,20 +578,21 @@ button.secondary:hover:not(:disabled) {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  height: 300px;
+  max-height: 250px;
   overflow-y: auto;
   padding-right: 0.5rem;
 }
 
 .reasoning-box {
-  margin-top: 1.5rem;
-  padding: 1rem;
+  margin-top: 0.75rem;
+  padding: 0.75rem;
   background-color: #fff3cd;
   border: 1px solid #ffc107;
   border-radius: 4px;
-  height: 200px;
+  max-height: 150px;
   display: flex;
   flex-direction: column;
+  font-size: 0.85rem;
 }
 
 .reasoning-box strong {
@@ -592,11 +619,12 @@ button.secondary:hover:not(:disabled) {
 }
 
 .player-card {
-  padding: 0.75rem;
-  margin-bottom: 0.5rem;
+  padding: 0.4rem;
+  margin-bottom: 0.4rem;
   background-color: #f5f5f5;
   border-radius: 4px;
   border: 1px solid #ddd;
+  font-size: 0.85rem;
 }
 
 .player-card.current {
@@ -613,7 +641,8 @@ button.secondary:hover:not(:disabled) {
 .turn-indicator {
   color: #f57c00;
   font-weight: bold;
-  font-size: 0.9em;
+  font-size: 0.85em;
+  margin-left: 0.25rem;
 }
 
 .error {
