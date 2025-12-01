@@ -335,6 +335,9 @@ class GameState:
         if not using_road_building:
             current_player.resources[ResourceType.WOOD] -= 1
             current_player.resources[ResourceType.BRICK] -= 1
+            # Return resources to bank
+            new_state.resource_card_counts[ResourceType.WOOD] += 1
+            new_state.resource_card_counts[ResourceType.BRICK] += 1
         else:
             # Decrement free roads remaining
             new_state.roads_from_road_building[current_player.id] = free_roads_remaining - 1
@@ -391,6 +394,8 @@ class GameState:
         # Deduct resources
         for resource, amount in required.items():
             current_player.resources[resource] -= amount
+            # Return resources to bank
+            new_state.resource_card_counts[resource] += amount
         
         # Build settlement
         intersection_index = next(i for i, inter in enumerate(new_state.intersections) if inter.id == payload.intersection_id)
@@ -432,6 +437,9 @@ class GameState:
         # Deduct resources
         current_player.resources[ResourceType.WHEAT] -= 2
         current_player.resources[ResourceType.ORE] -= 3
+        # Return resources to bank
+        new_state.resource_card_counts[ResourceType.WHEAT] += 2
+        new_state.resource_card_counts[ResourceType.ORE] += 3
         
         # Upgrade to city
         intersection_index = next(i for i, inter in enumerate(new_state.intersections) if inter.id == payload.intersection_id)
@@ -483,6 +491,10 @@ class GameState:
         current_player.resources[ResourceType.WHEAT] -= 1
         current_player.resources[ResourceType.SHEEP] -= 1
         current_player.resources[ResourceType.ORE] -= 1
+        # Return resources to bank (resources are reusable)
+        new_state.resource_card_counts[ResourceType.WHEAT] += 1
+        new_state.resource_card_counts[ResourceType.SHEEP] += 1
+        new_state.resource_card_counts[ResourceType.ORE] += 1
         
         # Add the card to player's hand
         current_player.dev_cards.append(card_type)
@@ -788,6 +800,8 @@ class GameState:
         # Discard the resources
         for resource, amount in payload.resources.items():
             current_player.resources[resource] -= amount
+            # Return discarded resources to bank
+            new_state.resource_card_counts[resource] += amount
         
         # Mark this player as having discarded
         new_state.players_discarded.add(current_player.id)

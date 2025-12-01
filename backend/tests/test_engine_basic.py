@@ -17,6 +17,7 @@ from engine import (
     BuildRoadPayload,
     PlayDevCardPayload,
     TradeBankPayload,
+    DiscardResourcesPayload,
 )
 
 
@@ -638,4 +639,112 @@ def test_bank_trade_returns_resources_to_pool():
     assert new_state.resource_card_counts[ResourceType.WOOD] == initial_wood_count + 4
     # Ore cards should have decreased
     assert new_state.resource_card_counts[ResourceType.ORE] == 19 - 1
+
+
+def test_resources_return_to_bank_when_spent():
+    """Test that resources are returned to the bank when spent on buildings."""
+    players = [
+        Player(
+            id="player_0",
+            name="Alice",
+            resources={
+                ResourceType.WOOD: 1,
+                ResourceType.BRICK: 1,
+                ResourceType.WHEAT: 1,
+                ResourceType.SHEEP: 1,
+            }
+        ),
+    ]
+    
+    intersection = Intersection(
+        id=0,
+        position=(0.0, 0.0),
+        adjacent_tiles=set(),
+        adjacent_intersections=set(),
+        owner=None,
+        building_type=None
+    )
+    
+    state = GameState(
+        game_id="test_game",
+        players=players,
+        current_player_index=0,
+        phase="playing",
+        tiles=[],
+        intersections=[intersection],
+        road_edges=[],
+        resource_card_counts={
+            ResourceType.WOOD: 18,  # Start with 18 (1 was given to player)
+            ResourceType.BRICK: 18,
+            ResourceType.WHEAT: 18,
+            ResourceType.SHEEP: 18,
+            ResourceType.ORE: 19,
+        }
+    )
+    
+    initial_wood = state.resource_card_counts[ResourceType.WOOD]
+    initial_brick = state.resource_card_counts[ResourceType.BRICK]
+    initial_wheat = state.resource_card_counts[ResourceType.WHEAT]
+    initial_sheep = state.resource_card_counts[ResourceType.SHEEP]
+    
+    # Build settlement (costs 1 wood, 1 brick, 1 wheat, 1 sheep)
+    payload = BuildSettlementPayload(intersection_id=0)
+    new_state = state.step(Action.BUILD_SETTLEMENT, payload)
+    
+    # Resources should be returned to bank
+    assert new_state.resource_card_counts[ResourceType.WOOD] == initial_wood + 1
+    assert new_state.resource_card_counts[ResourceType.BRICK] == initial_brick + 1
+    assert new_state.resource_card_counts[ResourceType.WHEAT] == initial_wheat + 1
+    assert new_state.resource_card_counts[ResourceType.SHEEP] == initial_sheep + 1
+
+
+def test_resources_return_to_bank_when_discarded():
+    """Test that resources are returned to the bank when discarded."""
+    players = [
+        Player(
+            id="player_0",
+            name="Alice",
+            resources={
+                ResourceType.WOOD: 4,
+                ResourceType.BRICK: 2,
+                ResourceType.WHEAT: 1,
+                ResourceType.SHEEP: 1,
+                ResourceType.ORE: 0,
+            }
+        ),
+    ]
+    
+    state = GameState(
+        game_id="test_game",
+        players=players,
+        current_player_index=0,
+        phase="playing",
+        dice_roll=7,  # 7 was rolled
+        tiles=[],
+        intersections=[],
+        road_edges=[],
+        resource_card_counts={
+            ResourceType.WOOD: 15,
+            ResourceType.BRICK: 17,
+            ResourceType.WHEAT: 18,
+            ResourceType.SHEEP: 18,
+            ResourceType.ORE: 19,
+        }
+    )
+    
+    initial_wood = state.resource_card_counts[ResourceType.WOOD]
+    initial_brick = state.resource_card_counts[ResourceType.BRICK]
+    
+    # Discard 4 resources (half of 8, rounded down)
+    payload = DiscardResourcesPayload(
+        resources={
+            ResourceType.WOOD: 3,
+            ResourceType.BRICK: 1,
+        }
+    )
+    new_state = state.step(Action.DISCARD_RESOURCES, payload, "player_0")
+    
+    # Discarded resources should be returned to bank
+    assert new_state.resource_card_counts[ResourceType.WOOD] == initial_wood + 3
+    assert new_state.resource_card_counts[ResourceType.BRICK] == initial_brick + 1
 
