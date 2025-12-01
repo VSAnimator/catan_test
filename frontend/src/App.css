@@ -330,6 +330,16 @@ button.secondary:hover:not(:disabled) {
   margin-top: 0.25rem;
   color: #333;
   font-size: 0.85rem;
+  position: relative;
+}
+
+.number-token.red-number {
+  color: #d32f2f;
+  font-weight: 900;
+}
+
+.number-pips {
+  margin-top: 1px;
 }
 
 .robber-icon {

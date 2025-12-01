@@ -30,6 +30,17 @@ const RESOURCE_ICONS: Record<string, string> = {
   'ore': '⛏️'
 }
 
+// Get number of pips (probability dots) for a dice roll number
+const getPipCount = (number: number): number => {
+  // Dice probability: 2,12=1; 3,11=2; 4,10=3; 5,9=4; 6,8=5
+  if (number === 2 || number === 12) return 1
+  if (number === 3 || number === 11) return 2
+  if (number === 4 || number === 10) return 3
+  if (number === 5 || number === 9) return 4
+  if (number === 6 || number === 8) return 5
+  return 0
+}
+
 function App() {
   const [view, setView] = useState<View>('main')
   const [gameState, setGameState] = useState<GameState | null>(null)
@@ -667,7 +678,31 @@ function App() {
                 <>
                   <div className="resource-name">{RESOURCE_ICONS[tile.resource_type] || ''} {tile.resource_type}</div>
                   {tile.number_token && (
-                    <div className="number-token">{tile.number_token}</div>
+                    <div className={`number-token ${tile.number_token === 6 || tile.number_token === 8 ? 'red-number' : ''}`} style={{ position: 'relative' }}>
+                      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', marginTop: '-2px' }}>
+                        {tile.number_token}
+                      </div>
+                      <div className="number-pips" style={{ 
+                        position: 'absolute', 
+                        bottom: '5px', 
+                        left: '50%', 
+                        transform: 'translateX(-50%)',
+                        display: 'flex', 
+                        gap: '1.5px', 
+                        justifyContent: 'center',
+                        alignItems: 'center'
+                      }}>
+                        {Array.from({ length: getPipCount(tile.number_token) }, (_, i) => (
+                          <span key={i} style={{ 
+                            width: '2.5px', 
+                            height: '2.5px', 
+                            borderRadius: '50%', 
+                            backgroundColor: '#333',
+                            display: 'inline-block'
+                          }} />
+                        ))}
+                      </div>
+                    </div>
                   )}
                 </>
               ) : (
