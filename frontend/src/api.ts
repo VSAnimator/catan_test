@@ -1,4 +1,85 @@
-const API_BASE = 'http://localhost:8000/api'
+// Adaptive backend port detection
+// Priority: 1. Environment variable, 2. localStorage, 3. Auto-detect, 4. Default 8000
+
+let cachedBackendPort: number | null = null
+
+function getBackendPort(): number {
+  // Check environment variable first
+  const envPort = import.meta.env.VITE_API_PORT
+  if (envPort) {
+    const port = parseInt(envPort, 10)
+    cachedBackendPort = port
+    return port
+  }
+  
+  // Use cached port if available
+  if (cachedBackendPort !== null) {
+    return cachedBackendPort
+  }
+  
+  // Check localStorage for previously detected port
+  const storedPort = localStorage.getItem('catan_backend_port')
+  if (storedPort) {
+    const port = parseInt(storedPort, 10)
+    cachedBackendPort = port
+    return port
+  }
+  
+  // Default fallback
+  return 8000
+}
+
+async function detectBackendPort(): Promise<number> {
+  // Try common ports in order
+  const portsToTry = [8000, 8001, 8002, 8003, 8004, 8005]
+  
+  for (const port of portsToTry) {
+    try {
+      const response = await fetch(`http://localhost:${port}/health`, {
+        method: 'GET',
+        signal: AbortSignal.timeout(500) // 500ms timeout
+      })
+      // Check if we get a successful response from the health endpoint
+      if (response.ok) {
+        cachedBackendPort = port
+        localStorage.setItem('catan_backend_port', port.toString())
+        return port
+      }
+    } catch (e) {
+      // Port not available, try next
+      continue
+    }
+  }
+  
+  // Fallback to default
+  const defaultPort = 8000
+  cachedBackendPort = defaultPort
+  return defaultPort
+}
+
+// Getter function for API_BASE that always uses current port
+function getApiBase(): string {
+  return `http://localhost:${getBackendPort()}/api`
+}
+
+// Auto-detect backend port on module load (non-blocking)
+detectBackendPort().then(port => {
+  console.log(`Backend detected on port ${port}`)
+}).catch(() => {
+  console.log(`Using default backend port ${getBackendPort()}`)
+})
+
+// Export function to manually set backend port
+export function setBackendPort(port: number) {
+  cachedBackendPort = port
+  localStorage.setItem('catan_backend_port', port.toString())
+  console.log(`Backend port set to ${port}`)
+}
+
+// Export function to get current backend URL
+export function getBackendUrl(): string {
+  return getApiBase()
+}
 
 export interface Player {
   id: string
@@ -141,7 +222,7 @@ async function handleResponse<T>(response: Response): Promise<T> {
 }
 
 export async function createGame(request: CreateGameRequest): Promise<CreateGameResponse> {
-  const response = await fetch(`${API_BASE}/games`, {
+  const response = await fetch(`${getApiBase()}/games`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request)
@@ -150,12 +231,12 @@ export async function createGame(request: CreateGameRequest): Promise<CreateGame
 }
 
 export async function getGameState(gameId: string): Promise<GameState> {
-  const response = await fetch(`${API_BASE}/games/${gameId}`)
+  const response = await fetch(`${getApiBase()}/games/${gameId}`)
   return handleResponse<GameState>(response)
 }
 
 export async function getLegalActions(gameId: string, playerId: string): Promise<LegalAction[]> {
-  const response = await fetch(`${API_BASE}/games/${gameId}/legal_actions?player_id=${playerId}`)
+  const response = await fetch(`${getApiBase()}/games/${gameId}/legal_actions?player_id=${playerId}`)
   const data = await handleResponse<{ legal_actions: LegalAction[] }>(response)
   return data.legal_actions || []
 }
@@ -165,7 +246,7 @@ export async function postAction(gameId: string, playerId: string, action: Legal
     player_id: playerId,
     action: action
   }
-  const response = await fetch(`${API_BASE}/games/${gameId}/act`, {
+  const response = await fetch(`${getApiBase()}/games/${gameId}/act`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request)
@@ -175,12 +256,12 @@ export async function postAction(gameId: string, playerId: string, action: Legal
 }
 
 export async function getReplay(gameId: string): Promise<ReplayResponse> {
-  const response = await fetch(`${API_BASE}/games/${gameId}/replay`)
+  const response = await fetch(`${getApiBase()}/games/${gameId}/replay`)
   return handleResponse<ReplayResponse>(response)
 }
 
 export async function restoreGameState(gameId: string, state: GameState): Promise<void> {
-  const response = await fetch(`${API_BASE}/games/${gameId}/restore`, {
+  const response = await fetch(`${getApiBase()}/games/${gameId}/restore`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(state)
@@ -189,7 +270,7 @@ export async function restoreGameState(gameId: string, state: GameState): Promis
 }
 
 export async function forkGame(gameId: string, state: GameState): Promise<CreateGameResponse> {
-  const response = await fetch(`${API_BASE}/games/${gameId}/fork`, {
+  const response = await fetch(`${getApiBase()}/games/${gameId}/fork`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(state)
@@ -210,7 +291,7 @@ export interface RunAgentsResponse {
 }
 
 export async function runAgents(gameId: string, request: RunAgentsRequest = {}): Promise<RunAgentsResponse> {
-  const response = await fetch(`${API_BASE}/games/${gameId}/run_agents`, {
+  const response = await fetch(`${getApiBase()}/games/${gameId}/run_agents`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request)
@@ -232,7 +313,7 @@ export interface WatchAgentsResponse {
 }
 
 export async function watchAgentsStep(gameId: string, agentMapping?: Record<string, string>): Promise<WatchAgentsResponse> {
-  const response = await fetch(`${API_BASE}/games/${gameId}/watch_agents_step`, {
+  const response = await fetch(`${getApiBase()}/games/${gameId}/watch_agents_step`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ agent_mapping: agentMapping || {} })
@@ -276,7 +357,7 @@ export interface QueryEventsResponse {
 }
 
 export async function queryEvents(request: QueryEventsRequest): Promise<QueryEventsResponse> {
-  const response = await fetch(`${API_BASE}/games/query_events`, {
+  const response = await fetch(`${getApiBase()}/games/query_events`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request)
@@ -324,7 +405,7 @@ export interface AddFeedbackRequest {
 }
 
 export async function addGuideline(request: AddGuidelineRequest): Promise<{ guideline_id: number; message: string }> {
-  const response = await fetch(`${API_BASE}/guidelines`, {
+  const response = await fetch(`${getApiBase()}/guidelines`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request)
@@ -336,12 +417,12 @@ export async function getGuidelines(playerId?: string | null, context?: string |
   const params = new URLSearchParams()
   if (playerId) params.append('player_id', playerId)
   if (context) params.append('context', context)
-  const response = await fetch(`${API_BASE}/guidelines?${params.toString()}`)
+  const response = await fetch(`${getApiBase()}/guidelines?${params.toString()}`)
   return handleResponse<{ guidelines: Guideline[] }>(response)
 }
 
 export async function updateGuideline(guidelineId: number, request: Partial<AddGuidelineRequest & { active?: boolean }>): Promise<{ message: string }> {
-  const response = await fetch(`${API_BASE}/guidelines/${guidelineId}`, {
+  const response = await fetch(`${getApiBase()}/guidelines/${guidelineId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request)
@@ -350,14 +431,14 @@ export async function updateGuideline(guidelineId: number, request: Partial<AddG
 }
 
 export async function deleteGuideline(guidelineId: number): Promise<{ message: string }> {
-  const response = await fetch(`${API_BASE}/guidelines/${guidelineId}`, {
+  const response = await fetch(`${getApiBase()}/guidelines/${guidelineId}`, {
     method: 'DELETE'
   })
   return handleResponse<{ message: string }>(response)
 }
 
 export async function addFeedback(gameId: string, request: AddFeedbackRequest): Promise<{ feedback_id: number; message: string }> {
-  const response = await fetch(`${API_BASE}/games/${gameId}/feedback`, {
+  const response = await fetch(`${getApiBase()}/games/${gameId}/feedback`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request)
@@ -369,7 +450,7 @@ export async function getFeedback(gameId?: string, playerId?: string): Promise<{
   const params = new URLSearchParams()
   if (gameId) params.append('game_id', gameId)
   if (playerId) params.append('player_id', playerId)
-  const response = await fetch(`${API_BASE}/feedback?${params.toString()}`)
+  const response = await fetch(`${getApiBase()}/feedback?${params.toString()}`)
   return handleResponse<{ feedback: Feedback[] }>(response)
 }
 
