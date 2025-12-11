@@ -1,0 +1,37 @@
+# Cursor Rules for Game Development Template
+
+## Backend Server Restart
+- **ALWAYS source ~/.zshrc before restarting the backend server**
+- When restarting the backend, use: `source ~/.zshrc && cd backend && source .venv/bin/activate && uvicorn main:app --reload --host 0.0.0.0 --port 8000`
+- This ensures all shell environment variables and PATH settings are loaded correctly
+
+## Output Handling
+- **NEVER pipe command outputs** (e.g., `| tail`, `| head`, `| grep`, etc.) when running commands
+- Piping loses visibility and potentially loses information
+- Instead, use one of these alternatives:
+  - Write output to a log file and read the log file
+  - Run the command without piping and let full output display
+  - Use file redirection to a log file (e.g., `> logfile.txt 2>&1`) then read the file
+  - If output is too long, use pagination tools that preserve full output (like `less` or `more`)
+- When analyzing command output, read the full log file rather than piping
+
+## Project Structure
+- **Backend**: Pure Python game engine in `backend/engine/`, FastAPI REST API in `backend/api/`
+- **Frontend**: React + TypeScript with Vite in `frontend/`
+- **Agents**: Base agent interface in `backend/agents/base_agent.py`, implementations in `backend/agents/`
+- **Tests**: Unit tests in `backend/tests/`, bug regression tests in `backend/bug_tests/`
+- **Scripts**: Utility scripts in `backend/scripts/` for running agents, creating games, etc.
+
+## Development Workflow
+1. **Game Engine First**: Build pure Python game engine with no web dependencies
+2. **API Layer**: Wrap engine with FastAPI REST API
+3. **Frontend**: Build React frontend to interact with API
+4. **Agents**: Implement base agent interface, then create random and LLM agents
+5. **Testing**: Use bug regression testing system to capture and test bugs from gameplay
+6. **Agent Testing**: Run agents automatically and analyze game logs
+
+## Package Management
+- **Backend**: Always use `uv pip` (not `pip`) for package management
+- **Backend**: Always activate virtual environment: `source backend/.venv/bin/activate`
+- **Frontend**: Use `npm` for package management
+

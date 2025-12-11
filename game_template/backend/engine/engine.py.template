@@ -1,0 +1,101 @@
+"""
+Pure Python game engine.
+
+CUSTOMIZE THIS FILE: Replace with your game's core logic.
+
+This module should have NO web framework dependencies - it's pure Python game logic.
+"""
+
+from enum import Enum
+from dataclasses import dataclass, field
+from typing import List, Dict, Optional, Any, Tuple
+import random
+
+
+# CUSTOMIZE: Define your game's actions
+class Action(Enum):
+    """Game actions."""
+    # Example actions - replace with your game's actions
+    # PLAY_CARD = "play_card"
+    # DRAW_CARD = "draw_card"
+    # PASS = "pass"
+    pass
+
+
+# CUSTOMIZE: Define action payloads
+@dataclass
+class ActionPayload:
+    """Base class for action payloads."""
+    pass
+
+
+# CUSTOMIZE: Define your game's player class
+@dataclass
+class Player:
+    """Represents a player in the game."""
+    id: str
+    name: str
+    # Add game-specific player fields here
+    # Example: hand: List[Card], score: int, etc.
+    pass
+
+
+# CUSTOMIZE: Define your game state
+@dataclass
+class GameState:
+    """
+    Represents the complete game state.
+    
+    This should contain all information needed to:
+    - Determine legal actions
+    - Execute actions
+    - Check win conditions
+    - Serialize/deserialize
+    """
+    game_id: str
+    players: List[Player]
+    current_player_index: int
+    phase: str  # e.g., "setup", "playing", "finished"
+    turn_number: int
+    # Add game-specific state fields here
+    # Example: deck: List[Card], board: Board, etc.
+    
+    def step(
+        self, 
+        action: Action, 
+        payload: Optional[ActionPayload] = None,
+        player_id: Optional[str] = None
+    ) -> 'GameState':
+        """
+        Execute an action and return new game state.
+        
+        Args:
+            action: The action to execute
+            payload: Optional payload for the action
+            player_id: Optional player ID (for validation)
+        
+        Returns:
+            New GameState after action
+        
+        Raises:
+            ValueError: If action is illegal
+        """
+        # CUSTOMIZE: Implement game logic here
+        # 1. Validate action is legal
+        # 2. Update game state
+        # 3. Return new state (or modify self and return self)
+        pass
+    
+    def is_game_over(self) -> bool:
+        """Check if game is finished."""
+        # CUSTOMIZE: Implement win condition check
+        return self.phase == "finished"
+    
+    def get_winner(self) -> Optional[str]:
+        """Get winner player ID if game is over."""
+        # CUSTOMIZE: Implement winner determination
+        if not self.is_game_over():
+            return None
+        # Return player ID of winner
+        pass
+

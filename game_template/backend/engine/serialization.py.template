@@ -1,0 +1,142 @@
+"""
+Serialization utilities for game engine.
+
+CUSTOMIZE THIS FILE: Implement serialization for your game.
+"""
+
+from typing import Dict, Any, List, Tuple, Optional
+# from .engine import GameState, Player, Action, ActionPayload
+
+
+def serialize_game_state(state) -> Dict[str, Any]:
+    """
+    Convert GameState to JSON-serializable dict.
+    
+    CUSTOMIZE: Implement serialization for your game state.
+    """
+    # Example structure:
+    # return {
+    #     "game_id": state.game_id,
+    #     "players": [serialize_player(p) for p in state.players],
+    #     "current_player_index": state.current_player_index,
+    #     "phase": state.phase,
+    #     "turn_number": state.turn_number,
+    #     # ... game-specific fields
+    # }
+    pass
+
+
+def deserialize_game_state(data: Dict[str, Any]):
+    """
+    Convert dict to GameState.
+    
+    CUSTOMIZE: Implement deserialization for your game state.
+    """
+    # Example:
+    # players = [deserialize_player(p) for p in data["players"]]
+    # return GameState(
+    #     game_id=data["game_id"],
+    #     players=players,
+    #     current_player_index=data["current_player_index"],
+    #     phase=data["phase"],
+    #     turn_number=data["turn_number"],
+    #     # ... game-specific fields
+    # )
+    pass
+
+
+def state_to_text(state, player_id: Optional[str] = None) -> str:
+    """
+    Convert game state to human-readable text for LLM agents.
+    
+    CUSTOMIZE: Format your game state as text that an LLM can understand.
+    
+    Args:
+        state: Game state
+        player_id: Optional player ID to focus on their perspective
+    
+    Returns:
+        Human-readable text description
+    """
+    # Example:
+    # text = f"Game State:\n"
+    # text += f"Phase: {state.phase}\n"
+    # text += f"Turn: {state.turn_number}\n"
+    # text += f"Current Player: {state.players[state.current_player_index].name}\n"
+    # # ... add game-specific information
+    # return text
+    pass
+
+
+def legal_actions(state, player_id: str) -> List[Tuple[Any, Optional[Any]]]:
+    """
+    Get legal actions for a player.
+    
+    CUSTOMIZE: Return list of (Action, Optional[ActionPayload]) tuples.
+    
+    Args:
+        state: Game state
+        player_id: Player ID
+    
+    Returns:
+        List of (Action, Optional[ActionPayload]) tuples
+    """
+    # Example:
+    # actions = []
+    # if state.phase == "playing" and state.players[state.current_player_index].id == player_id:
+    #     # Add legal actions for this player
+    #     actions.append((Action.PLAY_CARD, None))
+    #     # ... add more actions
+    # return actions
+    pass
+
+
+def legal_actions_to_text(actions: List[Tuple[Any, Optional[Any]]]) -> str:
+    """
+    Convert legal actions to human-readable text for LLM.
+    
+    CUSTOMIZE: Format actions as text.
+    """
+    # Example:
+    # if not actions:
+    #     return "No legal actions available."
+    # text = "Legal actions:\n"
+    # for i, (action, payload) in enumerate(actions, 1):
+    #     text += f"{i}. {action.value}"
+    #     if payload:
+    #         text += f" (payload: {payload})"
+    #     text += "\n"
+    # return text
+    pass
+
+
+def serialize_action(action) -> str:
+    """Convert Action enum to string."""
+    return action.value
+
+
+def deserialize_action(action_str: str):
+    """Convert string to Action enum."""
+    # from .engine import Action
+    # return Action(action_str)
+    pass
+
+
+def serialize_action_payload(payload) -> Dict[str, Any]:
+    """Convert ActionPayload to dict."""
+    # CUSTOMIZE: Implement payload serialization
+    # if payload is None:
+    #     return None
+    # return payload.__dict__
+    pass
+
+
+def deserialize_action_payload(payload_dict: Optional[Dict[str, Any]], action):
+    """Convert dict to ActionPayload."""
+    # CUSTOMIZE: Implement payload deserialization based on action type
+    # if payload_dict is None:
+    #     return None
+    # # Create appropriate payload class based on action
+    # pass
+    pass
+

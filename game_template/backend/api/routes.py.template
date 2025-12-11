@@ -1,0 +1,108 @@
+"""API routes for the game.
+
+CUSTOMIZE THIS FILE: Implement your game's API endpoints.
+"""
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from typing import Optional, List, Dict, Any
+from datetime import datetime
+import uuid
+import random
+
+# CUSTOMIZE: Import your game's classes
+# from engine import (
+#     GameState,
+#     Player,
+#     Action,
+#     ActionPayload,
+#     serialize_game_state,
+#     deserialize_game_state,
+#     serialize_action,
+#     deserialize_action,
+#     serialize_action_payload,
+#     deserialize_action_payload,
+#     legal_actions,
+#     state_to_text,
+#     legal_actions_to_text,
+# )
+# from agents import RandomAgent
+# from agents.agent_runner import AgentRunner
+# from .database import (
+#     init_db,
+#     create_game as create_game_in_db,
+#     get_game as get_game_from_db,
+#     get_latest_state,
+#     save_game_state,
+#     add_step,
+#     get_steps,
+#     get_step_count,
+# )
+
+router = APIRouter()
+
+
+# CUSTOMIZE: Request/Response models
+class CreateGameRequest(BaseModel):
+    """Request to create a new game."""
+    player_names: List[str]
+    rng_seed: Optional[int] = None
+
+
+class CreateGameResponse(BaseModel):
+    """Response when creating a new game."""
+    game_id: str
+    initial_state: Dict[str, Any]
+
+
+class ActRequest(BaseModel):
+    """Request to perform an action."""
+    player_id: str
+    action: Dict[str, Any]  # Serialized Action JSON
+
+
+class ActResponse(BaseModel):
+    """Response after performing an action."""
+    new_state: Dict[str, Any]
+    events: List[Dict[str, Any]]
+    error: Optional[str] = None
+
+
+# CUSTOMIZE: API endpoints
+@router.post("/games", response_model=CreateGameResponse)
+async def create_game(request: CreateGameRequest):
+    """Create a new game."""
+    # CUSTOMIZE: Implement game creation
+    # 1. Generate game_id
+    # 2. Create players
+    # 3. Initialize game state
+    # 4. Save to database
+    # 5. Return game_id and initial state
+    pass
+
+
+@router.get("/games/{game_id}")
+async def get_game(game_id: str):
+    """Get current game state."""
+    # CUSTOMIZE: Load game state from database
+    # Return state JSON
+    pass
+
+
+@router.post("/games/{game_id}/act", response_model=ActResponse)
+async def act(game_id: str, request: ActRequest):
+    """Perform an action."""
+    # CUSTOMIZE: Implement action execution
+    # 1. Load current state from database
+    # 2. Deserialize action
+    # 3. Execute action (state.step())
+    # 4. Save new state to database
+    # 5. Return new state and events
+    pass
+
+
+@router.get("/games/{game_id}/legal-actions")
+async def get_legal_actions(game_id: str, player_id: str):
+    """Get legal actions for a player."""
+    # CUSTOMIZE: Load state and return legal actions
+    pass
+

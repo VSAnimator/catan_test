@@ -1,0 +1,214 @@
+"""
+Database module for SQLite storage of games and steps.
+
+CUSTOMIZE THIS FILE: Adjust database schema and functions for your game.
+"""
+import sqlite3
+import json
+import threading
+from typing import Optional, List, Dict, Any
+from datetime import datetime
+from pathlib import Path
+
+# CUSTOMIZE: Database file path
+DB_PATH = Path(__file__).parent.parent / "game.db"
+
+# Process-local storage for database connections
+_connection_cache = {}
+_connection_lock = threading.Lock()
+
+
+def get_db_connection():
+    """Get a database connection (process-local for better concurrency)."""
+    import os
+    import threading
+    
+    process_id = os.getpid()
+    thread_id = threading.get_ident()
+    cache_key = (process_id, thread_id)
+    
+    with _connection_lock:
+        if cache_key not in _connection_cache:
+            conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA cache_size=-64000")
+            _connection_cache[cache_key] = conn
+        return _connection_cache[cache_key]
+
+
+def init_db():
+    """Initialize the database with tables.
+    
+    CUSTOMIZE: Adjust table schema for your game's needs.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Games table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS games (
+            id TEXT PRIMARY KEY,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            rng_seed INTEGER,
+            metadata TEXT,
+            current_state_json TEXT
+        )
+    """)
+    
+    # Steps table (for game history)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS steps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id TEXT NOT NULL,
+            step_idx INTEGER NOT NULL,
+            player_id TEXT,
+            state_before_json TEXT NOT NULL,
+            state_after_json TEXT NOT NULL,
+            action_json TEXT NOT NULL,
+            dice_roll INTEGER,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            state_text TEXT,
+            legal_actions_text TEXT,
+            chosen_action_text TEXT,
+            reasoning TEXT,
+            raw_llm_response TEXT,
+            FOREIGN KEY (game_id) REFERENCES games(id)
+        )
+    """)
+    
+    # Create indexes
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_steps_game_id ON steps(game_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_steps_game_step ON steps(game_id, step_idx)")
+    
+    conn.commit()
+
+
+def create_game(
+    game_id: str,
+    rng_seed: Optional[int] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    initial_state_json: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Create a new game record."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    metadata_json = json.dumps(metadata) if metadata else None
+    state_json = json.dumps(initial_state_json) if initial_state_json else None
+    
+    cursor.execute("""
+        INSERT INTO games (id, rng_seed, metadata, current_state_json)
+        VALUES (?, ?, ?, ?)
+    """, (game_id, rng_seed, metadata_json, state_json))
+    
+    conn.commit()
+
+
+def get_game(game_id: str) -> Optional[sqlite3.Row]:
+    """Get a game record by ID."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM games WHERE id = ?", (game_id,))
+    return cursor.fetchone()
+
+
+def get_latest_state(game_id: str) -> Optional[str]:
+    """Get latest game state JSON."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT current_state_json FROM games WHERE id = ?", (game_id,))
+    row = cursor.fetchone()
+    return row["current_state_json"] if row else None
+
+
+def save_game_state(game_id: str, state_json: Dict[str, Any]) -> None:
+    """Save the current game state as the latest snapshot."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE games
+        SET current_state_json = ?
+        WHERE id = ?
+    """, (json.dumps(state_json), game_id))
+    conn.commit()
+
+
+def add_step(
+    game_id: str,
+    step_idx: int,
+    player_id: str,
+    state_before_json: Dict[str, Any],
+    state_after_json: Dict[str, Any],
+    action_json: Dict[str, Any],
+    dice_roll: Optional[int] = None,
+    state_text: Optional[str] = None,
+    legal_actions_text: Optional[str] = None,
+    chosen_action_text: Optional[str] = None,
+    reasoning: Optional[str] = None,
+    raw_llm_response: Optional[str] = None,
+) -> None:
+    """Add a step to the game history."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO steps (
+            game_id, step_idx, player_id,
+            state_before_json, state_after_json, action_json,
+            dice_roll, state_text, legal_actions_text,
+            chosen_action_text, reasoning, raw_llm_response
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        game_id, step_idx, player_id,
+        json.dumps(state_before_json), json.dumps(state_after_json), json.dumps(action_json),
+        dice_roll, state_text, legal_actions_text,
+        chosen_action_text, reasoning, raw_llm_response
+    ))
+    conn.commit()
+
+
+def get_steps(game_id: str) -> List[sqlite3.Row]:
+    """Get all steps for a game."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM steps
+        WHERE game_id = ?
+        ORDER BY step_idx ASC
+    """, (game_id,))
+    return cursor.fetchall()
+
+
+def get_state_at_step(game_id: str, step_idx: int, use_state_before: bool = False) -> Optional[str]:
+    """Get game state at a specific step.
+    
+    Args:
+        game_id: Game ID
+        step_idx: Step index (0-based)
+        use_state_before: If True, use state_before_json; otherwise use state_after_json
+    
+    Returns:
+        State JSON string or None
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT state_before_json, state_after_json
+        FROM steps
+        WHERE game_id = ? AND step_idx = ?
+    """, (game_id, step_idx))
+    row = cursor.fetchone()
+    if row:
+        return row["state_before_json"] if use_state_before else row["state_after_json"]
+    return None
+
+
+def get_step_count(game_id: str) -> int:
+    """Get the number of steps for a game."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) as count FROM steps WHERE game_id = ?", (game_id,))
+    row = cursor.fetchone()
+    return row["count"] if row else 0
+

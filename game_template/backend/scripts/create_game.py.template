@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""
+Create a new game and return the game ID.
+
+CUSTOMIZE THIS FILE: Adjust for your game's initialization.
+
+Usage:
+    python -m scripts.create_game [--num-players N] [--rng-seed SEED]
+"""
+import sys
+import json
+import random
+import uuid
+import argparse
+from pathlib import Path
+
+# Add parent directory to path to import modules
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# CUSTOMIZE: Import your game's classes
+# from api.database import init_db, create_game as create_game_in_db
+# from engine import GameState, Player
+# from engine.serialization import serialize_game_state
+
+
+def create_game_script(num_players: int = 4, rng_seed: int = None):
+    """Create a new game and return the game ID.
+    
+    CUSTOMIZE: Implement game creation for your game.
+    """
+    # Initialize database
+    # init_db()
+    
+    # Set RNG seed if provided
+    if rng_seed is not None:
+        random.seed(rng_seed)
+    
+    # Generate game ID
+    game_id = str(uuid.uuid4())
+    
+    # CUSTOMIZE: Create players
+    # players = [
+    #     Player(id=f"player_{i}", name=f"Player {i+1}")
+    #     for i in range(num_players)
+    # ]
+    
+    # CUSTOMIZE: Create initial game state
+    # initial_state = GameState(
+    #     game_id=game_id,
+    #     players=players,
+    #     current_player_index=0,
+    #     phase="setup"
+    # )
+    
+    # CUSTOMIZE: Initialize game-specific state (board, deck, etc.)
+    
+    # Serialize initial state
+    # serialized_state = serialize_game_state(initial_state)
+    
+    # CUSTOMIZE: Save game to database
+    # metadata = {
+    #     "player_names": [p.name for p in players],
+    #     "num_players": len(players),
+    # }
+    # create_game_in_db(
+    #     game_id=game_id,
+    #     rng_seed=rng_seed,
+    #     metadata=metadata,
+    #     initial_state_json=serialized_state
+    # )
+    
+    # CUSTOMIZE: Save initial state as step 0
+    # from api.database import add_step
+    # add_step(
+    #     game_id=game_id,
+    #     step_idx=0,
+    #     player_id=None,
+    #     state_before_json=serialized_state,
+    #     state_after_json=serialized_state,
+    #     action_json={"type": "game_created"}
+    # )
+    
+    # return game_id
+    pass
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Create a new game")
+    parser.add_argument("--num-players", type=int, default=4, help="Number of players")
+    parser.add_argument("--rng-seed", type=int, default=None, help="RNG seed for reproducibility")
+    args = parser.parse_args()
+    
+    game_id = create_game_script(num_players=args.num_players, rng_seed=args.rng_seed)
+    print(game_id)
+

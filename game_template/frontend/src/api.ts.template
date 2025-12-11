@@ -1,0 +1,92 @@
+/**
+ * API client for game backend.
+ * 
+ * CUSTOMIZE THIS FILE: Define your game's API types and functions.
+ */
+
+const API_BASE = 'http://localhost:8000/api'
+
+// CUSTOMIZE: Define your game's types
+export interface GameState {
+  game_id: string
+  phase: string
+  turn_number: number
+  players: Player[]
+  current_player_index: number
+  // Add game-specific fields
+}
+
+export interface Player {
+  id: string
+  name: string
+  // Add player-specific fields
+}
+
+export interface LegalAction {
+  type: string
+  payload?: any
+}
+
+export interface CreateGameRequest {
+  player_names: string[]
+  rng_seed?: number
+}
+
+export interface CreateGameResponse {
+  game_id: string
+  initial_state: GameState
+}
+
+export interface ActRequest {
+  player_id: string
+  action: LegalAction
+}
+
+export interface ActResponse {
+  new_state: GameState
+  events: any[]
+  error?: string
+}
+
+// CUSTOMIZE: Implement API functions
+export async function createGame(request: CreateGameRequest): Promise<CreateGameResponse> {
+  const response = await fetch(`${API_BASE}/games`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to create game: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+export async function getGameState(gameId: string): Promise<GameState> {
+  const response = await fetch(`${API_BASE}/games/${gameId}`)
+  if (!response.ok) {
+    throw new Error(`Failed to get game state: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+export async function getLegalActions(gameId: string, playerId: string): Promise<LegalAction[]> {
+  const response = await fetch(`${API_BASE}/games/${gameId}/legal-actions?player_id=${playerId}`)
+  if (!response.ok) {
+    throw new Error(`Failed to get legal actions: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+export async function postAction(gameId: string, request: ActRequest): Promise<ActResponse> {
+  const response = await fetch(`${API_BASE}/games/${gameId}/act`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.detail || `Failed to perform action: ${response.statusText}`)
+  }
+  return response.json()
+}
+

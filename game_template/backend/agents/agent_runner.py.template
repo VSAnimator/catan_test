@@ -1,0 +1,169 @@
+"""
+Agent runner for playing games with agents.
+
+CUSTOMIZE THIS FILE: Adjust for your game's specific needs (phases, special actions, etc.)
+"""
+import copy
+from typing import Dict, List, Optional, Tuple
+# CUSTOMIZE: Import your game's classes
+# from engine import GameState, Action, ActionPayload
+# from engine.serialization import (
+#     deserialize_game_state,
+#     serialize_game_state,
+#     serialize_action,
+#     serialize_action_payload,
+#     legal_actions,
+# )
+# from .base_agent import BaseAgent
+
+
+class AgentRunner:
+    """
+    Runs a game with agents, handling automatic gameplay.
+    
+    CUSTOMIZE: Adjust for your game's phases, special actions, win conditions, etc.
+    """
+    
+    def __init__(
+        self,
+        state,  # GameState
+        agents: Dict[str, 'BaseAgent'],
+        max_turns: int = 1000
+    ):
+        """
+        Initialize the agent runner.
+        
+        Args:
+            state: Initial game state
+            agents: Dictionary mapping player_id to agent
+            max_turns: Maximum number of turns before stopping
+        """
+        self.state = state
+        self.agents = agents
+        self.max_turns = max_turns
+        self.turn_count = 0
+        self.error: Optional[str] = None
+    
+    def run_automatic(
+        self,
+        save_state_callback: Optional[callable] = None,
+        progress_callback: Optional[callable] = None
+    ) -> Tuple[Any, bool, Optional[str]]:  # Tuple[GameState, bool, Optional[str]]
+        """
+        Run the game automatically until completion, error, or max turns.
+        
+        CUSTOMIZE: Adjust for your game's phases, win conditions, special actions.
+        
+        Args:
+            save_state_callback: Optional callback to save state after each action
+                                Signature: (game_id: str, state_before: GameState, state_after: GameState, action: dict, player_id: str) -> None
+            progress_callback: Optional callback for progress updates
+                              Signature: (turn_count: int, action_count: int) -> None
+        
+        Returns:
+            Tuple of (final_state, completed, error_message)
+        """
+        try:
+            action_count = 0
+            while self.turn_count < self.max_turns:
+                # CUSTOMIZE: Check win condition
+                if self.state.is_game_over():
+                    return self.state, True, None
+                
+                # CUSTOMIZE: Get current player based on your game's phase system
+                if self.state.phase == "setup":
+                    # CUSTOMIZE: Adjust for your setup phase
+                    current_player = self.state.players[self.state.current_player_index]
+                elif self.state.phase == "playing":
+                    current_player = self.state.players[self.state.current_player_index]
+                else:
+                    return self.state, True, None  # Game finished
+                
+                # Get agent for current player
+                agent = self.agents.get(current_player.id)
+                if not agent:
+                    return self.state, False, f"No agent found for player {current_player.id}"
+                
+                # CUSTOMIZE: Handle special game phases or actions
+                # Example: Handle simultaneous actions, mandatory actions, etc.
+                
+                # Get legal actions for current player
+                # CUSTOMIZE: Import legal_actions from your serialization module
+                # from engine.serialization import legal_actions
+                legal_actions_list = legal_actions(self.state, current_player.id)
+                
+                if not legal_actions_list:
+                    return self.state, False, f"No legal actions available for player {current_player.id}"
+                
+                # Store state before action
+                state_before = copy.deepcopy(self.state)
+                
+                # CUSTOMIZE: Auto-select if only one action (but be careful with actions that need payloads)
+                if len(legal_actions_list) == 1:
+                    action, payload = legal_actions_list[0]
+                    # CUSTOMIZE: Check if action needs a payload that agent must generate
+                    # if action == Action.SOME_ACTION_NEEDING_PAYLOAD:
+                    #     pass  # Fall through to agent.choose_action
+                    # else:
+                    #     # Auto-select
+                    #     self.state = self.state.step(action, payload, player_id=current_player.id)
+                    #     # Save and continue...
+                    #     continue
+                
+                # Agent chooses an action
+                result = agent.choose_action(self.state, legal_actions_list)
+                if len(result) == 4:
+                    action, payload, reasoning, raw_llm_response = result
+                elif len(result) == 3:
+                    action, payload, reasoning = result
+                    raw_llm_response = None
+                else:
+                    action, payload = result
+                    reasoning = None
+                    raw_llm_response = None
+                
+                # Print reasoning if available
+                if reasoning:
+                    print(f"[{current_player.name}] Reasoning: {reasoning}")
+                
+                # Apply the action
+                try:
+                    self.state = self.state.step(action, payload, player_id=current_player.id)
+                except ValueError as e:
+                    return self.state, False, f"Invalid action for player {current_player.id}: {str(e)}"
+                
+                # Save state if callback provided
+                if save_state_callback:
+                    action_dict = {
+                        "type": serialize_action(action),
+                    }
+                    if payload:
+                        action_dict["payload"] = serialize_action_payload(payload)
+                    if reasoning:
+                        action_dict["reasoning"] = reasoning
+                    if 'raw_llm_response' in locals() and raw_llm_response:
+                        action_dict["raw_llm_response"] = raw_llm_response
+                    save_state_callback(
+                        self.state.game_id,
+                        state_before,
+                        self.state,
+                        action_dict,
+                        current_player.id
+                    )
+                
+                # CUSTOMIZE: Increment turn count based on your game's turn system
+                # if action == Action.END_TURN:
+                #     self.turn_count += 1
+                
+                action_count += 1
+                
+                # Progress callback
+                if progress_callback and action_count % 20 == 0:
+                    progress_callback(self.turn_count, action_count)
+            
+            # Reached max turns
+            return self.state, False, f"Reached maximum turn limit ({self.max_turns})"
+            
+        except Exception as e:
+            return self.state, False, f"Unexpected error: {str(e)}"
+

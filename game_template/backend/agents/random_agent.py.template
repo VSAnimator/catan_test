@@ -1,0 +1,65 @@
+"""
+Random agent that randomly selects valid actions.
+
+CUSTOMIZE THIS FILE: Adjust action filtering and payload generation for your game.
+"""
+import random
+from typing import Tuple, Optional, List
+# CUSTOMIZE: Import your game's classes
+# from engine import GameState, Action, ActionPayload
+# from .base_agent import BaseAgent
+
+
+class RandomAgent(BaseAgent):
+    """
+    Random agent that picks valid actions randomly.
+    
+    CUSTOMIZE: Adjust which actions to filter out and how to generate payloads.
+    """
+    
+    def choose_action(
+        self, 
+        state,  # GameState
+        legal_actions_list: List[Tuple[Any, Optional[Any]]]  # List[Tuple[Action, Optional[ActionPayload]]]
+    ) -> Tuple[Any, Optional[Any], Optional[str]]:  # Tuple[Action, Optional[ActionPayload], Optional[str]]
+        """
+        Randomly choose an action from legal actions.
+        
+        CUSTOMIZE:
+        - Filter out actions you don't want random agent to use
+        - Generate payloads for actions that need them
+        - Handle special cases (e.g., trade responses, card selection)
+        """
+        if not legal_actions_list:
+            raise ValueError("No legal actions available")
+        
+        # CUSTOMIZE: Handle special cases
+        # Example: Handle trade responses
+        # accept_actions = [(a, p) for a, p in legal_actions_list if a == Action.ACCEPT_TRADE]
+        # if accept_actions and random.random() < 0.5:
+        #     action, payload = accept_actions[0]
+        #     return (action, payload, "Randomly accepting trade")
+        
+        # CUSTOMIZE: Filter out actions you don't want
+        # Example: Filter out trade proposals
+        # filtered_actions = [
+        #     (action, payload) 
+        #     for action, payload in legal_actions_list
+        #     if action != Action.TRADE_BANK and action != Action.TRADE_PLAYER
+        # ]
+        # if not filtered_actions:
+        #     filtered_actions = legal_actions_list
+        
+        # CUSTOMIZE: Generate payloads for actions that need them
+        # processed_actions = []
+        # for action, payload in filtered_actions:
+        #     if action == Action.SOME_ACTION and payload is None:
+        #         # Generate a payload
+        #         payload = SomeActionPayload(...)
+        #     processed_actions.append((action, payload))
+        
+        # Randomly select from available actions
+        action, payload = random.choice(legal_actions_list)
+        action_name = action.value.replace("_", " ").title() if hasattr(action, 'value') else str(action)
+        return (action, payload, f"Randomly selected: {action_name}")
+

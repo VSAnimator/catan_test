@@ -1,0 +1,55 @@
+"""
+Basic unit tests for game engine.
+
+CUSTOMIZE THIS FILE: Write tests for your game's core logic.
+"""
+import pytest
+# CUSTOMIZE: Import your game's classes
+# from engine import GameState, Player, Action
+# from engine.serialization import serialize_game_state, deserialize_game_state
+
+
+def test_game_creation():
+    """Test creating a new game."""
+    # CUSTOMIZE: Test game initialization
+    # game_id = "test_game"
+    # players = [Player(id=f"player_{i}", name=f"Player {i+1}") for i in range(4)]
+    # state = GameState(
+    #     game_id=game_id,
+    #     players=players,
+    #     current_player_index=0,
+    #     phase="setup"
+    # )
+    # assert state.game_id == game_id
+    # assert len(state.players) == 4
+    pass
+
+
+def test_basic_action():
+    """Test a basic game action."""
+    # CUSTOMIZE: Test a simple action
+    # state = create_test_game_state()
+    # action = Action.SOME_ACTION
+    # new_state = state.step(action)
+    # assert new_state.turn_number > state.turn_number  # or appropriate check
+    pass
+
+
+def test_game_rules():
+    """Test game rules (e.g., illegal moves raise errors)."""
+    # CUSTOMIZE: Test that illegal actions raise ValueError
+    # state = create_test_game_state()
+    # with pytest.raises(ValueError):
+    #     state.step(Action.ILLEGAL_ACTION)
+    pass
+
+
+def test_serialization():
+    """Test serialization/deserialization."""
+    # CUSTOMIZE: Test that state can be serialized and deserialized
+    # state = create_test_game_state()
+    # serialized = serialize_game_state(state)
+    # deserialized = deserialize_game_state(serialized)
+    # assert deserialized.game_id == state.game_id
+    pass
+

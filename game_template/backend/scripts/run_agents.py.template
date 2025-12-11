@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""
+Run agents automatically on a game until completion, error, or max turns.
+
+CUSTOMIZE THIS FILE: Adjust for your game's agent types and execution flow.
+
+Usage:
+    python -m scripts.run_agents <game_id> [--max-turns N] [--agent-type TYPE]
+"""
+import sys
+import json
+import random
+import argparse
+import time
+from pathlib import Path
+
+# Add parent directory to path to import modules
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# CUSTOMIZE: Import your game's classes
+# from api.database import get_game, get_latest_state, save_game_state, add_step, get_step_count
+# from engine import deserialize_game_state, serialize_game_state
+# from engine.serialization import legal_actions, state_to_text, legal_actions_to_text, serialize_action, serialize_action_payload
+# from agents import RandomAgent, LLMAgent
+# from agents.agent_runner import AgentRunner
+
+
+def run_agents_script(game_id: str, max_turns: int = 1000, fast_mode: bool = False, agent_type: str = "random", agent_mapping: dict = None):
+    """Run agents automatically on a game.
+    
+    CUSTOMIZE: Adjust for your game's agent types and execution flow.
+    
+    Args:
+        game_id: Game ID to run agents on
+        max_turns: Maximum number of turns
+        fast_mode: If True, skip expensive text serialization
+        agent_type: Default agent type for all players
+        agent_mapping: Optional dict mapping player_id to agent_type
+    """
+    # CUSTOMIZE: Get game info
+    # game_row = get_game(game_id)
+    # if not game_row:
+    #     print(f"Error: Game {game_id} not found in database.")
+    #     return 1
+    
+    # CUSTOMIZE: Get current state from database
+    # state_json = get_latest_state(game_id)
+    # if state_json is None:
+    #     print(f"Error: Game state not found for game {game_id}.")
+    #     return 1
+    
+    # Deserialize current state
+    # current_state = deserialize_game_state(state_json)
+    
+    # CUSTOMIZE: Create agents for each player
+    # agents = {}
+    # for player in current_state.players:
+    #     agent_type_for_player = agent_mapping.get(player.id, agent_type) if agent_mapping else agent_type
+    #     if agent_type_for_player == "random":
+    #         agents[player.id] = RandomAgent(player.id)
+    #     elif agent_type_for_player == "llm":
+    #         agents[player.id] = LLMAgent(player.id, model="gpt-4o-mini")
+    #     # Add more agent types as needed
+    
+    # CUSTOMIZE: Create agent runner
+    # runner = AgentRunner(current_state, agents, max_turns=max_turns)
+    
+    # CUSTOMIZE: Define save callback
+    # def save_callback(game_id, state_before, state_after, action_dict, player_id):
+    #     step_count = get_step_count(game_id)
+    #     if not fast_mode:
+    #         state_text = state_to_text(state_after, player_id)
+    #         legal_actions_text = legal_actions_to_text(legal_actions(state_after, player_id))
+    #     else:
+    #         state_text = None
+    #         legal_actions_text = None
+    #     
+    #     add_step(
+    #         game_id=game_id,
+    #         step_idx=step_count,
+    #         player_id=player_id,
+    #         state_before_json=serialize_game_state(state_before),
+    #         state_after_json=serialize_game_state(state_after),
+    #         action_json=action_dict,
+    #         state_text=state_text,
+    #         legal_actions_text=legal_actions_text,
+    #         chosen_action_text=action_dict.get("type"),
+    #         reasoning=action_dict.get("reasoning"),
+    #         raw_llm_response=action_dict.get("raw_llm_response")
+    #     )
+    #     save_game_state(game_id, serialize_game_state(state_after))
+    
+    # CUSTOMIZE: Run agents
+    # final_state, completed, error = runner.run_automatic(save_state_callback=save_callback)
+    
+    # CUSTOMIZE: Print results
+    # if completed:
+    #     print(f"\nGame completed!")
+    #     winner = final_state.get_winner()
+    #     if winner:
+    #         winner_player = next(p for p in final_state.players if p.id == winner)
+    #         print(f"Winner: {winner_player.name}")
+    # else:
+    #     print(f"\nGame stopped: {error}")
+    
+    # return 0 if completed else 1
+    pass
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Run agents on a game")
+    parser.add_argument("game_id", help="Game ID")
+    parser.add_argument("--max-turns", type=int, default=1000, help="Maximum number of turns")
+    parser.add_argument("--fast-mode", action="store_true", help="Fast mode (skip text serialization)")
+    parser.add_argument("--agent-type", default="random", help="Agent type (random, llm, etc.)")
+    args = parser.parse_args()
+    
+    exit_code = run_agents_script(
+        args.game_id,
+        max_turns=args.max_turns,
+        fast_mode=args.fast_mode,
+        agent_type=args.agent_type
+    )
+    sys.exit(exit_code)
+

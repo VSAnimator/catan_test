@@ -1,0 +1,89 @@
+import React, { useState, useEffect } from 'react'
+import './App.css'
+// CUSTOMIZE: Import your API client
+// import {
+//   createGame as apiCreateGame,
+//   getGameState,
+//   getLegalActions,
+//   postAction,
+//   type GameState,
+//   type LegalAction,
+// } from './api'
+
+function App() {
+  const [gameState, setGameState] = useState<GameState | null>(null)
+  const [legalActions, setLegalActions] = useState<LegalAction[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [gameId, setGameId] = useState<string>('')
+  const [playerId, setPlayerId] = useState<string>('')
+
+  // CUSTOMIZE: Load game state
+  useEffect(() => {
+    if (gameId && playerId) {
+      loadGameState()
+    }
+  }, [gameId, playerId])
+
+  const loadGameState = async () => {
+    // CUSTOMIZE: Load game state from API
+    // try {
+    //   const state = await getGameState(gameId)
+    //   setGameState(state)
+    //   const actions = await getLegalActions(gameId, playerId)
+    //   setLegalActions(actions)
+    // } catch (err) {
+    //   setError(err.message)
+    // }
+  }
+
+  const handleAction = async (action: LegalAction) => {
+    // CUSTOMIZE: Handle user action
+    // try {
+    //   setLoading(true)
+    //   const result = await postAction(gameId, {
+    //     player_id: playerId,
+    //     action: action
+    //   })
+    //   setGameState(result.new_state)
+    //   await loadGameState()  // Reload to get updated legal actions
+    // } catch (err) {
+    //   setError(err.message)
+    // } finally {
+    //   setLoading(false)
+    // }
+  }
+
+  return (
+    <div className="App">
+      <h1>Game</h1>
+      
+      {/* CUSTOMIZE: Add your game UI here */}
+      {error && <div className="error">{error}</div>}
+      
+      {gameState && (
+        <div>
+          {/* CUSTOMIZE: Display game state */}
+          <h2>Game State</h2>
+          <p>Phase: {gameState.phase}</p>
+          <p>Turn: {gameState.turn_number}</p>
+          
+          {/* CUSTOMIZE: Display legal actions */}
+          <h3>Legal Actions</h3>
+          {legalActions.map((action, idx) => (
+            <button
+              key={idx}
+              onClick={() => handleAction(action)}
+              disabled={loading}
+            >
+              {action.type}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default App
+
