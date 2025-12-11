@@ -746,24 +746,8 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
             if can_build_road:
                 for road_edge in state.road_edges:
                     if not road_edge.owner:
-                        # Check if player has a road/settlement adjacent
-                        has_connection = False
-                        for intersection in state.intersections:
-                            if intersection.owner == player_id:
-                                if (road_edge.intersection1_id == intersection.id or 
-                                    road_edge.intersection2_id == intersection.id):
-                                    has_connection = True
-                                    break
-                            # Or check if player has adjacent road
-                            for other_road in state.road_edges:
-                                if other_road.owner == player_id:
-                                    if (road_edge.intersection1_id == other_road.intersection1_id or
-                                        road_edge.intersection1_id == other_road.intersection2_id or
-                                        road_edge.intersection2_id == other_road.intersection1_id or
-                                        road_edge.intersection2_id == other_road.intersection2_id):
-                                        has_connection = True
-                                        break
-                        if has_connection:
+                        # Check if road can be built (connects to player infrastructure and not blocked)
+                        if _can_build_road(state, road_edge, player_id):
                             legal.append((Action.BUILD_ROAD, BuildRoadPayload(road_edge.id)))
             
             # Can build settlement
@@ -1087,10 +1071,10 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
     # Create tile lookup
     tile_map = {t.id: t for t in state.tiles}
     
-    # Compact map representation
-    lines.append("=== Compact Map View ===")
-    map_lines = _generate_compact_map(state, player_id, tile_map)
-    lines.extend(map_lines)
+    # Compact graph representation
+    lines.append("=== Board Graph (Compact) ===")
+    graph_lines = _generate_compact_graph(state, player_id, tile_map, dice_probs)
+    lines.extend(graph_lines)
     lines.append("")
     
     # Resource scarcity analysis
@@ -1544,232 +1528,290 @@ def _calculate_distance_between_intersections(state: GameState, inter1_id: int, 
     return None  # Not reachable
 
 
-def _generate_compact_map(state: GameState, player_id: str, tile_map: Dict[int, 'Tile']) -> List[str]:
+def _can_build_road(state: GameState, road: 'RoadEdge', player_id: str) -> bool:
+    """Check if a road can be built (connects to player's infrastructure and not blocked by opponent buildings)."""
+    # Check if either intersection is owned by player
+    inter1 = next((i for i in state.intersections if i.id == road.intersection1_id), None)
+    inter2 = next((i for i in state.intersections if i.id == road.intersection2_id), None)
+    
+    # Cannot build if either endpoint has an opponent building
+    if inter1 and inter1.owner and inter1.owner != player_id:
+        return False
+    if inter2 and inter2.owner and inter2.owner != player_id:
+        return False
+    
+    # Check if either intersection is owned by player
+    if inter1 and inter1.owner == player_id:
+        return True
+    if inter2 and inter2.owner == player_id:
+        return True
+    
+    # Check if adjacent to player's roads (but not through opponent buildings)
+    player_roads = [r for r in state.road_edges if r.owner == player_id]
+    for player_road in player_roads:
+        # Check if road connects to player's road
+        if (road.intersection1_id in [player_road.intersection1_id, player_road.intersection2_id] or
+            road.intersection2_id in [player_road.intersection1_id, player_road.intersection2_id]):
+            # But verify the connection point doesn't have an opponent building
+            connection_point = None
+            if road.intersection1_id in [player_road.intersection1_id, player_road.intersection2_id]:
+                connection_point = road.intersection1_id
+            elif road.intersection2_id in [player_road.intersection1_id, player_road.intersection2_id]:
+                connection_point = road.intersection2_id
+            
+            if connection_point:
+                conn_inter = next((i for i in state.intersections if i.id == connection_point), None)
+                # Can build if connection point is empty or owned by player
+                if not conn_inter or not conn_inter.owner or conn_inter.owner == player_id:
+                    return True
+    
+    return False
+
+
+def _get_road_connectivity_info(state: GameState, road: 'RoadEdge', player_id: str) -> str:
+    """Get connectivity information for a road (what it connects to)."""
+    connections = []
+    
+    # Check intersections
+    inter1 = next((i for i in state.intersections if i.id == road.intersection1_id), None)
+    inter2 = next((i for i in state.intersections if i.id == road.intersection2_id), None)
+    
+    if inter1 and inter1.owner == player_id:
+        connections.append(f"I{road.intersection1_id}")
+    if inter2 and inter2.owner == player_id:
+        connections.append(f"I{road.intersection2_id}")
+    
+    # Check adjacent roads
+    player_roads = [r for r in state.road_edges if r.owner == player_id]
+    for player_road in player_roads:
+        if (road.intersection1_id in [player_road.intersection1_id, player_road.intersection2_id] or
+            road.intersection2_id in [player_road.intersection1_id, player_road.intersection2_id]):
+            connections.append(f"R{player_road.id}")
+    
+    if connections:
+        return f" [connects to: {','.join(connections)}]"
+    return ""
+
+
+def _calculate_min_roads_to_reach(state: GameState, target_inter_id: int, player_id: str) -> Optional[int]:
+    """Calculate minimum number of roads needed to reach an intersection from player's infrastructure."""
+    # Get all player's intersections and road endpoints (starting points)
+    player_intersections = [i.id for i in state.intersections if i.owner == player_id]
+    player_roads = [r for r in state.road_edges if r.owner == player_id]
+    player_road_endpoints = set()
+    for road in player_roads:
+        player_road_endpoints.add(road.intersection1_id)
+        player_road_endpoints.add(road.intersection2_id)
+    
+    # Starting points: player's intersections and road endpoints
+    start_points = set(player_intersections) | player_road_endpoints
+    
+    if not start_points:
+        return None  # No infrastructure
+    
+    # Build intersection adjacency graph
+    inter_graph = {}
+    for inter in state.intersections:
+        inter_graph[inter.id] = list(inter.adjacent_intersections)
+    
+    # Build road ownership map (for each edge, who owns it)
+    road_ownership = {}
+    for road in state.road_edges:
+        edge_key = (min(road.intersection1_id, road.intersection2_id), 
+                   max(road.intersection1_id, road.intersection2_id))
+        road_ownership[edge_key] = road.owner
+    
+    # BFS to find shortest path (minimum roads needed)
+    from collections import deque
+    queue = deque([(start, 0) for start in start_points])
+    visited = {start: 0 for start in start_points}  # intersection_id -> roads_needed
+    
+    while queue:
+        current, roads_needed = queue.popleft()
+        
+        if current == target_inter_id:
+            return roads_needed
+        
+        # Check all adjacent intersections
+        for neighbor in inter_graph.get(current, []):
+            # Check if there's a road between current and neighbor
+            edge_key = (min(current, neighbor), max(current, neighbor))
+            road_owner = road_ownership.get(edge_key)
+            
+            # Check if neighbor has opponent building (blocks road building)
+            neighbor_inter = next((i for i in state.intersections if i.id == neighbor), None)
+            if neighbor_inter and neighbor_inter.owner and neighbor_inter.owner != player_id:
+                # Opponent building blocks this path
+                continue
+            
+            # Can traverse if:
+            # 1. Road is owned by player (free)
+            # 2. Road is unowned (need to build it, costs 1)
+            # Cannot traverse if road is owned by opponent
+            
+            if road_owner == player_id:
+                # Existing player road - free to traverse
+                if neighbor not in visited or visited[neighbor] > roads_needed:
+                    visited[neighbor] = roads_needed
+                    queue.append((neighbor, roads_needed))
+            elif road_owner is None:
+                # Unowned road - need to build it (costs 1 road)
+                new_cost = roads_needed + 1
+                if neighbor not in visited or visited[neighbor] > new_cost:
+                    visited[neighbor] = new_cost
+                    queue.append((neighbor, new_cost))
+            # else: road owned by opponent, cannot traverse
+    
+    return None  # Not reachable
+
+
+def _generate_compact_graph(state: GameState, player_id: str, tile_map: Dict[int, 'Tile'], dice_probs: Dict[int, float]) -> List[str]:
     """
-    Generate a compact ASCII map representation of the Catan board.
-    Shows tiles with resources/tokens, buildings, roads, and robber location.
+    Generate a compact graph representation of the Catan board.
+    Shows tiles, intersections, and roads as nodes and edges with spatial relationships.
     """
     lines = []
-    
-    # Create intersection ownership and building maps
-    inter_owner_map = {i.id: i.owner for i in state.intersections}
-    inter_building_map = {i.id: i.building_type for i in state.intersections}
-    inter_port_map = {i.id: i.port_type for i in state.intersections}
-    
-    # Create tile-to-intersections mapping
-    tile_to_intersections = {}
-    for inter in state.intersections:
-        for tile_id in inter.adjacent_tiles:
-            if tile_id not in tile_to_intersections:
-                tile_to_intersections[tile_id] = []
-            tile_to_intersections[tile_id].append(inter.id)
     
     # Get player names
     player_names = {p.id: p.name for p in state.players}
     
-    # Helper to format tile compactly
-    def format_tile_compact(tile_id: int) -> str:
-        if tile_id not in tile_map:
-            return "???"
-        tile = tile_map[tile_id]
+    # Resource abbreviations
+    res_map = {"wood": "W", "brick": "B", "wheat": "H", "sheep": "S", "ore": "O"}
+    
+    # Tiles section
+    lines.append("Tiles: 19 nodes")
+    for tile in sorted(state.tiles, key=lambda t: t.id):
+        # Get intersections for this tile
+        tile_intersections = sorted([i.id for i in state.intersections if tile.id in i.adjacent_tiles])
+        
         if tile.resource_type is None:
-            robber = "🔴" if state.robber_tile_id == tile_id else " "
-            return f"{robber}DES"
-        
-        # Resource abbreviations: W=Wood, B=Brick, H=Wheat, S=Sheep, O=Ore
-        res_map = {"wood": "W", "brick": "B", "wheat": "H", "sheep": "S", "ore": "O"}
-        res_abbr = res_map.get(tile.resource_type.value, tile.resource_type.value[0].upper())
-        token = tile.number_token.value if tile.number_token else "?"
-        robber = "🔴" if state.robber_tile_id == tile_id else " "
-        return f"{robber}{res_abbr}{token:2d}"
-    
-    # Standard Catan hex layout (3-4-5-4-3 rows)
-    # Group tiles by row (r coordinate)
-    rows = {}
-    for tile in state.tiles:
-        q, r = tile.position
-        if r not in rows:
-            rows[r] = []
-        rows[r].append((q, tile.id))
-    
-    # Sort rows by r (top to bottom: -2, -1, 0, 1, 2)
-    sorted_rows = sorted(rows.items(), key=lambda x: x[0])
-    
-    lines.append("=== Compact Map (Hexagonal Layout) ===")
-    lines.append("Format: [🔴=Robber][Resource][Token], e.g., ' W 6' = Wood token 6")
-    lines.append("Intersections: I{id}[owner][building][port]")
-    lines.append("  Owner: Y=You, 0/1/2/3=Player ID, _=Empty")
-    lines.append("  Building: S=Settlement, C=City, _=Empty")
-    lines.append("  Port: P=3:1, W/B/H/S/O=Resource port")
-    lines.append("")
-    
-    # Create player ID to short name mapping
-    player_short_names = {}
-    for i, p in enumerate(state.players):
-        if p.id == player_id:
-            player_short_names[p.id] = "Y"  # You
+            # Desert
+            robber = "🔴" if state.robber_tile_id == tile.id else ""
+            res_str = f"{robber}DES"
         else:
-            # Use player index as short name
-            player_short_names[p.id] = str(i)
+            res_abbr = res_map.get(tile.resource_type.value, tile.resource_type.value[0].upper())
+            token = tile.number_token.value if tile.number_token else "?"
+            robber = "🔴" if state.robber_tile_id == tile.id else ""
+            res_str = f"{robber}{res_abbr}{token}"
     
-    # Display tiles in rows with intersections labeled below
-    for r, tiles_in_row in sorted_rows:
-        tiles_in_row.sort(key=lambda x: x[0])  # Sort by q coordinate
-        
-        # Indent based on row (hexagonal pattern)
-        indent = abs(r) * 3  # More indent for outer rows
-        
-        # Format tiles
-        tile_strs = []
-        for q, tile_id in tiles_in_row:
-            tile_str = format_tile_compact(tile_id)
-            tile_strs.append(tile_str)
-        
-        lines.append(" " * indent + "  ".join(tile_strs))
-        
-        # Show intersections around tiles in this row
-        # Prioritize showing intersections with buildings or ports
-        intersection_parts = []
-        for q, tile_id in tiles_in_row:
-            intersections = sorted(tile_to_intersections.get(tile_id, []))
-            inter_labels = []
-            
-            # First pass: collect all intersections with their info
-            inter_info = []
-            for inter_id in intersections:
-                owner = inter_owner_map.get(inter_id)
-                building = inter_building_map.get(inter_id)
-                port = inter_port_map.get(inter_id)
-                
-                # Build intersection label: I{id}_[owner][building][port]
-                # Format: I19_0S_ = Intersection 19, owned by player 0, Settlement, no port
-                label = f"I{inter_id}"
-                
-                # Add owner indicator (with underscore separator)
-                if owner:
-                    owner_label = player_short_names.get(owner, "?")
-                    label += f"_{owner_label}"
-                else:
-                    label += "__"  # Empty (two underscores for alignment)
-                
-                # Add building indicator
-                if building:
-                    if building == "settlement":
-                        label += "S"
-                    elif building == "city":
-                        label += "C"
-                else:
-                    label += "_"  # Empty
-                
-                # Add port indicator
-                if port:
-                    if port == "3:1":
-                        label += "P"
-                    else:
-                        # Resource port: use first letter capitalized
-                        port_abbr = port[0].upper()
-                        label += port_abbr
-                else:
-                    label += "_"  # No port
-                
-                # Prioritize: buildings > ports > empty
-                priority = 0
-                if building:
-                    priority = 1  # Buildings first
-                elif port:
-                    priority = 2  # Ports second
-                else:
-                    priority = 3  # Empty last
-                
-                inter_info.append((priority, label))
-            
-            # Sort by priority (buildings first, then ports, then empty)
-            inter_info.sort(key=lambda x: x[0])
-            
-            # Show up to 6 intersections per tile, prioritizing buildings and ports
-            # But always show ALL buildings and ports, even if more than 6
-            shown_labels = []
-            buildings_and_ports = [label for pri, label in inter_info if pri <= 2]
-            empty_intersections = [label for pri, label in inter_info if pri == 3]
-            
-            # Show all buildings/ports first
-            shown_labels.extend(buildings_and_ports)
-            # Then fill remaining slots with empty intersections (up to 6 total)
-            remaining_slots = max(0, 6 - len(shown_labels))
-            shown_labels.extend(empty_intersections[:remaining_slots])
-            
-            if shown_labels:
-                intersection_parts.append(" ".join(shown_labels))
-            else:
-                intersection_parts.append("")  # Empty space for alignment
-        
-        # Show intersections below tiles with proper spacing
-        if any(intersection_parts):
-            # Align intersection labels with tiles above
-            inter_line_parts = []
-            for i, part in enumerate(intersection_parts):
-                if part:
-                    inter_line_parts.append(part)
-                else:
-                    inter_line_parts.append("")
-            inter_line = "  ".join(inter_line_parts)
-            if inter_line.strip():
-                lines.append(" " * indent + inter_line)
+        q, r = tile.position
+        inter_list = ",".join([f"I{iid}" for iid in tile_intersections])
+        lines.append(f"  T{tile.id}({res_str},q{q},r{r})→[{inter_list}]")
     
     lines.append("")
     
-    # Summary: Your buildings with tile locations
-    your_intersections = [i for i in state.intersections if i.owner == player_id]
-    if your_intersections:
-        lines.append("Your Buildings:")
-        for inter in your_intersections[:8]:  # Top 8
-            tiles = [f"T{tid}" for tid in sorted(inter.adjacent_tiles)[:3]]
-            port_str = f" [PORT:{inter.port_type}]" if inter.port_type else ""
-            lines.append(f"  I{inter.id}: {inter.building_type}{port_str} on {','.join(tiles)}")
+    # Intersections section - show occupied + top candidates
+    # Group intersections
+    your_intersections = []
+    opponent_intersections = []
+    empty_intersections = []
     
-    # Summary: All opponent buildings (with full details)
-    opp_intersections = [i for i in state.intersections if i.owner and i.owner != player_id]
-    if opp_intersections:
-        # Group by player
-        buildings_by_player = {}
-        for inter in opp_intersections:
-            if inter.owner not in buildings_by_player:
-                buildings_by_player[inter.owner] = []
-            buildings_by_player[inter.owner].append(inter)
+    for inter in state.intersections:
+        if inter.owner == player_id:
+            your_intersections.append(inter)
+        elif inter.owner:
+            opponent_intersections.append(inter)
+        else:
+            empty_intersections.append(inter)
+    
+    # Calculate production for empty intersections (only legal build sites)
+    empty_with_prod = []
+    for inter in empty_intersections:
+        # Check distance rule - can only build if no adjacent buildings
+        can_build = True
+        for adj_id in inter.adjacent_intersections:
+            adj_inter = next((i for i in state.intersections if i.id == adj_id), None)
+            if adj_inter and adj_inter.owner:
+                can_build = False
+                break
         
-        for owner_id, buildings in buildings_by_player.items():
-            owner_name = player_names.get(owner_id, owner_id)
-            owner_short = player_short_names.get(owner_id, "?")
-            lines.append(f"{owner_name} (Player {owner_short}) Buildings:")
-            for inter in buildings:
-                tiles = [f"T{tid}" for tid in sorted(inter.adjacent_tiles)]
-                port_str = f" [PORT:{inter.port_type}]" if inter.port_type else ""
-                lines.append(f"  I{inter.id}: {inter.building_type}{port_str} on {','.join(tiles)}")
+        if can_build:
+            total_prod = 0.0
+            for tile_id in inter.adjacent_tiles:
+                tile = tile_map.get(tile_id)
+                if tile and tile.resource_type and tile.number_token:
+                    total_prod += dice_probs[tile.number_token.value]
+            empty_with_prod.append((inter, total_prod))
     
-    # Road network summary - show both your roads and opponent roads
-    your_roads = [r for r in state.road_edges if r.owner == player_id]
-    if your_roads:
-        road_connections = [f"I{r.intersection1_id}-I{r.intersection2_id}" for r in your_roads[:12]]
-        lines.append(f"Your Roads ({len(your_roads)}): {', '.join(road_connections)}")
-        if len(your_roads) > 12:
-            lines.append(f"  ... and {len(your_roads) - 12} more")
+    # Sort by production (descending)
+    empty_with_prod.sort(key=lambda x: -x[1])
     
-    # Show opponent roads too
-    opp_roads = [r for r in state.road_edges if r.owner and r.owner != player_id]
-    if opp_roads:
+    # Show intersections
+    lines.append(f"Intersections: 54 nodes (showing occupied + all {len(empty_with_prod)} legal build sites)")
+    
+    # Your intersections
+    if your_intersections:
+        for inter in sorted(your_intersections, key=lambda i: i.id):
+            tiles_str = ",".join([f"T{tid}" for tid in sorted(inter.adjacent_tiles)])
+            adj_str = ",".join([f"I{aid}" for aid in sorted(inter.adjacent_intersections)])
+            port_str = f",port:{inter.port_type}" if inter.port_type else ""
+            building_str = f",{inter.building_type}" if inter.building_type else ""
+            lines.append(f"  I{inter.id}→tiles:[{tiles_str}],adj:[{adj_str}],owner:you{building_str}{port_str}")
+    
+    # Opponent intersections
+    if opponent_intersections:
+        for inter in sorted(opponent_intersections, key=lambda i: i.id):
+            owner_name = player_names.get(inter.owner, inter.owner)
+            tiles_str = ",".join([f"T{tid}" for tid in sorted(inter.adjacent_tiles)])
+            adj_str = ",".join([f"I{aid}" for aid in sorted(inter.adjacent_intersections)])
+            port_str = f",port:{inter.port_type}" if inter.port_type else ""
+            building_str = f",{inter.building_type}" if inter.building_type else ""
+            lines.append(f"  I{inter.id}→tiles:[{tiles_str}],adj:[{adj_str}],owner:{owner_name}{building_str}{port_str}")
+    
+    # All legal empty intersections by production (with reachability info)
+    for inter, prod in empty_with_prod:
+        tiles_str = ",".join([f"T{tid}" for tid in sorted(inter.adjacent_tiles)])
+        adj_str = ",".join([f"I{aid}" for aid in sorted(inter.adjacent_intersections)])
+        port_str = f",port:{inter.port_type}" if inter.port_type else ""
+        prod_pct = prod * 100
+        
+        # Calculate reachability
+        min_roads = _calculate_min_roads_to_reach(state, inter.id, player_id)
+        if min_roads is not None:
+            reachable_str = f",reachable:true,min_roads:{min_roads}"
+        else:
+            reachable_str = ",reachable:false"
+        
+        lines.append(f"  I{inter.id}→tiles:[{tiles_str}],adj:[{adj_str}],owner:null,prod:{prod_pct:.1f}%{port_str}{reachable_str}")
+    
+    lines.append("")
+    
+    # Roads section - show built roads and available roads
+    built_roads = [r for r in state.road_edges if r.owner]
+    available_roads = [r for r in state.road_edges if not r.owner]
+    
+    if built_roads:
+        lines.append("Roads: 72 edges (built roads)")
+        
         # Group by owner
         roads_by_owner = {}
-        for road in opp_roads:
+        for road in built_roads:
             if road.owner not in roads_by_owner:
                 roads_by_owner[road.owner] = []
             roads_by_owner[road.owner].append(road)
         
         for owner_id, owner_roads in roads_by_owner.items():
             owner_name = player_names.get(owner_id, owner_id)
-            road_connections = [f"I{r.intersection1_id}-I{r.intersection2_id}" for r in owner_roads[:8]]
-            lines.append(f"{owner_name}'s Roads ({len(owner_roads)}): {', '.join(road_connections)}")
-            if len(owner_roads) > 8:
-                lines.append(f"  ... and {len(owner_roads) - 8} more")
+            if owner_id == player_id:
+                owner_label = "you"
+            else:
+                owner_label = owner_name
+            
+            # Show ALL roads (no truncation)
+            for road in sorted(owner_roads, key=lambda r: r.id):
+                lines.append(f"  R{road.id}: I{road.intersection1_id}↔I{road.intersection2_id} ({owner_label})")
+    else:
+        lines.append("Roads: 72 edges (none built yet)")
+    
+    # Available roads with connectivity info
+    if available_roads and state.phase == "playing":
+        lines.append("")
+        lines.append("Available Roads (can build):")
+        for road in sorted(available_roads, key=lambda r: r.id):
+            can_build = _can_build_road(state, road, player_id)
+            connectivity = _get_road_connectivity_info(state, road, player_id) if can_build else ""
+            marker = " [CAN BUILD]" if can_build else ""
+            lines.append(f"  R{road.id}: I{road.intersection1_id}↔I{road.intersection2_id}{marker}{connectivity}")
     
     return lines
 

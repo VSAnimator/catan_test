@@ -347,136 +347,99 @@ class AgentRunner:
                     ]
                     
                     if players_needing_discard:
-                        # Check if current player needs to discard
-                        current_player_needs_discard = any(
-                            p.id == current_player.id for p in players_needing_discard
-                        )
+                        # Process discards for ALL AI players who need to discard (not just current player)
+                        # Find first AI player who needs to discard
+                        player_to_discard = None
+                        for player in players_needing_discard:
+                            if self.agents.get(player.id):
+                                player_to_discard = player
+                                break
                         
-                        if current_player_needs_discard:
-                            # Current player needs to discard - process it
-                            discard_agent = self.agents.get(current_player.id)
-                            if discard_agent:
-                                # AI player - process discard
-                                legal_actions_list = legal_actions(self.state, current_player.id)
-                                
-                                # Filter to only discard actions
-                                discard_actions = [
-                                    (action, payload) 
-                                    for action, payload in legal_actions_list
-                                    if action == Action.DISCARD_RESOURCES
-                                ]
-                                
-                                if discard_actions:
-                                    # Store state before action
-                                    state_before = copy.deepcopy(self.state)
-                                    
-                                    # Choose a discard action
-                                    result = discard_agent.choose_action(self.state, discard_actions)
-                                    if len(result) == 4:
-                                        action, payload, reasoning, _ = result
-                                    elif len(result) == 3:
-                                        action, payload, reasoning = result
-                                    else:
-                                        # Backward compatibility
-                                        action, payload = result
-                                        reasoning = None
-                                    
-                                    # Print reasoning if available
-                                    if reasoning:
-                                        print(f"[{current_player.name}] Reasoning: {reasoning}")
-                                    
-                                    # Apply the action
-                                    self.state = self.state.step(action, payload, player_id=current_player.id)
-                                    
-                                    # Save state if callback provided
-                                    if save_state_callback:
-                                        action_dict = {
-                                            "type": serialize_action(action),
-                                        }
-                                        if payload:
-                                            action_dict["payload"] = serialize_action_payload(payload)
-                                        if reasoning:
-                                            action_dict["reasoning"] = reasoning
-                                        save_state_callback(
-                                            self.state.game_id,
-                                            state_before,
-                                            self.state,
-                                            action_dict,
-                                            current_player.id
-                                        )
-                                    
-                                    # After discard, check if there are more players who need to discard
-                                    # and cycle to the next one (similar to trade handling)
-                                    remaining_players_needing_discard = [
-                                        p for p in self.state.players
-                                        if (sum(p.resources.values()) >= 8 and 
-                                            p.id not in self.state.players_discarded)
-                                    ]
-                                    
-                                    if remaining_players_needing_discard:
-                                        # Find next AI player who needs to discard
-                                        next_ai_player = None
-                                        for player in remaining_players_needing_discard:
-                                            if self.agents.get(player.id):
-                                                next_ai_player = player
-                                                break
-                                        
-                                        if next_ai_player:
-                                            # Change current_player_index to next player who needs to discard
-                                            next_index = next((i for i, p in enumerate(self.state.players) if p.id == next_ai_player.id), None)
-                                            if next_index is not None:
-                                                # Create a new state with updated current_player_index
-                                                import dataclasses
-                                                self.state = dataclasses.replace(self.state, current_player_index=next_index)
-                                    
-                                    return self.state, True, None, current_player.id
-                                else:
-                                    return self.state, False, f"No discard actions available for player {current_player.id}", None
-                            else:
-                                # Human player - they'll handle it via UI, but we should still cycle to next player
-                                remaining_players_needing_discard = [
-                                    p for p in self.state.players
-                                    if (sum(p.resources.values()) >= 8 and 
-                                        p.id not in self.state.players_discarded and
-                                        p.id != current_player.id)
-                                ]
-                                
-                                # Find next AI player who needs to discard
-                                next_ai_player = None
-                                for player in remaining_players_needing_discard:
-                                    if self.agents.get(player.id):
-                                        next_ai_player = player
-                                        break
-                                
-                                if next_ai_player:
-                                    # Change current_player_index to next player who needs to discard
-                                    next_index = next((i for i, p in enumerate(self.state.players) if p.id == next_ai_player.id), None)
-                                    if next_index is not None:
-                                        import dataclasses
-                                        self.state = dataclasses.replace(self.state, current_player_index=next_index)
-                                
-                                # Return success - human will handle their discard via UI
-                                return self.state, True, None, None
-                        else:
-                            # Current player doesn't need to discard, but others do
-                            # Cycle to the next AI player who needs to discard
-                            ai_players_needing_discard = [
-                                p for p in players_needing_discard
-                                if self.agents.get(p.id)
+                        if player_to_discard:
+                            # AI player needs to discard - process it
+                            discard_agent = self.agents.get(player_to_discard.id)
+                            legal_actions_list = legal_actions(self.state, player_to_discard.id)
+                            
+                            # Filter to only discard actions
+                            discard_actions = [
+                                (action, payload) 
+                                for action, payload in legal_actions_list
+                                if action == Action.DISCARD_RESOURCES
                             ]
                             
-                            if ai_players_needing_discard:
-                                # Change current_player_index to first AI player who needs to discard
-                                next_ai_player = ai_players_needing_discard[0]
-                                next_index = next((i for i, p in enumerate(self.state.players) if p.id == next_ai_player.id), None)
-                                if next_index is not None:
-                                    import dataclasses
-                                    self.state = dataclasses.replace(self.state, current_player_index=next_index)
-                                # Return to trigger another call to run_step for the next player
-                                return self.state, True, None, None
+                            if discard_actions:
+                                # Store state before action
+                                state_before = copy.deepcopy(self.state)
+                                
+                                # Choose a discard action
+                                result = discard_agent.choose_action(self.state, discard_actions)
+                                if len(result) == 4:
+                                    action, payload, reasoning, _ = result
+                                elif len(result) == 3:
+                                    action, payload, reasoning = result
+                                else:
+                                    # Backward compatibility
+                                    action, payload = result
+                                    reasoning = None
+                                
+                                # Print reasoning if available
+                                if reasoning:
+                                    print(f"[{player_to_discard.name}] Reasoning: {reasoning}")
+                                
+                                # Apply the action
+                                self.state = self.state.step(action, payload, player_id=player_to_discard.id)
+                                
+                                # Save state if callback provided
+                                if save_state_callback:
+                                    action_dict = {
+                                        "type": serialize_action(action),
+                                    }
+                                    if payload:
+                                        action_dict["payload"] = serialize_action_payload(payload)
+                                    if reasoning:
+                                        action_dict["reasoning"] = reasoning
+                                    save_state_callback(
+                                        self.state.game_id,
+                                        state_before,
+                                        self.state,
+                                        action_dict,
+                                        player_to_discard.id
+                                    )
+                                
+                                return self.state, True, None, player_to_discard.id
                             else:
-                                # Only human players need to discard - they'll handle it via UI
+                                return self.state, False, f"No discard actions available for player {player_to_discard.id}", None
+                        else:
+                            # No AI players need to discard (only human players) - they'll handle it via UI
+                            # Check if there are still players who need to discard - if so, don't let current player take turn
+                            remaining_players_needing_discard = [
+                                p for p in self.state.players
+                                if (sum(p.resources.values()) >= 8 and 
+                                    p.id not in self.state.players_discarded)
+                            ]
+                            if remaining_players_needing_discard:
+                                # Still waiting for players to discard - don't process current player's turn
                                 return self.state, True, None, None
+            
+            # Check if we're still in discard phase (before processing current player's turn)
+            if (self.state.phase == "playing" and 
+                self.state.dice_roll == 7 and
+                not self.state.waiting_for_robber_move and
+                not self.state.waiting_for_robber_steal):
+                robber_has_been_moved = (
+                    self.state.robber_initial_tile_id is not None and 
+                    self.state.robber_tile_id != self.state.robber_initial_tile_id
+                )
+                if not robber_has_been_moved:
+                    # Check if any player still needs to discard
+                    players_still_needing_discard = [
+                        p for p in self.state.players
+                        if (sum(p.resources.values()) >= 8 and 
+                            p.id not in self.state.players_discarded)
+                    ]
+                    if players_still_needing_discard:
+                        # Still waiting for discards - don't process current player's turn yet
+                        return self.state, True, None, None
             
             # Get agent for current player
             agent = self.agents.get(current_player.id)

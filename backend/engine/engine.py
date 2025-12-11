@@ -197,8 +197,26 @@ class GameState:
             # Convert payload to dict for storage
             payload_dict = None
             if payload:
+                def serialize_value(v):
+                    """Recursively serialize values, handling ResourceType enums in dict keys."""
+                    if hasattr(v, 'value'):
+                        return v.value
+                    elif isinstance(v, dict):
+                        # Handle dicts with ResourceType enum keys
+                        result = {}
+                        for k, val in v.items():
+                            # Convert enum keys to strings
+                            key = k.value if hasattr(k, 'value') else k
+                            # Recursively serialize values
+                            result[key] = serialize_value(val)
+                        return result
+                    elif isinstance(v, list):
+                        return [serialize_value(item) for item in v]
+                    else:
+                        return v
+                
                 payload_dict = {
-                    k: (v.value if hasattr(v, 'value') else v)
+                    k: serialize_value(v)
                     for k, v in payload.__dict__.items()
                 }
             result.actions_taken_this_turn.append({
@@ -330,6 +348,45 @@ class GameState:
             raise ValueError(f"Road edge {payload.road_edge_id} not found")
         if road_edge.owner:
             raise ValueError(f"Road edge {payload.road_edge_id} already owned")
+        
+        # Check that road doesn't go through opponent buildings
+        inter1 = next((i for i in new_state.intersections if i.id == road_edge.intersection1_id), None)
+        inter2 = next((i for i in new_state.intersections if i.id == road_edge.intersection2_id), None)
+        
+        if inter1 and inter1.owner and inter1.owner != current_player.id:
+            raise ValueError(f"Cannot build road through opponent building at intersection {road_edge.intersection1_id}")
+        if inter2 and inter2.owner and inter2.owner != current_player.id:
+            raise ValueError(f"Cannot build road through opponent building at intersection {road_edge.intersection2_id}")
+        
+        # Check that road connects to player's infrastructure
+        has_connection = False
+        # Check if either intersection is owned by player
+        if inter1 and inter1.owner == current_player.id:
+            has_connection = True
+        if inter2 and inter2.owner == current_player.id:
+            has_connection = True
+        
+        # Check if adjacent to player's roads
+        if not has_connection:
+            player_roads = [r for r in new_state.road_edges if r.owner == current_player.id]
+            for player_road in player_roads:
+                if (road_edge.intersection1_id in [player_road.intersection1_id, player_road.intersection2_id] or
+                    road_edge.intersection2_id in [player_road.intersection1_id, player_road.intersection2_id]):
+                    # Verify connection point doesn't have opponent building
+                    connection_point = None
+                    if road_edge.intersection1_id in [player_road.intersection1_id, player_road.intersection2_id]:
+                        connection_point = road_edge.intersection1_id
+                    elif road_edge.intersection2_id in [player_road.intersection1_id, player_road.intersection2_id]:
+                        connection_point = road_edge.intersection2_id
+                    
+                    if connection_point:
+                        conn_inter = next((i for i in new_state.intersections if i.id == connection_point), None)
+                        if not conn_inter or not conn_inter.owner or conn_inter.owner == current_player.id:
+                            has_connection = True
+                            break
+        
+        if not has_connection:
+            raise ValueError(f"Road edge {payload.road_edge_id} does not connect to player's infrastructure")
         
         # Deduct resources (unless using road building card)
         if not using_road_building:
