@@ -12,14 +12,28 @@ import {
   watchAgentsStep,
   queryEvents,
   addFeedback,
+  register,
+  login,
+  getCurrentUser,
+  createRoom,
+  listRooms,
+  getRoom,
+  joinRoom,
+  leaveRoom,
+  getMyRooms,
+  startGameFromRoom,
+  GameWebSocket,
   type GameState,
   type LegalAction,
   type Player,
   type ReplayResponse,
-  type QueryEventsResponse
+  type QueryEventsResponse,
+  type User,
+  type Token,
+  type Room
 } from './api'
 
-type View = 'main' | 'game' | 'replay' | 'agent-watch' | 'event-query'
+type View = 'main' | 'game' | 'replay' | 'agent-watch' | 'event-query' | 'login' | 'lobby'
 
 // Resource icons mapping
 const RESOURCE_ICONS: Record<string, string> = {
@@ -42,6 +56,23 @@ const getPipCount = (number: number): number => {
 }
 
 function App() {
+  // Authentication state
+  const [user, setUser] = useState<User | null>(null)
+  const [token, setToken] = useState<string | null>(localStorage.getItem('auth_token'))
+  const [loginUsername, setLoginUsername] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
+  const [registerUsername, setRegisterUsername] = useState('')
+  const [registerPassword, setRegisterPassword] = useState('')
+  const [registerEmail, setRegisterEmail] = useState('')
+  
+  // Room/Lobby state
+  const [rooms, setRooms] = useState<Room[]>([])
+  const [currentRoom, setCurrentRoom] = useState<Room | null>(null)
+  const [roomRefreshInterval, setRoomRefreshInterval] = useState<number | null>(null)
+  
+  // WebSocket state
+  const wsRef = useRef<GameWebSocket | null>(null)
+  
   const [view, setView] = useState<View>('main')
   const [gameState, setGameState] = useState<GameState | null>(null)
   const [playerId, setPlayerId] = useState<string>('')
@@ -244,9 +275,52 @@ function App() {
     }
   }, [gameState, devMode, view, playerId, isAutoDiscarding])
 
-  // Auto-refresh polling
+  // Check authentication on mount
   useEffect(() => {
-    if (autoRefresh && gameState && view === 'game') {
+    if (token) {
+      getCurrentUser(token)
+        .then(setUser)
+        .catch(() => {
+          // Token invalid, clear it
+          setToken(null)
+          localStorage.removeItem('auth_token')
+        })
+    }
+  }, [token])
+
+  // WebSocket connection management
+  useEffect(() => {
+    if (gameState && view === 'game' && gameState.game_id) {
+      // Connect WebSocket
+      const ws = new GameWebSocket(
+        gameState.game_id,
+        token,
+        (data) => {
+          if (data.type === 'game_state' || data.type === 'game_state_update') {
+            setGameState(data.data)
+          } else if (data.type === 'game_event') {
+            // Handle game events (player joined, etc.)
+            console.log('Game event:', data)
+          }
+        },
+        (error) => {
+          console.error('WebSocket error:', error)
+          setError(error.message)
+        }
+      )
+      ws.connect()
+      wsRef.current = ws
+
+      return () => {
+        ws.disconnect()
+        wsRef.current = null
+      }
+    }
+  }, [gameState?.game_id, view, token])
+
+  // Auto-refresh polling (fallback if WebSocket fails)
+  useEffect(() => {
+    if (autoRefresh && gameState && view === 'game' && !wsRef.current) {
       refreshIntervalRef.current = setInterval(() => {
         refreshGameState()
       }, 3000) // Poll every 3 seconds
@@ -282,6 +356,54 @@ function App() {
     
     // Check if current player is an agent
     const currentPlayerIsAgent = activePlayer.id in agentMapping
+    
+    // Special case: when a 7 is rolled, check if any agent needs to discard
+    // This happens before the robber phase, and agents can discard even if it's not their turn
+    if (gameState.phase === 'playing' && 
+        gameState.dice_roll === 7 && 
+        !gameState.waiting_for_robber_move && 
+        !gameState.waiting_for_robber_steal) {
+      // Check if we're still in discard phase (robber hasn't been moved)
+      const robberHasBeenMoved = gameState.robber_initial_tile_id !== null && 
+                                  gameState.robber_tile_id !== gameState.robber_initial_tile_id
+      
+      if (!robberHasBeenMoved) {
+        // Find agents who need to discard
+        const agentsNeedingDiscard = gameState.players.filter(p => {
+          const totalResources = Object.values(p.resources).reduce((a, b) => a + b, 0)
+          const hasDiscarded = gameState.players_discarded?.includes(p.id) || false
+          return totalResources >= 8 && !hasDiscarded && p.id in agentMapping
+        })
+        
+        if (agentsNeedingDiscard.length > 0 && !stepByStepMode) {
+          // There's an agent who needs to discard - let watch_agents_step handle it
+          const advanceAgentTurn = async () => {
+            try {
+              setLoading(true)
+              const result = await watchAgentsStep(gameState.game_id, agentMapping)
+              setGameState(result.new_state)
+              
+              // Store reasoning if available
+              if (result.reasoning) {
+                setLastReasoning(result.reasoning)
+              }
+              
+              if (result.error) {
+                setError(`Agent error: ${result.error}`)
+              }
+            } catch (err) {
+              setError(err instanceof Error ? err.message : 'Failed to advance agent turn')
+            } finally {
+              setLoading(false)
+            }
+          }
+          
+          // Small delay to avoid race conditions
+          const timeout = setTimeout(advanceAgentTurn, 500)
+          return () => clearTimeout(timeout)
+        }
+      }
+    }
     
     // If there's a pending trade, only block auto-advancement if:
     // 1. The current player is the human player (they need to manually respond)
@@ -350,7 +472,7 @@ function App() {
       const timeout = setTimeout(advanceAgentTurn, 500)
       return () => clearTimeout(timeout)
     }
-  }, [gameState?.current_player_index, gameState?.setup_phase_player_index, gameState?.phase, gameState?.game_id, gameState?.pending_trade_offer, gameState?.pending_trade_responses, gameState, agentMapping, playerId, loading, view, stepByStepMode])
+  }, [gameState?.current_player_index, gameState?.setup_phase_player_index, gameState?.phase, gameState?.game_id, gameState?.pending_trade_offer, gameState?.pending_trade_responses, gameState?.dice_roll, gameState?.waiting_for_robber_move, gameState?.waiting_for_robber_steal, gameState?.players_discarded, gameState?.robber_initial_tile_id, gameState?.robber_tile_id, gameState, agentMapping, playerId, loading, view, stepByStepMode])
 
   const refreshGameState = async () => {
     if (!gameState) return
@@ -388,12 +510,22 @@ function App() {
       // Generate random names on backend, so just pass empty or same name
       const playerNames = Array.from({ length: numPlayers }, () => playerNameInput || '')
       
-      const response = await apiCreateGame({ player_names: playerNames })
+      // The backend creates players with IDs "player_0", "player_1", etc.
+      // So our agentMapping with keys like "player_0" should work directly
+      const response = await apiCreateGame({ 
+        player_names: playerNames,
+        agent_mapping: agentMapping  // Send agent_mapping to backend (keys: "player_0", "player_1", etc.)
+      })
       setGameState(response.initial_state)
+      
+      // Restore agent_mapping from metadata
+      const metadata = (response.initial_state as any)._metadata || {}
+      const gameAgentMapping = metadata.agent_mapping || {}
+      setAgentMapping(gameAgentMapping)
       
       // Set player ID to first non-agent player, or first player if all are agents
       const firstNonAgentPlayer = response.initial_state.players.find(
-        p => !(p.id in agentMapping)
+        p => !(p.id in gameAgentMapping)
       )
       setPlayerId(firstNonAgentPlayer?.id || response.initial_state.players[0]?.id || '')
       setView('game')
@@ -415,14 +547,21 @@ function App() {
     try {
       const data = await getGameState(gameIdInput)
       setGameState(data)
-      if (data.players && data.players.length > 0) {
-        const player = data.players.find((p: Player) => p.name === playerNameInput) || data.players[0]
-        setPlayerId(player.id)
-      }
       
       // Restore agent_mapping from metadata if available
-      if ((data as any)._metadata && (data as any)._metadata.agent_mapping) {
-        setAgentMapping((data as any)._metadata.agent_mapping)
+      const metadata = (data as any)._metadata || {}
+      const gameAgentMapping = metadata.agent_mapping || {}
+      setAgentMapping(gameAgentMapping)
+      
+      // Filter out LLM agents when selecting player
+      const availablePlayers = data.players.filter((p: Player) => !(p.id in gameAgentMapping))
+      
+      if (availablePlayers.length > 0) {
+        // Try to find player by name, or use first available
+        const player = availablePlayers.find((p: Player) => p.name === playerNameInput) || availablePlayers[0]
+        setPlayerId(player.id)
+      } else {
+        setError('No available human players in this game (all are LLM agents)')
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
@@ -436,6 +575,15 @@ function App() {
       setError('Please load the game and select a player first')
       return
     }
+    
+    // Validate that selected player is not an LLM agent
+    const metadata = (gameState as any)._metadata || {}
+    const gameAgentMapping = metadata.agent_mapping || {}
+    if (playerId in gameAgentMapping) {
+      setError(`Cannot join as ${playerId} - this player is an LLM agent`)
+      return
+    }
+    
     setView('game')
   }
 
@@ -1077,11 +1225,359 @@ function App() {
     )
   }
 
+  // Authentication handlers
+  const handleLogin = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const tokenData = await login({ username: loginUsername, password: loginPassword })
+      setToken(tokenData.access_token)
+      setUser(tokenData.user)
+      localStorage.setItem('auth_token', tokenData.access_token)
+      setView('main')
+      setLoginUsername('')
+      setLoginPassword('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Login failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleRegister = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const tokenData = await register({ 
+        username: registerUsername, 
+        password: registerPassword,
+        email: registerEmail || undefined
+      })
+      setToken(tokenData.access_token)
+      setUser(tokenData.user)
+      localStorage.setItem('auth_token', tokenData.access_token)
+      setView('main')
+      setRegisterUsername('')
+      setRegisterPassword('')
+      setRegisterEmail('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Registration failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleLogout = () => {
+    setToken(null)
+    setUser(null)
+    localStorage.removeItem('auth_token')
+    setView('login')
+    if (wsRef.current) {
+      wsRef.current.disconnect()
+      wsRef.current = null
+    }
+  }
+
+  // Room handlers
+  const refreshRooms = async () => {
+    try {
+      const roomList = await listRooms()
+      setRooms(roomList)
+    } catch (err) {
+      console.error('Failed to refresh rooms:', err)
+    }
+  }
+
+  const handleCreateRoom = async () => {
+    if (!token) return
+    setLoading(true)
+    setError(null)
+    try {
+      const room = await createRoom({ max_players: 4, min_players: 2, is_private: false }, token)
+      setCurrentRoom(room)
+      await refreshRooms()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create room')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleJoinRoom = async (roomId: string) => {
+    if (!token) return
+    setLoading(true)
+    setError(null)
+    try {
+      const room = await joinRoom(roomId, {}, token)
+      setCurrentRoom(room)
+      await refreshRooms()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to join room')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleStartGame = async () => {
+    if (!token || !currentRoom) return
+    setLoading(true)
+    setError(null)
+    try {
+      const result = await startGameFromRoom(currentRoom.room_id, token)
+      setGameState(result.initial_state)
+      setCurrentRoom(result.room)
+      // Find player ID for current user
+      const roomPlayer = result.room.players.find(p => p.user_id === user?.id)
+      if (roomPlayer?.player_id) {
+        setPlayerId(roomPlayer.player_id)
+      }
+      setView('game')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start game')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Auto-refresh rooms in lobby
+  useEffect(() => {
+    if (view === 'lobby' && token) {
+      refreshRooms()
+      const interval = setInterval(refreshRooms, 5000) // Refresh every 5 seconds
+      setRoomRefreshInterval(interval)
+      return () => {
+        if (interval) clearInterval(interval)
+      }
+    } else {
+      if (roomRefreshInterval) {
+        clearInterval(roomRefreshInterval)
+        setRoomRefreshInterval(null)
+      }
+    }
+  }, [view, token])
+
+  // Redirect to login if not authenticated and trying to access protected views
+  useEffect(() => {
+    if (!token && view !== 'login' && view !== 'replay' && view !== 'event-query' && view !== 'agent-watch') {
+      setView('login')
+    } else if (token && view === 'login') {
+      // Auto-redirect to main after login
+      setView('main')
+    }
+  }, [token, view])
+
+  // Login view
+  if (view === 'login') {
+    return (
+      <div className="app">
+        <header>
+          <h1>Catan Game - Login</h1>
+        </header>
+        <main>
+          <div className="main-menu" style={{ maxWidth: '400px', margin: '0 auto' }}>
+            <div className="menu-section">
+              <h2>Login</h2>
+              {error && <div style={{ color: 'red', marginBottom: '1rem' }}>{error}</div>}
+              <div className="form-group">
+                <label>
+                  Username:
+                  <input
+                    type="text"
+                    value={loginUsername}
+                    onChange={(e) => setLoginUsername(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
+                  />
+                </label>
+              </div>
+              <div className="form-group">
+                <label>
+                  Password:
+                  <input
+                    type="password"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
+                  />
+                </label>
+              </div>
+              <button onClick={handleLogin} disabled={loading} className="action-button">
+                {loading ? 'Logging in...' : 'Login'}
+              </button>
+              
+              <hr style={{ margin: '2rem 0' }} />
+              
+              <h2>Register</h2>
+              <div className="form-group">
+                <label>
+                  Username:
+                  <input
+                    type="text"
+                    value={registerUsername}
+                    onChange={(e) => setRegisterUsername(e.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="form-group">
+                <label>
+                  Password:
+                  <input
+                    type="password"
+                    value={registerPassword}
+                    onChange={(e) => setRegisterPassword(e.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="form-group">
+                <label>
+                  Email (optional):
+                  <input
+                    type="email"
+                    value={registerEmail}
+                    onChange={(e) => setRegisterEmail(e.target.value)}
+                  />
+                </label>
+              </div>
+              <button onClick={handleRegister} disabled={loading} className="action-button">
+                {loading ? 'Registering...' : 'Register'}
+              </button>
+            </div>
+          </div>
+        </main>
+      </div>
+    )
+  }
+
+  // Lobby view
+  if (view === 'lobby') {
+    return (
+      <div className="app">
+        <header>
+          <h1>Catan Game - Lobby</h1>
+          {user && (
+            <div style={{ marginTop: '0.5rem', fontSize: '0.9rem' }}>
+              Logged in as <strong>{user.username}</strong>
+              <button onClick={handleLogout} style={{ marginLeft: '1rem', padding: '0.25rem 0.5rem' }}>
+                Logout
+              </button>
+            </div>
+          )}
+        </header>
+        <main>
+          <div className="main-menu">
+            {error && <div style={{ color: 'red', marginBottom: '1rem' }}>{error}</div>}
+            
+            {currentRoom ? (
+              <div className="menu-section">
+                <h2>Current Room: {currentRoom.room_id.slice(0, 8)}...</h2>
+                <div>
+                  <p>Players ({currentRoom.player_count}/{currentRoom.max_players}):</p>
+                  <ul>
+                    {currentRoom.players.map(p => (
+                      <li key={p.user_id}>
+                        {p.username} {p.user_id === currentRoom.host_user_id && '(Host)'}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                {currentRoom.host_user_id === user?.id && currentRoom.status === 'waiting' && (
+                  <button
+                    onClick={handleStartGame}
+                    disabled={loading || currentRoom.player_count < currentRoom.min_players}
+                    className="action-button"
+                    style={{ marginTop: '1rem' }}
+                  >
+                    {loading ? 'Starting...' : 'Start Game'}
+                  </button>
+                )}
+                <button
+                  onClick={async () => {
+                    if (token && currentRoom) {
+                      await leaveRoom(currentRoom.room_id, token)
+                      setCurrentRoom(null)
+                      await refreshRooms()
+                    }
+                  }}
+                  className="action-button"
+                  style={{ marginTop: '0.5rem', backgroundColor: '#d32f2f' }}
+                >
+                  Leave Room
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="menu-section">
+                  <h2>Create Room</h2>
+                  <button onClick={handleCreateRoom} disabled={loading} className="action-button">
+                    {loading ? 'Creating...' : 'Create New Room'}
+                  </button>
+                </div>
+                
+                <div className="menu-section">
+                  <h2>Available Rooms</h2>
+                  <button onClick={refreshRooms} style={{ marginBottom: '1rem' }}>
+                    Refresh
+                  </button>
+                  {rooms.length === 0 ? (
+                    <p>No rooms available. Create one to get started!</p>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                      {rooms.map(room => (
+                        <div
+                          key={room.room_id}
+                          style={{
+                            border: '1px solid #ccc',
+                            padding: '1rem',
+                            borderRadius: '4px',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center'
+                          }}
+                        >
+                          <div>
+                            <strong>Room {room.room_id.slice(0, 8)}...</strong>
+                            <div style={{ fontSize: '0.9rem', color: '#666' }}>
+                              {room.player_count}/{room.max_players} players
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => handleJoinRoom(room.room_id)}
+                            disabled={loading || room.player_count >= room.max_players}
+                            className="action-button"
+                          >
+                            Join
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+            
+            <div className="menu-section">
+              <button onClick={() => setView('main')} className="action-button">
+                Back to Main Menu
+              </button>
+            </div>
+          </div>
+        </main>
+      </div>
+    )
+  }
+
   if (view === 'main') {
     return (
       <div className="app">
         <header>
           <h1>Catan Game</h1>
+          {user && (
+            <div style={{ marginTop: '0.5rem', fontSize: '0.9rem' }}>
+              Logged in as <strong>{user.username}</strong>
+              <button onClick={handleLogout} style={{ marginLeft: '1rem', padding: '0.25rem 0.5rem' }}>
+                Logout
+              </button>
+            </div>
+          )}
         </header>
         <main>
           <div className="main-menu">
@@ -1193,22 +1689,43 @@ function App() {
                   {loading ? 'Loading...' : 'Load Game'}
                 </button>
               </div>
-              {gameState && (
-                <div className="form-group">
-                  <label>
-                    Select Your Player:
-                    <select
-                      value={playerId}
-                      onChange={(e) => setPlayerId(e.target.value)}
-                    >
-                      <option value="">Select a player...</option>
-                      {gameState.players.map(p => (
-                        <option key={p.id} value={p.id}>{p.name} ({p.id})</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-              )}
+              {gameState && (() => {
+                // Get agent_mapping from metadata
+                const metadata = (gameState as any)._metadata || {}
+                const agentMapping = metadata.agent_mapping || {}
+                
+                // Filter out LLM agents and show only available human players
+                const availablePlayers = gameState.players.filter(p => {
+                  // Don't show if it's an LLM agent
+                  if (agentMapping[p.id]) {
+                    return false
+                  }
+                  // For now, all human players are available (we could add occupied tracking later)
+                  return true
+                })
+                
+                return (
+                  <div className="form-group">
+                    <label>
+                      Select Your Player:
+                      <select
+                        value={playerId}
+                        onChange={(e) => setPlayerId(e.target.value)}
+                      >
+                        <option value="">Select a player...</option>
+                        {availablePlayers.map(p => (
+                          <option key={p.id} value={p.id}>{p.name} ({p.id})</option>
+                        ))}
+                      </select>
+                    </label>
+                    {gameState.players.length > availablePlayers.length && (
+                      <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
+                        {gameState.players.length - availablePlayers.length} player(s) are LLM agents and cannot be selected
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
               <button 
                 onClick={handleJoinGame} 
                 disabled={loading || !gameIdInput.trim() || !playerId || !gameState}

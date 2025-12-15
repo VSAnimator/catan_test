@@ -197,6 +197,7 @@ export interface ReplayResponse {
 export interface CreateGameRequest {
   player_names: string[]
   rng_seed?: number
+  agent_mapping?: Record<string, string>  // player_id -> agent_type
 }
 
 export interface CreateGameResponse {
@@ -452,5 +453,264 @@ export async function getFeedback(gameId?: string, playerId?: string): Promise<{
   if (playerId) params.append('player_id', playerId)
   const response = await fetch(`${getApiBase()}/feedback?${params.toString()}`)
   return handleResponse<{ feedback: Feedback[] }>(response)
+}
+
+// Authentication API
+export interface User {
+  id: string
+  username: string
+  email?: string | null
+  created_at: string
+}
+
+export interface Token {
+  access_token: string
+  token_type: string
+  user: User
+}
+
+export interface RegisterRequest {
+  username: string
+  password: string
+  email?: string | null
+}
+
+export interface LoginRequest {
+  username: string
+  password: string
+}
+
+export async function register(request: RegisterRequest): Promise<Token> {
+  const response = await fetch(`${getApiBase()}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  })
+  return handleResponse<Token>(response)
+}
+
+export async function login(request: LoginRequest): Promise<Token> {
+  const response = await fetch(`${getApiBase()}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  })
+  return handleResponse<Token>(response)
+}
+
+export async function getCurrentUser(token: string): Promise<User> {
+  const response = await fetch(`${getApiBase()}/auth/me`, {
+    method: 'GET',
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    }
+  })
+  return handleResponse<User>(response)
+}
+
+// Room API
+export interface RoomPlayer {
+  user_id: string
+  username: string
+  player_id?: string | null
+  joined_at: string
+}
+
+export interface Room {
+  room_id: string
+  host_user_id: string
+  status: string
+  max_players: number
+  min_players: number
+  players: RoomPlayer[]
+  game_id?: string | null
+  created_at: string
+  is_private: boolean
+  player_count: number
+}
+
+export interface CreateRoomRequest {
+  max_players?: number
+  min_players?: number
+  is_private?: boolean
+  password?: string | null
+}
+
+export interface JoinRoomRequest {
+  password?: string | null
+}
+
+export async function createRoom(request: CreateRoomRequest, token: string): Promise<Room> {
+  const response = await fetch(`${getApiBase()}/rooms`, {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify(request)
+  })
+  return handleResponse<Room>(response)
+}
+
+export async function listRooms(): Promise<Room[]> {
+  const response = await fetch(`${getApiBase()}/rooms`)
+  return handleResponse<Room[]>(response)
+}
+
+export async function getRoom(roomId: string): Promise<Room> {
+  const response = await fetch(`${getApiBase()}/rooms/${roomId}`)
+  return handleResponse<Room>(response)
+}
+
+export async function joinRoom(roomId: string, request: JoinRoomRequest, token: string): Promise<Room> {
+  const response = await fetch(`${getApiBase()}/rooms/${roomId}/join`, {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify(request)
+  })
+  return handleResponse<Room>(response)
+}
+
+export async function leaveRoom(roomId: string, token: string): Promise<{ message: string }> {
+  const response = await fetch(`${getApiBase()}/rooms/${roomId}/leave`, {
+    method: 'POST',
+    headers: { 
+      'Authorization': `Bearer ${token}`
+    }
+  })
+  return handleResponse<{ message: string }>(response)
+}
+
+export async function getMyRooms(token: string): Promise<Room[]> {
+  const response = await fetch(`${getApiBase()}/rooms/user/my-rooms`, {
+    method: 'GET',
+    headers: { 
+      'Authorization': `Bearer ${token}`
+    }
+  })
+  return handleResponse<Room[]>(response)
+}
+
+export async function startGameFromRoom(roomId: string, token: string): Promise<{ game_id: string; room: Room; initial_state: GameState }> {
+  const response = await fetch(`${getApiBase()}/rooms/${roomId}/start`, {
+    method: 'POST',
+    headers: { 
+      'Authorization': `Bearer ${token}`
+    }
+  })
+  return handleResponse<{ game_id: string; room: Room; initial_state: GameState }>(response)
+}
+
+// WebSocket client helper
+export class GameWebSocket {
+  private ws: WebSocket | null = null
+  private gameId: string
+  private token: string | null
+  private onMessage: (data: any) => void
+  private onError: (error: Error) => void
+  private reconnectAttempts = 0
+  private maxReconnectAttempts = 5
+  private reconnectDelay = 1000
+
+  constructor(
+    gameId: string,
+    token: string | null,
+    onMessage: (data: any) => void,
+    onError: (error: Error) => void
+  ) {
+    this.gameId = gameId
+    this.token = token
+    this.onMessage = onMessage
+    this.onError = onError
+  }
+
+  connect(): void {
+    const port = getBackendPort()
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const wsUrl = `${protocol}//localhost:${port}/api/ws/game/${this.gameId}${this.token ? `?token=${encodeURIComponent(this.token)}` : ''}`
+    
+    console.log('Connecting to WebSocket:', wsUrl)
+    
+    try {
+      this.ws = new WebSocket(wsUrl)
+      
+      this.ws.onopen = () => {
+        console.log('WebSocket connected')
+        this.reconnectAttempts = 0
+        // Send ping to keep connection alive
+        this.startHeartbeat()
+      }
+      
+      this.ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data.type === 'pong') {
+            return // Ignore pong responses
+          }
+          this.onMessage(data)
+        } catch (e) {
+          console.error('Error parsing WebSocket message:', e)
+        }
+      }
+      
+      this.ws.onerror = (error) => {
+        console.error('WebSocket error:', error)
+        this.onError(new Error('WebSocket connection error'))
+      }
+      
+      this.ws.onclose = () => {
+        console.log('WebSocket disconnected')
+        // Attempt to reconnect
+        if (this.reconnectAttempts < this.maxReconnectAttempts) {
+          this.reconnectAttempts++
+          setTimeout(() => {
+            console.log(`Reconnecting... (attempt ${this.reconnectAttempts})`)
+            this.connect()
+          }, this.reconnectDelay * this.reconnectAttempts)
+        } else {
+          this.onError(new Error('WebSocket connection lost and reconnection failed'))
+        }
+      }
+    } catch (error) {
+      console.error('Error creating WebSocket:', error)
+      this.onError(new Error('Failed to create WebSocket connection'))
+    }
+  }
+
+  private heartbeatInterval: number | null = null
+
+  private startHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval)
+    }
+    this.heartbeatInterval = window.setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: 'ping' }))
+      }
+    }, 30000) // Send ping every 30 seconds
+  }
+
+  disconnect(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval)
+      this.heartbeatInterval = null
+    }
+    if (this.ws) {
+      this.ws.close()
+      this.ws = null
+    }
+  }
+
+  send(message: any): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(message))
+    } else {
+      console.warn('WebSocket is not open')
+    }
+  }
 }
 

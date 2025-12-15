@@ -1,6 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.routes import router
+from api.auth_routes import router as auth_router
+from api.room_routes import router as room_router
+from api.websocket_routes import router as websocket_router
 from api.database import init_db
 
 # Initialize database on startup
@@ -30,6 +33,9 @@ app.add_middleware(
 )
 
 app.include_router(router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
+app.include_router(room_router, prefix="/api")
+app.include_router(websocket_router, prefix="/api")
 
 @app.get("/")
 async def root():

@@ -81,6 +81,7 @@ class CreateGameRequest(BaseModel):
     """Request to create a new game."""
     player_names: List[str]
     rng_seed: Optional[int] = None  # Optional RNG seed for reproducibility
+    agent_mapping: Optional[Dict[str, str]] = None  # player_id -> agent_type (e.g., "llm", "behavior_tree")
 
 
 class CreateGameResponse(BaseModel):
@@ -181,6 +182,11 @@ async def create_game(request: CreateGameRequest):
         "player_names": final_names,
         "num_players": len(final_names),
     }
+    
+    # Add agent_mapping to metadata if provided
+    if request.agent_mapping:
+        metadata["agent_mapping"] = request.agent_mapping
+    
     create_game_in_db(
         game_id,
         rng_seed=rng_seed,
@@ -188,9 +194,13 @@ async def create_game(request: CreateGameRequest):
         initial_state_json=serialized_state,
     )
     
+    # Add metadata to response so frontend can restore agent_mapping
+    response_state = serialized_state.copy()
+    response_state["_metadata"] = metadata
+    
     return CreateGameResponse(
         game_id=game_id,
-        initial_state=serialized_state
+        initial_state=response_state
     )
 
 
@@ -288,6 +298,21 @@ async def act(game_id: str, request: ActRequest):
     player = next((p for p in current_state.players if p.id == request.player_id), None)
     if not player:
         raise HTTPException(status_code=400, detail=f"Player {request.player_id} not found in game")
+    
+    # Check if player is an LLM agent (prevent human from playing as agent)
+    game_metadata = {}
+    if game_row["metadata"]:
+        try:
+            game_metadata = json.loads(game_row["metadata"])
+        except:
+            pass
+    
+    agent_mapping = game_metadata.get("agent_mapping", {})
+    if request.player_id in agent_mapping:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Player {request.player_id} is an LLM agent and cannot be controlled by a human player"
+        )
     
     # Verify it's the player's turn (if in playing phase)
     # Exception: When a 7 is rolled, any player with 8+ resources can discard
@@ -395,6 +420,18 @@ async def act(game_id: str, request: ActRequest):
         legal_actions_text=legal_actions_text,
         chosen_action_text=chosen_action_text,
     )
+    
+    # Broadcast WebSocket update to all connected clients
+    try:
+        from .websocket_manager import connection_manager
+        # Broadcast in background (non-blocking)
+        await connection_manager.broadcast_to_game(game_id, {
+            "type": "game_state_update",
+            "data": state_after
+        })
+    except Exception as e:
+        # Don't fail the request if WebSocket broadcast fails
+        print(f"WebSocket broadcast error: {e}")
     
     return ActResponse(new_state=state_after)
 
@@ -831,9 +868,38 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
             player_id=None
         )
     
-    # Only run step if current player has an agent
-    if current_player.id not in agents:
-        # Current player is human - don't auto-advance
+    # Special case: when a 7 is rolled, check if any agent needs to discard
+    # Agents can discard even if it's not their turn, so we need to check this
+    # BEFORE checking if current player is an agent
+    should_advance = False
+    if current_player.id in agents:
+        # Current player is an agent - always advance
+        should_advance = True
+    elif (current_state.phase == "playing" and 
+          current_state.dice_roll == 7 and
+          not current_state.waiting_for_robber_move and
+          not current_state.waiting_for_robber_steal):
+        # Check if we're still in discard phase (robber hasn't been moved)
+        robber_has_been_moved = (
+            current_state.robber_initial_tile_id is not None and 
+            current_state.robber_tile_id != current_state.robber_initial_tile_id
+        )
+        
+        if not robber_has_been_moved:
+            # Check if any agent needs to discard
+            agents_needing_discard = [
+                p for p in current_state.players
+                if (sum(p.resources.values()) >= 8 and 
+                    p.id not in current_state.players_discarded and
+                    p.id in agents)
+            ]
+            
+            if agents_needing_discard:
+                # There's an agent who needs to discard - run_step will handle it
+                should_advance = True
+    
+    if not should_advance:
+        # Current player is human and no agents need to discard - don't auto-advance
         return WatchAgentsResponse(
             game_id=game_id,
             game_continues=True,
@@ -842,7 +908,7 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
             player_id=None
         )
     
-    # Run a single step (agent's turn)
+    # Run a single step (agent's turn, or agent discard if needed)
     new_state, game_continues, error, player_id = runner.run_step(save_state_callback=save_state_callback)
     
     # Extract reasoning from the last saved action (if available)

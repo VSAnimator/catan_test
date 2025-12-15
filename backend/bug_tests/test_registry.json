@@ -29,6 +29,23 @@
         "discard",
         "verification"
       ]
+    },
+    {
+      "test_id": "test_agent_discard_auto_advance",
+      "game_id": "f226af0d-26c5-4711-a12c-0fa22c8ada32",
+      "step_id": 0,
+      "description": "Agent discard auto-advance: Verify agents automatically discard when 7 is rolled, even if current player is human",
+      "expected_behavior": "watch_agents_step should process agent discards even when current player is human. Agents with 8+ resources should automatically discard when a 7 is rolled.",
+      "undesired_behavior": "Game gets stuck when agent needs to discard but current player is human. watch_agents_step returns early without processing discard.",
+      "test_action": "watch_agents_step",
+      "llm_validation_prompt": null,
+      "tags": [
+        "bug",
+        "discard",
+        "roll_7",
+        "auto_advance",
+        "mixed_players"
+      ]
     }
   ]
 }
