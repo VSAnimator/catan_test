@@ -299,6 +299,9 @@ class StateConditionedAgent(BaseBehaviorTreeAgent):
         if not player_roads:
             return 0
         
+        # Build lookup map for intersections to check ownership
+        intersection_map = {inter.id: inter for inter in state.intersections}
+        
         # Build graph of connected roads
         road_graph = {}
         for road in player_roads:
@@ -312,6 +315,7 @@ class StateConditionedAgent(BaseBehaviorTreeAgent):
             road_graph[inter2].append(inter1)
         
         # Find longest path using DFS
+        # Road paths cannot go through intersections owned by other players
         max_length = 0
         
         def dfs_path_length(node: int, visited_nodes: set, visited_edges: set) -> int:
@@ -319,6 +323,13 @@ class StateConditionedAgent(BaseBehaviorTreeAgent):
             for neighbor in road_graph.get(node, []):
                 edge_key = (min(node, neighbor), max(node, neighbor))
                 if edge_key not in visited_edges:
+                    # Check if neighbor intersection is owned by a different player
+                    # If so, the road path cannot continue through it
+                    neighbor_inter = intersection_map.get(neighbor)
+                    if neighbor_inter and neighbor_inter.owner is not None and neighbor_inter.owner != player_id:
+                        # Road path is broken at this intersection, don't continue
+                        continue
+                    
                     visited_edges.add(edge_key)
                     if neighbor not in visited_nodes:
                         path_len = 1 + dfs_path_length(neighbor, visited_nodes | {neighbor}, visited_edges)
@@ -326,6 +337,7 @@ class StateConditionedAgent(BaseBehaviorTreeAgent):
                     visited_edges.remove(edge_key)
             return max_path
         
+        # You can start from any intersection, but paths cannot continue through opponent-owned intersections
         for start_node in road_graph.keys():
             path_len = dfs_path_length(start_node, {start_node}, set())
             max_length = max(max_length, path_len)

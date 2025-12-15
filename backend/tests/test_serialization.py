@@ -151,17 +151,13 @@ def test_serialize_deserialize_action_payload_roundtrip():
         BuildCityPayload(intersection_id=15),
         PlayDevCardPayload(card_type="knight"),
         TradeBankPayload(
-            give_resource=ResourceType.WOOD,
-            give_amount=4,
-            receive_resource=ResourceType.BRICK,
-            receive_amount=1,
+            give_resources={ResourceType.WOOD: 4},
+            receive_resources={ResourceType.BRICK: 1},
         ),
         TradePlayerPayload(
             other_player_id="player_1",
-            give_resource=ResourceType.WHEAT,
-            give_amount=2,
-            receive_resource=ResourceType.ORE,
-            receive_amount=2,
+            give_resources={ResourceType.WHEAT: 2},
+            receive_resources={ResourceType.ORE: 2},
         ),
     ]
     
@@ -183,17 +179,14 @@ def test_serialize_deserialize_action_payload_roundtrip():
             assert deserialized.card_type == payload.card_type
         elif isinstance(payload, TradeBankPayload):
             assert isinstance(deserialized, TradeBankPayload)
-            assert deserialized.give_resource == payload.give_resource
-            assert deserialized.give_amount == payload.give_amount
-            assert deserialized.receive_resource == payload.receive_resource
-            assert deserialized.receive_amount == payload.receive_amount
+            assert deserialized.give_resources == payload.give_resources
+            assert deserialized.receive_resources == payload.receive_resources
+            assert deserialized.port_intersection_id == payload.port_intersection_id
         elif isinstance(payload, TradePlayerPayload):
             assert isinstance(deserialized, TradePlayerPayload)
             assert deserialized.other_player_id == payload.other_player_id
-            assert deserialized.give_resource == payload.give_resource
-            assert deserialized.give_amount == payload.give_amount
-            assert deserialized.receive_resource == payload.receive_resource
-            assert deserialized.receive_amount == payload.receive_amount
+            assert deserialized.give_resources == payload.give_resources
+            assert deserialized.receive_resources == payload.receive_resources
 
 
 def test_state_to_text_deterministic():

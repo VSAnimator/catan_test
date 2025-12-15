@@ -11,7 +11,7 @@ client = TestClient(app)
 def test_create_game():
     """Test creating a new game."""
     response = client.post(
-        "/games",
+        "/api/games",
         json={"player_names": ["Alice", "Bob"]}
     )
     
@@ -30,14 +30,14 @@ def test_create_game_invalid_player_count():
     """Test creating a game with invalid player count."""
     # Too few players
     response = client.post(
-        "/games",
+        "/api/games",
         json={"player_names": ["Alice"]}
     )
     assert response.status_code == 400
     
     # Too many players
     response = client.post(
-        "/games",
+        "/api/games",
         json={"player_names": ["Alice", "Bob", "Charlie", "David", "Eve"]}
     )
     assert response.status_code == 400
@@ -47,13 +47,13 @@ def test_get_game():
     """Test getting a game state."""
     # First create a game
     create_response = client.post(
-        "/games",
+        "/api/games",
         json={"player_names": ["Alice", "Bob"]}
     )
     game_id = create_response.json()["game_id"]
     
     # Then get it
-    response = client.get(f"/games/{game_id}")
+    response = client.get(f"/api/games/{game_id}")
     
     assert response.status_code == 200
     data = response.json()
@@ -64,7 +64,7 @@ def test_get_game():
 
 def test_get_game_not_found():
     """Test getting a non-existent game."""
-    response = client.get("/games/nonexistent")
+    response = client.get("/api/games/nonexistent")
     assert response.status_code == 404
 
 
@@ -72,7 +72,7 @@ def test_act_roll_dice():
     """Test performing a roll_dice action."""
     # Create a game
     create_response = client.post(
-        "/games",
+        "/api/games",
         json={"player_names": ["Alice", "Bob"]}
     )
     game_id = create_response.json()["game_id"]
@@ -80,7 +80,7 @@ def test_act_roll_dice():
     # Start the game first (need to create board)
     # We need to call START_GAME action first
     act_response = client.post(
-        f"/games/{game_id}/act",
+        f"/api/games/{game_id}/act",
         json={
             "player_id": "player_0",
             "action": {
@@ -92,7 +92,7 @@ def test_act_roll_dice():
     
     # Now roll dice
     act_response = client.post(
-        f"/games/{game_id}/act",
+        f"/api/games/{game_id}/act",
         json={
             "player_id": "player_0",
             "action": {
@@ -114,14 +114,14 @@ def test_act_invalid_player():
     """Test performing an action with invalid player."""
     # Create a game
     create_response = client.post(
-        "/games",
+        "/api/games",
         json={"player_names": ["Alice", "Bob"]}
     )
     game_id = create_response.json()["game_id"]
     
     # Try to act with non-existent player
     response = client.post(
-        f"/games/{game_id}/act",
+        f"/api/games/{game_id}/act",
         json={
             "player_id": "player_999",
             "action": {
@@ -138,14 +138,14 @@ def test_act_wrong_turn():
     """Test performing an action when it's not the player's turn."""
     # Create a game
     create_response = client.post(
-        "/games",
+        "/api/games",
         json={"player_names": ["Alice", "Bob"]}
     )
     game_id = create_response.json()["game_id"]
     
     # Try to act with player_1 when it's player_0's turn
     response = client.post(
-        f"/games/{game_id}/act",
+        f"/api/games/{game_id}/act",
         json={
             "player_id": "player_1",
             "action": {
@@ -162,13 +162,13 @@ def test_replay():
     """Test getting game replay logs."""
     # Create a game
     create_response = client.post(
-        "/games",
+        "/api/games",
         json={"player_names": ["Alice", "Bob"]}
     )
     game_id = create_response.json()["game_id"]
     
     # Initially, replay should be empty
-    replay_response = client.get(f"/games/{game_id}/replay")
+    replay_response = client.get(f"/api/games/{game_id}/replay")
     assert replay_response.status_code == 200
     data = replay_response.json()
     assert data["game_id"] == game_id
@@ -176,7 +176,7 @@ def test_replay():
     
     # Perform an action
     act_response = client.post(
-        f"/games/{game_id}/act",
+        f"/api/games/{game_id}/act",
         json={
             "player_id": "player_0",
             "action": {
@@ -188,7 +188,7 @@ def test_replay():
     assert act_response.status_code == 200
     
     # Now replay should have one step
-    replay_response = client.get(f"/games/{game_id}/replay")
+    replay_response = client.get(f"/api/games/{game_id}/replay")
     assert replay_response.status_code == 200
     data = replay_response.json()
     assert len(data["steps"]) == 1
@@ -202,7 +202,7 @@ def test_replay():
 
 def test_replay_not_found():
     """Test getting replay for non-existent game."""
-    response = client.get("/games/nonexistent/replay")
+    response = client.get("/api/games/nonexistent/replay")
     assert response.status_code == 404
 
 
@@ -210,21 +210,21 @@ def test_happy_path_full_flow():
     """Test a complete happy path: create game, start, roll dice, end turn."""
     # Create game
     create_response = client.post(
-        "/games",
+        "/api/games",
         json={"player_names": ["Alice", "Bob"]}
     )
     assert create_response.status_code == 200
     game_id = create_response.json()["game_id"]
     
     # Get initial state
-    get_response = client.get(f"/games/{game_id}")
+    get_response = client.get(f"/api/games/{game_id}")
     assert get_response.status_code == 200
     initial_state = get_response.json()
     assert initial_state["phase"] == "setup"
     
     # Start game
     act_response = client.post(
-        f"/games/{game_id}/act",
+        f"/api/games/{game_id}/act",
         json={
             "player_id": "player_0",
             "action": {
@@ -240,7 +240,7 @@ def test_happy_path_full_flow():
     
     # Roll dice
     act_response = client.post(
-        f"/games/{game_id}/act",
+        f"/api/games/{game_id}/act",
         json={
             "player_id": "player_0",
             "action": {
@@ -255,7 +255,7 @@ def test_happy_path_full_flow():
     
     # End turn
     act_response = client.post(
-        f"/games/{game_id}/act",
+        f"/api/games/{game_id}/act",
         json={
             "player_id": "player_0",
             "action": {
@@ -269,7 +269,7 @@ def test_happy_path_full_flow():
     assert state_after_end["current_player_index"] == 1  # Should be Bob's turn now
     
     # Check replay has all steps
-    replay_response = client.get(f"/games/{game_id}/replay")
+    replay_response = client.get(f"/api/games/{game_id}/replay")
     assert replay_response.status_code == 200
     steps = replay_response.json()["steps"]
     assert len(steps) == 3  # start_game, roll_dice, end_turn

@@ -1462,6 +1462,9 @@ def _calculate_longest_road_length(state: GameState, player_id: str) -> int:
     if not player_roads:
         return 0
     
+    # Build lookup map for intersections to check ownership
+    intersection_map = {inter.id: inter for inter in state.intersections}
+    
     # Build graph of connected roads
     road_graph = {}
     for road in player_roads:
@@ -1477,6 +1480,7 @@ def _calculate_longest_road_length(state: GameState, player_id: str) -> int:
     # Find longest path using DFS
     # The longest path in an undirected graph (without cycles) is found by
     # doing DFS from each node and tracking the longest path found
+    # Road paths cannot go through intersections owned by other players
     max_length = 0
     
     def dfs_path_length(node: int, visited_edges: set) -> int:
@@ -1485,6 +1489,13 @@ def _calculate_longest_road_length(state: GameState, player_id: str) -> int:
         for neighbor in road_graph.get(node, []):
             edge_key = (min(node, neighbor), max(node, neighbor))
             if edge_key not in visited_edges:
+                # Check if neighbor intersection is owned by a different player
+                # If so, the road path cannot continue through it
+                neighbor_inter = intersection_map.get(neighbor)
+                if neighbor_inter and neighbor_inter.owner is not None and neighbor_inter.owner != player_id:
+                    # Road path is broken at this intersection, don't continue
+                    continue
+                
                 visited_edges.add(edge_key)
                 # Continue path from neighbor
                 path_len = 1 + dfs_path_length(neighbor, visited_edges)
@@ -1493,6 +1504,7 @@ def _calculate_longest_road_length(state: GameState, player_id: str) -> int:
         return max_path
     
     # Try starting from each node to find the longest path
+    # You can start from any intersection, but paths cannot continue through opponent-owned intersections
     for start_node in road_graph.keys():
         path_len = dfs_path_length(start_node, set())
         max_length = max(max_length, path_len)
