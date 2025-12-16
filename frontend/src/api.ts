@@ -59,7 +59,19 @@ async function detectBackendPort(): Promise<number> {
 
 // Getter function for API_BASE that always uses current port
 function getApiBase(): string {
-  return `http://localhost:${getBackendPort()}/api`
+  // In production, use environment variable or same origin (when behind nginx proxy)
+  const apiUrl = import.meta.env.VITE_API_URL
+  if (apiUrl) {
+    return `${apiUrl}/api`
+  }
+  
+  // In development, use localhost with port detection
+  if (import.meta.env.DEV) {
+    return `http://localhost:${getBackendPort()}/api`
+  }
+  
+  // In production build without env var, assume same origin (nginx proxy)
+  return '/api'
 }
 
 // Auto-detect backend port on module load (non-blocking)
@@ -509,6 +521,28 @@ export async function getCurrentUser(token: string): Promise<User> {
   return handleResponse<User>(response)
 }
 
+export async function logout(token: string): Promise<{ message: string }> {
+  const response = await fetch(`${getApiBase()}/auth/logout`, {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    }
+  })
+  return handleResponse<{ message: string }>(response)
+}
+
+export async function refreshToken(token: string): Promise<Token> {
+  const response = await fetch(`${getApiBase()}/auth/refresh`, {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    }
+  })
+  return handleResponse<Token>(response)
+}
+
 // Room API
 export interface RoomPlayer {
   user_id: string
@@ -613,8 +647,11 @@ export class GameWebSocket {
   private onMessage: (data: any) => void
   private onError: (error: Error) => void
   private reconnectAttempts = 0
-  private maxReconnectAttempts = 5
-  private reconnectDelay = 1000
+  private maxReconnectAttempts = 10
+  private baseReconnectDelay = 1000  // Start with 1 second
+  private maxReconnectDelay = 30000  // Max 30 seconds
+  private reconnectTimeout: number | null = null
+  private isManualDisconnect = false
 
   constructor(
     gameId: string,
@@ -629,9 +666,25 @@ export class GameWebSocket {
   }
 
   connect(): void {
-    const port = getBackendPort()
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//localhost:${port}/api/ws/game/${this.gameId}${this.token ? `?token=${encodeURIComponent(this.token)}` : ''}`
+    // Determine WebSocket URL
+    let wsUrl: string
+    const apiUrl = import.meta.env.VITE_API_URL
+    
+    if (apiUrl) {
+      // Use environment variable
+      const protocol = apiUrl.startsWith('https') ? 'wss:' : 'ws:'
+      const host = apiUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')
+      wsUrl = `${protocol}//${host}/api/ws/game/${this.gameId}${this.token ? `?token=${encodeURIComponent(this.token)}` : ''}`
+    } else if (import.meta.env.DEV) {
+      // Development: use localhost with port detection
+      const port = getBackendPort()
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      wsUrl = `${protocol}//localhost:${port}/api/ws/game/${this.gameId}${this.token ? `?token=${encodeURIComponent(this.token)}` : ''}`
+    } else {
+      // Production: use same origin (nginx proxy)
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      wsUrl = `${protocol}//${window.location.host}/api/ws/game/${this.gameId}${this.token ? `?token=${encodeURIComponent(this.token)}` : ''}`
+    }
     
     console.log('Connecting to WebSocket:', wsUrl)
     
@@ -662,17 +715,33 @@ export class GameWebSocket {
         this.onError(new Error('WebSocket connection error'))
       }
       
-      this.ws.onclose = () => {
-        console.log('WebSocket disconnected')
-        // Attempt to reconnect
+      this.ws.onclose = (event) => {
+        console.log('WebSocket disconnected', { code: event.code, reason: event.reason, wasClean: event.wasClean })
+        
+        // Don't reconnect if manually disconnected
+        if (this.isManualDisconnect) {
+          this.isManualDisconnect = false
+          return
+        }
+        
+        // Attempt to reconnect with exponential backoff
         if (this.reconnectAttempts < this.maxReconnectAttempts) {
           this.reconnectAttempts++
-          setTimeout(() => {
+          // Exponential backoff: baseDelay * 2^(attempt-1), capped at maxReconnectDelay
+          const delay = Math.min(
+            this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
+            this.maxReconnectDelay
+          )
+          
+          console.log(`Reconnecting in ${delay}ms... (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})`)
+          
+          this.reconnectTimeout = window.setTimeout(() => {
             console.log(`Reconnecting... (attempt ${this.reconnectAttempts})`)
             this.connect()
-          }, this.reconnectDelay * this.reconnectAttempts)
+          }, delay)
         } else {
-          this.onError(new Error('WebSocket connection lost and reconnection failed'))
+          console.error('Max reconnection attempts reached')
+          this.onError(new Error('WebSocket connection lost and reconnection failed after multiple attempts'))
         }
       }
     } catch (error) {
@@ -695,14 +764,43 @@ export class GameWebSocket {
   }
 
   disconnect(): void {
+    this.isManualDisconnect = true
+    
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout)
+      this.reconnectTimeout = null
+    }
+    
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval)
       this.heartbeatInterval = null
     }
+    
     if (this.ws) {
       this.ws.close()
       this.ws = null
     }
+    
+    this.reconnectAttempts = 0
+  }
+  
+  reconnect(): void {
+    // Reset reconnection attempts and manually trigger reconnect
+    this.reconnectAttempts = 0
+    this.isManualDisconnect = false
+    if (this.ws) {
+      this.ws.close()
+    } else {
+      this.connect()
+    }
+  }
+  
+  isConnected(): boolean {
+    return this.ws !== null && this.ws.readyState === WebSocket.OPEN
+  }
+  
+  getReconnectAttempts(): number {
+    return this.reconnectAttempts
   }
 
   send(message: any): void {

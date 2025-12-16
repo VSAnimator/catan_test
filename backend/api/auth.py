@@ -9,11 +9,17 @@ from pydantic import BaseModel
 from fastapi import HTTPException, status
 import secrets
 import hashlib
+import os
+from dotenv import load_dotenv
+from .database import get_db_connection
 
-# Secret key for JWT (in production, use environment variable)
-SECRET_KEY = secrets.token_urlsafe(32)
+# Load environment variables
+load_dotenv()
+
+# Secret key for JWT (from environment variable, fallback to generated)
+SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_urlsafe(32)
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "10080"))  # Default 7 days
 
 
 class User(BaseModel):
@@ -47,10 +53,6 @@ class LoginRequest(BaseModel):
     """User login request."""
     username: str
     password: str
-
-
-# In-memory user storage (in production, use a database)
-_users_db: dict[str, UserInDB] = {}
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -87,16 +89,51 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 
 def get_user_by_username(username: str) -> Optional[UserInDB]:
     """Get user by username from database."""
-    # Find user by username (case-insensitive)
-    for user_id, user in _users_db.items():
-        if user.username.lower() == username.lower():
-            return user
-    return None
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Case-insensitive search
+    cursor.execute("""
+        SELECT id, username, email, hashed_password, created_at
+        FROM users
+        WHERE LOWER(username) = LOWER(?)
+    """, (username,))
+    
+    row = cursor.fetchone()
+    if not row:
+        return None
+    
+    return UserInDB(
+        id=row['id'],
+        username=row['username'],
+        email=row['email'],
+        hashed_password=row['hashed_password'],
+        created_at=row['created_at']
+    )
 
 
 def get_user_by_id(user_id: str) -> Optional[UserInDB]:
     """Get user by ID from database."""
-    return _users_db.get(user_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT id, username, email, hashed_password, created_at
+        FROM users
+        WHERE id = ?
+    """, (user_id,))
+    
+    row = cursor.fetchone()
+    if not row:
+        return None
+    
+    return UserInDB(
+        id=row['id'],
+        username=row['username'],
+        email=row['email'],
+        hashed_password=row['hashed_password'],
+        created_at=row['created_at']
+    )
 
 
 def create_user(username: str, password: str, email: Optional[str] = None) -> UserInDB:
@@ -111,18 +148,31 @@ def create_user(username: str, password: str, email: Optional[str] = None) -> Us
     # Generate user ID
     user_id = hashlib.sha256(f"{username}{datetime.utcnow().isoformat()}".encode()).hexdigest()[:16]
     
-    # Create user
+    # Create user in database
     hashed_password = get_password_hash(password)
-    user = UserInDB(
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            INSERT INTO users (id, username, email, hashed_password, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (user_id, username, email, hashed_password, datetime.utcnow().isoformat()))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to create user: {str(e)}"
+        )
+    
+    return UserInDB(
         id=user_id,
         username=username,
         email=email,
         hashed_password=hashed_password,
         created_at=datetime.utcnow().isoformat()
     )
-    
-    _users_db[user_id] = user
-    return user
 
 
 def authenticate_user(username: str, password: str) -> Optional[UserInDB]:

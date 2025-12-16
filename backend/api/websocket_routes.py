@@ -9,8 +9,12 @@ from .websocket_manager import connection_manager
 from .auth import get_current_user, verify_token
 from .game_rooms import room_manager
 from .database import get_latest_state, save_game_state, add_step, get_game as get_game_from_db
+from .logging_config import get_logger, activity_logger
+from .monitoring import websocket_connections
 from engine import deserialize_game_state, serialize_game_state, legal_actions
 import random
+
+logger = get_logger("websocket")
 
 router = APIRouter()
 
@@ -33,30 +37,33 @@ async def websocket_game_endpoint(websocket: WebSocket, game_id: str, token: Opt
         
         # Connect to game
         await connection_manager.connect(websocket, game_id, user_id)
-        print(f"WebSocket connected for game {game_id}, user {user_id}")
+        websocket_connections.labels(game_id=game_id).inc()
+        logger.info("websocket_connected", game_id=game_id, user_id=user_id)
+        activity_logger.log_websocket_event("connected", game_id, user_id)
         
-        # Send initial game state
+        # Send initial game state (restore from database on reconnect)
         try:
-            print(f"Fetching game state for {game_id}")
+            logger.debug("fetching_game_state", game_id=game_id)
             state_json = get_latest_state(game_id)
-            print(f"Got game state: {state_json is not None}")
             if state_json:
-                print(f"Sending initial game state, size: {len(str(state_json))}")
+                logger.debug("sending_initial_state", game_id=game_id, state_size=len(str(state_json)))
                 await connection_manager.send_personal_message({
                     "type": "game_state",
                     "data": state_json
                 }, websocket)
-                print("Initial game state sent successfully")
+                logger.info("initial_state_sent", game_id=game_id)
+                activity_logger.log_websocket_event("state_restored", game_id, user_id, {"restored": True})
             else:
-                print(f"Game {game_id} not found")
+                logger.warning("game_not_found", game_id=game_id)
                 await connection_manager.send_personal_message({
                     "type": "error",
                     "message": "Game not found"
                 }, websocket)
                 await connection_manager.disconnect(websocket)
+                websocket_connections.labels(game_id=game_id).dec()
                 return
         except Exception as e:
-            print(f"Error sending initial state: {e}")
+            logger.error("error_sending_initial_state", game_id=game_id, error=str(e))
             import traceback
             traceback.print_exc()
             try:
@@ -103,10 +110,11 @@ async def websocket_game_endpoint(websocket: WebSocket, game_id: str, token: Opt
                         "message": f"Unknown message type: {message_type}"
                     }, websocket)
             except WebSocketDisconnect:
-                print(f"WebSocket disconnected for game {game_id}")
+                logger.info("websocket_disconnected", game_id=game_id, user_id=user_id)
+                activity_logger.log_websocket_event("disconnected", game_id, user_id)
                 break
             except Exception as e:
-                print(f"Error processing WebSocket message: {e}")
+                logger.error("websocket_message_error", game_id=game_id, error=str(e))
                 import traceback
                 traceback.print_exc()
                 try:
@@ -119,13 +127,15 @@ async def websocket_game_endpoint(websocket: WebSocket, game_id: str, token: Opt
                 break
     
     except WebSocketDisconnect:
-        print(f"WebSocket disconnected (outer) for game {game_id}")
+        logger.info("websocket_disconnected_outer", game_id=game_id)
     except Exception as e:
-        print(f"WebSocket error (outer): {e}")
+        logger.error("websocket_error_outer", game_id=game_id, error=str(e))
         import traceback
         traceback.print_exc()
     finally:
         await connection_manager.disconnect(websocket)
+        websocket_connections.labels(game_id=game_id).dec()
+        logger.info("websocket_cleanup", game_id=game_id)
 
 
 async def broadcast_game_state_update(game_id: str, state_json: dict):

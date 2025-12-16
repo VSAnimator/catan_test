@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import './App.css'
 import {
   createGame as apiCreateGame,
@@ -15,12 +16,11 @@ import {
   register,
   login,
   getCurrentUser,
+  logout,
   createRoom,
   listRooms,
-  getRoom,
   joinRoom,
   leaveRoom,
-  getMyRooms,
   startGameFromRoom,
   GameWebSocket,
   type GameState,
@@ -29,7 +29,6 @@ import {
   type ReplayResponse,
   type QueryEventsResponse,
   type User,
-  type Token,
   type Room
 } from './api'
 
@@ -56,6 +55,9 @@ const getPipCount = (number: number): number => {
 }
 
 function App() {
+  // URL routing
+  const [searchParams, setSearchParams] = useSearchParams()
+  
   // Authentication state
   const [user, setUser] = useState<User | null>(null)
   const [token, setToken] = useState<string | null>(localStorage.getItem('auth_token'))
@@ -287,6 +289,91 @@ function App() {
         })
     }
   }, [token])
+
+  // Load game from URL on mount or when URL changes
+  useEffect(() => {
+    const gameIdFromUrl = searchParams.get('game')
+    const playerIdFromUrl = searchParams.get('player')
+    const viewFromUrl = searchParams.get('view') || 'main'
+    
+    // Only load if we have a game ID and don't already have that game loaded
+    if (gameIdFromUrl && gameIdFromUrl !== gameState?.game_id) {
+      const loadGameFromUrl = async () => {
+        setLoading(true)
+        setError(null)
+        try {
+          const data = await getGameState(gameIdFromUrl)
+          setGameState(data)
+          
+          // Restore agent_mapping from metadata if available
+          const metadata = (data as any)._metadata || {}
+          const gameAgentMapping = metadata.agent_mapping || {}
+          setAgentMapping(gameAgentMapping)
+          
+          // Filter out LLM agents when selecting player
+          const availablePlayers = data.players.filter((p: Player) => !(p.id in gameAgentMapping))
+          
+          if (availablePlayers.length > 0) {
+            // Use player ID from URL if provided and valid, otherwise use first available
+            let selectedPlayer = availablePlayers[0]
+            if (playerIdFromUrl) {
+              const urlPlayer = availablePlayers.find((p: Player) => p.id === playerIdFromUrl)
+              if (urlPlayer && !(urlPlayer.id in gameAgentMapping)) {
+                selectedPlayer = urlPlayer
+              }
+            }
+            setPlayerId(selectedPlayer.id)
+          } else {
+            setError('No available human players in this game (all are LLM agents)')
+          }
+          
+          // Set view from URL
+          if (viewFromUrl === 'game' || viewFromUrl === 'replay') {
+            setView(viewFromUrl as View)
+          }
+        } catch (err) {
+          setError(err instanceof Error ? err.message : 'Failed to load game from URL')
+          // Clear invalid game ID from URL
+          const newParams = new URLSearchParams(searchParams)
+          newParams.delete('game')
+          setSearchParams(newParams, { replace: true })
+        } finally {
+          setLoading(false)
+        }
+      }
+      
+      loadGameFromUrl()
+    }
+  }, [searchParams]) // Only run when URL params change
+
+  // Sync URL with game state
+  useEffect(() => {
+    if (gameState && view === 'game') {
+      const newParams = new URLSearchParams(searchParams)
+      newParams.set('game', gameState.game_id)
+      if (playerId) {
+        newParams.set('player', playerId)
+      }
+      newParams.set('view', 'game')
+      setSearchParams(newParams, { replace: true })
+    } else if (view === 'replay' && replayData) {
+      const newParams = new URLSearchParams(searchParams)
+      newParams.set('game', replayData.game_id)
+      newParams.set('view', 'replay')
+      setSearchParams(newParams, { replace: true })
+    } else if (view === 'main' || view === 'login') {
+      // Clear game params when not in game view
+      const newParams = new URLSearchParams(searchParams)
+      newParams.delete('game')
+      newParams.delete('player')
+      if (view === 'main') {
+        newParams.set('view', 'main')
+      } else {
+        newParams.delete('view')
+      }
+      setSearchParams(newParams, { replace: true })
+    }
+  }, [gameState?.game_id, playerId, view, replayData?.game_id])
 
   // WebSocket connection management
   useEffect(() => {
@@ -529,6 +616,7 @@ function App() {
       )
       setPlayerId(firstNonAgentPlayer?.id || response.initial_state.players[0]?.id || '')
       setView('game')
+      // URL will be updated by the sync effect
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
     } finally {
@@ -563,8 +651,48 @@ function App() {
       } else {
         setError('No available human players in this game (all are LLM agents)')
       }
+      // URL will be updated by the sync effect
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
+    } finally {
+      setLoading(false)
+    }
+  }
+  
+  // Reconnect to game function (can be called manually or from URL)
+  const reconnectToGame = async (gameId: string, playerIdParam?: string) => {
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await getGameState(gameId)
+      setGameState(data)
+      
+      // Restore agent_mapping from metadata if available
+      const metadata = (data as any)._metadata || {}
+      const gameAgentMapping = metadata.agent_mapping || {}
+      setAgentMapping(gameAgentMapping)
+      
+      // Filter out LLM agents when selecting player
+      const availablePlayers = data.players.filter((p: Player) => !(p.id in gameAgentMapping))
+      
+      if (availablePlayers.length > 0) {
+        let selectedPlayer = availablePlayers[0]
+        if (playerIdParam) {
+          const paramPlayer = availablePlayers.find((p: Player) => p.id === playerIdParam)
+          if (paramPlayer && !(paramPlayer.id in gameAgentMapping)) {
+            selectedPlayer = paramPlayer
+          }
+        }
+        setPlayerId(selectedPlayer.id)
+      } else {
+        setError('No available human players in this game (all are LLM agents)')
+        return
+      }
+      
+      setView('game')
+      // URL will be updated by the sync effect
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to reconnect to game')
     } finally {
       setLoading(false)
     }
@@ -1267,7 +1395,15 @@ function App() {
     }
   }
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    if (token) {
+      try {
+        await logout(token)
+      } catch (err) {
+        // Continue with logout even if API call fails
+        console.error('Logout API call failed:', err)
+      }
+    }
     setToken(null)
     setUser(null)
     localStorage.removeItem('auth_token')
@@ -1276,6 +1412,8 @@ function App() {
       wsRef.current.disconnect()
       wsRef.current = null
     }
+    // Clear URL params
+    setSearchParams({}, { replace: true })
   }
 
   // Room handlers
@@ -2867,6 +3005,40 @@ function App() {
           {activePlayer && (
             <div>
               <strong>Current Player:</strong> {activePlayer.name}
+            </div>
+          )}
+          {gameState && (
+            <div>
+              <button
+                onClick={async () => {
+                  if (!gameState?.game_id) return
+                  setLoading(true)
+                  setError(null)
+                  try {
+                    await reconnectToGame(gameState.game_id, playerId)
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Failed to reconnect')
+                  } finally {
+                    setLoading(false)
+                  }
+                }}
+                disabled={loading}
+                className="action-button"
+                style={{ 
+                  padding: '0.25rem 0.5rem',
+                  fontSize: '0.85rem',
+                  backgroundColor: '#2196F3',
+                  color: 'white'
+                }}
+                title="Reconnect to game and refresh state"
+              >
+                🔄 Reconnect
+              </button>
+            </div>
+          )}
+          {wsRef.current && (
+            <div style={{ fontSize: '0.85rem', color: wsRef.current.isConnected() ? '#4CAF50' : '#d32f2f' }}>
+              {wsRef.current.isConnected() ? '🟢 Connected' : `🔴 Disconnected (${wsRef.current.getReconnectAttempts()} attempts)`}
             </div>
           )}
         </div>

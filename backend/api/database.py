@@ -84,6 +84,22 @@ def init_db():
         )
     """)
     
+    # Create users table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            email TEXT,
+            hashed_password TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Create index on username for faster lookups
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)
+    """)
+    
     # Create steps table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS steps (
