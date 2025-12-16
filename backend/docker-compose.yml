@@ -4,15 +4,24 @@ services:
   backend:
     build: .
     container_name: catan-backend
+    env_file:
+      - .env
     environment:
-      - ENVIRONMENT=production
+      - ENVIRONMENT=development
       - SECRET_KEY=${SECRET_KEY}
       - CORS_ORIGINS=${CORS_ORIGINS}
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-10080}
       - SENTRY_DSN=${SENTRY_DSN}
       - ENABLE_CSRF=${ENABLE_CSRF:-false}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-gpt-5.1}
     volumes:
       - ./catan.db:/app/catan.db
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]

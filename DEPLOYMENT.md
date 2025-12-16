@@ -11,37 +11,94 @@ This guide covers deploying the Catan Agent multiplayer game to production.
 
 ## Environment Setup
 
-1. Copy `.env.production.example` to `.env.production`:
+### Required Environment Variables
+
+Create a `.env` file in the `backend/` directory (or use `backend/env.example` as a template):
+
+1. **Copy the example file:**
    ```bash
-   cp backend/.env.production.example backend/.env.production
+   cd backend
+   cp env.example .env
    ```
 
-2. Generate a secure secret key:
+2. **Generate a secure secret key:**
    ```bash
    openssl rand -hex 32
    ```
 
-3. Update `.env.production` with your values:
-   - `SECRET_KEY`: Generated secret key
-   - `CORS_ORIGINS`: Your frontend domain(s)
-   - `SENTRY_DSN`: Your Sentry DSN (optional)
-   - `ENABLE_CSRF`: Set to `true` for production
+3. **Required Variables for Production:**
+
+   **Application Configuration:**
+   - `ENVIRONMENT=production` - **CRITICAL**: Must be set to `production` for HTTPS enforcement and security features
+   - `SECRET_KEY=<generated-secret-key>` - Strong secret key for JWT tokens (generate with `openssl rand -hex 32`)
+   - `CORS_ORIGINS=https://yourdomain.com,https://www.yourdomain.com` - Comma-separated list of allowed frontend origins
+   - `ACCESS_TOKEN_EXPIRE_MINUTES=10080` - JWT token expiration (default: 10080 = 7 days)
+   - `ENABLE_CSRF=true` - **MUST be `true` in production** for CSRF protection
+
+   **LLM API Keys (Required for LLM agents):**
+   - `OPENAI_API_KEY=sk-proj-...` - **REQUIRED** if using OpenAI models (gpt-4o-mini, gpt-5.1, etc.)
+   - `ANTHROPIC_API_KEY=sk-ant-...` - Optional: For Anthropic/Claude models
+   - `GEMINI_API_KEY=...` - Optional: For Google Gemini models
+   - `LLM_API_KEY=...` - Optional: Generic fallback API key
+   - `LLM_MODEL=gpt-5.1` - Model to use (default: gpt-5.1). Options: gpt-5.1, gpt-4o-mini, gpt-4, claude-3-opus, etc.
+
+   **Optional:**
+   - `SENTRY_DSN=...` - Sentry DSN for error tracking (optional but recommended)
+   - `BACKEND_PORT=8000` - Backend port (default: 8000)
+   - `FRONTEND_PORT=80` - Frontend port (default: 80)
+
+### Production Checklist
+
+Before deploying to production, ensure:
+
+- [ ] `ENVIRONMENT=production` is set (enables HTTPS enforcement)
+- [ ] `SECRET_KEY` is a strong, randomly generated key
+- [ ] `CORS_ORIGINS` includes only your production domain(s) (no wildcards)
+- [ ] `ENABLE_CSRF=true` is set
+- [ ] `OPENAI_API_KEY` (or other LLM API key) is set if using LLM agents
+- [ ] `LLM_MODEL` is set to your preferred model (default: gpt-5.1)
+- [ ] HTTPS is configured and working
+- [ ] Database backups are configured
+- [ ] `.env` file is **NOT** committed to git (it's in `.gitignore`)
 
 ## Docker Deployment
 
-### Build and Run
+### Initial Setup
 
-```bash
-cd backend
-docker-compose up -d
-```
+1. **Create `.env` file** (see Environment Setup above)
+
+2. **Build and Run:**
+   ```bash
+   cd backend
+   docker-compose build
+   docker-compose up -d
+   ```
+
+3. **Verify containers are running:**
+   ```bash
+   docker-compose ps
+   ```
+
+4. **Check logs:**
+   ```bash
+   docker-compose logs -f backend
+   ```
 
 ### Update
 
 ```bash
-docker-compose pull
+cd backend
+docker-compose build
 docker-compose up -d
 ```
+
+### Important Notes for Docker
+
+- The `.env` file in `backend/` directory is automatically loaded by docker-compose
+- Environment variables in `docker-compose.yml` will override `.env` if both are set
+- The backend container exposes port 8000 (configurable via `BACKEND_PORT`)
+- The frontend container exposes port 80 (configurable via `FRONTEND_PORT`)
+- Database file (`catan.db`) is mounted as a volume, so it persists across container restarts
 
 ## Manual Deployment
 
@@ -54,11 +111,16 @@ docker-compose up -d
    uv pip install -r requirements.txt
    ```
 
-2. Set environment variables:
+2. Set environment variables (or use `.env` file):
    ```bash
    export ENVIRONMENT=production
    export SECRET_KEY=your-secret-key
    export CORS_ORIGINS=https://yourdomain.com
+   export OPENAI_API_KEY=sk-proj-...
+   export LLM_MODEL=gpt-5.1
+   export ENABLE_CSRF=true
+   # Optional:
+   export SENTRY_DSN=your-sentry-dsn
    ```
 
 3. Run with Gunicorn (recommended for production):
