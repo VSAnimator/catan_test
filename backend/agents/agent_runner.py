@@ -205,12 +205,16 @@ class AgentRunner:
                 # If we get here, either there are multiple actions or it's a discard action
                 # (discard actions always go through agent to generate payload)
                 # Agent chooses an action
-                    # Retry logic for PROPOSE_TRADE parsing errors
-                    max_retries = 3
-                    retry_count = 0
-                    last_error = None
-                    
-                    while retry_count < max_retries:
+                # Initialize variables before try block
+                reasoning = None
+                raw_llm_response = None
+                
+                # Retry logic for PROPOSE_TRADE parsing errors
+                max_retries = 3
+                retry_count = 0
+                last_error = None
+                
+                while retry_count < max_retries:
                         try:
                             result = agent.choose_action(self.state, legal_actions_list)
                             if len(result) == 4:

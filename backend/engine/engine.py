@@ -2072,14 +2072,23 @@ class GameState:
             # Second round: counter-clockwise
             new_state.setup_phase_player_index = (new_state.setup_phase_player_index - 1) % len(new_state.players)
             if new_state.setup_phase_player_index == len(new_state.players) - 1 and new_state.setup_round == 1:
-                # Setup complete - ensure robber is initialized
-                if new_state.robber_tile_id is None:
-                    desert_tile = next((t for t in new_state.tiles if t.resource_type is None), None)
-                    if desert_tile:
-                        new_state.robber_tile_id = desert_tile.id
-                new_state.phase = "playing"
-                # First player (who placed first settlement) goes first
-                new_state.current_player_index = new_state.setup_first_settlement_player_index if new_state.setup_first_settlement_player_index is not None else 0
+                # Check if all players have placed their second settlement before ending setup
+                all_players_have_two_settlements = True
+                for player in new_state.players:
+                    player_settlements = sum(1 for i in new_state.intersections if i.owner == player.id and i.building_type == "settlement")
+                    if player_settlements < 2:
+                        all_players_have_two_settlements = False
+                        break
+                
+                if all_players_have_two_settlements:
+                    # Setup complete - ensure robber is initialized
+                    if new_state.robber_tile_id is None:
+                        desert_tile = next((t for t in new_state.tiles if t.resource_type is None), None)
+                        if desert_tile:
+                            new_state.robber_tile_id = desert_tile.id
+                    new_state.phase = "playing"
+                    # First player (who placed first settlement) goes first
+                    new_state.current_player_index = new_state.setup_first_settlement_player_index if new_state.setup_first_settlement_player_index is not None else 0
         
         return new_state
 
