@@ -20,13 +20,13 @@ if 'OPENAI_API_KEY' not in os.environ or not os.environ.get('OPENAI_API_KEY'):
         api_key = result.stdout.strip()
         if api_key:
             os.environ['OPENAI_API_KEY'] = api_key
-            print(f"Loaded API key from .zshrc: {api_key[:15]}...")
+            print("✓ Loaded API key from .zshrc")
     except Exception as e:
         print(f"Warning: Could not load API key from .zshrc: {e}")
 
 # Verify API key is set
 if 'OPENAI_API_KEY' in os.environ and os.environ['OPENAI_API_KEY']:
-    print(f"Using API key: {os.environ['OPENAI_API_KEY'][:15]}...")
+    print("✓ API key is set")
 else:
     print("Warning: OPENAI_API_KEY not set")
 
