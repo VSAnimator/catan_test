@@ -2247,6 +2247,18 @@ function App() {
                                   <div>
                                     <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>3) Agent actual (evaluation)</div>
                                     <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(details.actual_action, null, 2)}</pre>
+                                    {details.actual_action?.reasoning && (
+                                      <div style={{ marginTop: '0.75rem' }}>
+                                        <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>LLM reasoning (same run)</div>
+                                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{details.actual_action.reasoning}</pre>
+                                      </div>
+                                    )}
+                                    {details.actual_action?.raw_llm_response && (
+                                      <div style={{ marginTop: '0.75rem' }}>
+                                        <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>Raw LLM response (same run)</div>
+                                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', maxHeight: '240px', overflow: 'auto' }}>{details.actual_action.raw_llm_response}</pre>
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                               </>

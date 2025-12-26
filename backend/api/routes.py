@@ -731,11 +731,14 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
             try:
                 choice = agent.choose_action(state, la_list)
                 if isinstance(choice, tuple) and len(choice) == 4:
-                    action, payload, _, _ = choice
+                    action, payload, reasoning, raw_llm_response = choice
                 elif isinstance(choice, tuple) and len(choice) == 3:
-                    action, payload, _ = choice
+                    action, payload, reasoning = choice
+                    raw_llm_response = None
                 else:
                     action, payload = choice
+                    reasoning = None
+                    raw_llm_response = None
             except Exception as e:
                 passed = False
                 first_mismatch = {
@@ -758,6 +761,10 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
             actual_action_dict: Dict[str, Any] = {"type": serialize_action(action)}
             if payload is not None:
                 actual_action_dict["payload"] = serialize_action_payload(payload)
+            if reasoning:
+                actual_action_dict["reasoning"] = reasoning
+            if raw_llm_response is not None:
+                actual_action_dict["raw_llm_response"] = raw_llm_response
 
             match = _canonical_action_dict(actual_action_dict) == _canonical_action_dict(expected_action)
             if request.include_step_results:
