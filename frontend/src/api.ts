@@ -182,6 +182,7 @@ export interface LegalAction {
 }
 
 export interface StepLog {
+  player_id?: string | null
   state_before: GameState
   action: LegalAction
   state_after: GameState
@@ -192,6 +193,149 @@ export interface StepLog {
 export interface ReplayResponse {
   game_id: string
   steps: StepLog[]
+}
+
+// ---------------------------------------------------------------------------
+// Drills API (curated "best action" datasets)
+// ---------------------------------------------------------------------------
+
+export interface DrillListItem {
+  id: number
+  created_at: string
+  name: string | null
+  source_game_id: string | null
+  source_step_idx: number | null
+  player_id: string
+  num_steps: number
+  metadata?: any
+}
+
+export interface DrillStepCreate {
+  player_id: string
+  state: GameState
+  expected_action: LegalAction
+}
+
+export interface CreateDrillRequest {
+  name?: string | null
+  source_game_id?: string | null
+  source_step_idx?: number | null
+  player_id: string
+  steps: DrillStepCreate[]
+  metadata?: any
+}
+
+export interface CreateDrillResponse {
+  drill_id: number
+  message: string
+}
+
+export async function listDrills(limit: number = 200): Promise<{ drills: DrillListItem[] }> {
+  const response = await fetch(`${getApiBase()}/drills?limit=${limit}`)
+  return handleResponse<{ drills: DrillListItem[] }>(response)
+}
+
+export async function createDrill(request: CreateDrillRequest): Promise<CreateDrillResponse> {
+  const response = await fetch(`${getApiBase()}/drills`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  })
+  return handleResponse<CreateDrillResponse>(response)
+}
+
+export interface EvaluateDrillRequest {
+  agent_type: string
+}
+
+export interface EvaluateDrillResultItem {
+  idx: number
+  player_id: string
+  match: boolean
+  expected_action: any
+  actual_action: any
+  error?: string
+}
+
+export interface EvaluateDrillResponse {
+  drill_id: number
+  agent_type: string
+  passed: boolean
+  results: EvaluateDrillResultItem[]
+}
+
+export async function evaluateDrill(drillId: number, request: EvaluateDrillRequest): Promise<EvaluateDrillResponse> {
+  const response = await fetch(`${getApiBase()}/drills/${drillId}/evaluate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  })
+  return handleResponse<EvaluateDrillResponse>(response)
+}
+
+export interface EvaluateAllDrillsRequest {
+  agent_type: string
+  limit?: number
+  include_step_results?: boolean
+}
+
+export interface EvaluateAllDrillsResponse {
+  agent_type: string
+  run_id?: string
+  evaluated_at?: string
+  results: Array<{
+    drill_id: number
+    name: string | null
+    source_game_id?: string | null
+    source_step_idx?: number | null
+    player_id?: string
+    num_steps?: number
+    passed: boolean
+    first_mismatch?: any
+    step_results?: Array<{
+      idx: number
+      player_id: string
+      match: boolean
+      expected_action: any
+      actual_action: any
+      error?: string
+    }>
+    error?: string
+  }>
+}
+
+export async function evaluateAllDrills(request: EvaluateAllDrillsRequest): Promise<EvaluateAllDrillsResponse> {
+  const response = await fetch(`${getApiBase()}/drills/evaluate_all`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  })
+  return handleResponse<EvaluateAllDrillsResponse>(response)
+}
+
+export interface GetDrillResponse {
+  drill: {
+    id: number
+    created_at: string
+    name: string | null
+    source_game_id: string | null
+    source_step_idx: number | null
+    player_id: string
+    metadata?: any
+  }
+  steps: Array<{
+    idx: number
+    player_id: string
+    state: GameState
+    expected_action: any
+    state_text?: string | null
+    legal_actions_text?: string | null
+  }>
+}
+
+export async function getDrill(drillId: number): Promise<GetDrillResponse> {
+  const response = await fetch(`${getApiBase()}/drills/${drillId}`)
+  return handleResponse<GetDrillResponse>(response)
 }
 
 export interface CreateGameRequest {

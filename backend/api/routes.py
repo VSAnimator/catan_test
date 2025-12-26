@@ -69,6 +69,7 @@ router = APIRouter()
 
 class StepLog(BaseModel):
     """Log entry for a game step."""
+    player_id: Optional[str] = None
     state_before: Dict[str, Any]
     action: Dict[str, Any]  # Serialized action
     state_after: Dict[str, Any]
@@ -414,6 +415,7 @@ async def get_replay(game_id: str):
     steps = []
     for row in step_rows:
         step_log = StepLog(
+            player_id=row["player_id"],
             state_before=json.loads(row["state_before_json"]),
             action=json.loads(row["action_json"]),
             state_after=json.loads(row["state_after_json"]),
@@ -426,6 +428,378 @@ async def get_replay(game_id: str):
         game_id=game_id,
         steps=steps
     )
+
+
+# ============================================================================
+# Drills API Endpoints (curated "best action" datasets)
+# ============================================================================
+
+from .database import (
+    create_drill as create_drill_in_db,
+    list_drills as list_drills_from_db,
+    get_drill as get_drill_from_db,
+    get_drill_steps as get_drill_steps_from_db,
+)
+
+
+class DrillStepCreate(BaseModel):
+    player_id: str
+    state: Dict[str, Any]
+    expected_action: Dict[str, Any]
+
+
+class CreateDrillRequest(BaseModel):
+    name: Optional[str] = None
+    source_game_id: Optional[str] = None
+    source_step_idx: Optional[int] = None
+    player_id: str
+    steps: List[DrillStepCreate]
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class CreateDrillResponse(BaseModel):
+    drill_id: int
+    message: str
+
+
+@router.get("/drills")
+async def list_drills(limit: int = 200):
+    rows = list_drills_from_db(limit=limit)
+    drills = []
+    for r in rows:
+        drills.append(
+            {
+                "id": r["id"],
+                "created_at": r["created_at"],
+                "name": r["name"],
+                "source_game_id": r["source_game_id"],
+                "source_step_idx": r["source_step_idx"],
+                "player_id": r["player_id"],
+                "metadata": json.loads(r["metadata"]) if r["metadata"] else None,
+                "num_steps": r["num_steps"],
+            }
+        )
+    return {"drills": drills}
+
+
+@router.get("/drills/{drill_id}")
+async def get_drill(drill_id: int):
+    drill_row = get_drill_from_db(drill_id)
+    if not drill_row:
+        raise HTTPException(status_code=404, detail="Drill not found")
+    step_rows = get_drill_steps_from_db(drill_id)
+    return {
+        "drill": {
+            "id": drill_row["id"],
+            "created_at": drill_row["created_at"],
+            "name": drill_row["name"],
+            "source_game_id": drill_row["source_game_id"],
+            "source_step_idx": drill_row["source_step_idx"],
+            "player_id": drill_row["player_id"],
+            "metadata": json.loads(drill_row["metadata"]) if drill_row["metadata"] else None,
+        },
+        "steps": [
+            {
+                "idx": r["idx"],
+                "player_id": r["player_id"],
+                "state": json.loads(r["state_json"]),
+                "expected_action": json.loads(r["expected_action_json"]),
+                "state_text": r["state_text"],
+                "legal_actions_text": r["legal_actions_text"],
+            }
+            for r in step_rows
+        ],
+    }
+
+
+@router.post("/drills", response_model=CreateDrillResponse)
+async def create_drill_endpoint(request: CreateDrillRequest):
+    if not request.steps:
+        raise HTTPException(status_code=400, detail="Drill must have at least 1 step")
+
+    # Precompute state_text / legal_actions_text for better UX in drill viewer
+    steps_for_db: List[Dict[str, Any]] = []
+    for idx, s in enumerate(request.steps):
+        try:
+            state = deserialize_game_state(s.state)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid drill step state at idx={idx}: {str(e)}")
+
+        la_list = legal_actions(state, s.player_id)
+        steps_for_db.append(
+            {
+                "idx": idx,
+                "player_id": s.player_id,
+                "state_json": s.state,
+                "expected_action_json": s.expected_action,
+                "state_text": state_to_text(state, s.player_id),
+                "legal_actions_text": legal_actions_to_text(la_list),
+            }
+        )
+
+    drill_id = create_drill_in_db(
+        name=request.name,
+        source_game_id=request.source_game_id,
+        source_step_idx=request.source_step_idx,
+        player_id=request.player_id,
+        metadata=request.metadata,
+        steps=steps_for_db,
+    )
+    return CreateDrillResponse(drill_id=drill_id, message="Drill created")
+
+
+def _make_agent(agent_type: str, player_id: str):
+    # Mirror watch_agents_step behavior to keep a single mental model in the UI.
+    from agents import RandomAgent, BehaviorTreeAgent
+    try:
+        from agents.llm_agent import LLMAgent
+        from agents.variants import (
+            BalancedAgent,
+            AggressiveBuilderAgent,
+            DevCardFocusedAgent,
+            ExpansionAgent,
+            DefensiveAgent,
+            StateConditionedAgent,
+        )
+
+        AGENT_CLASSES = {
+            "random": RandomAgent,
+            "behavior_tree": BehaviorTreeAgent,
+            "balanced": BalancedAgent,
+            "aggressive_builder": AggressiveBuilderAgent,
+            "dev_card_focused": DevCardFocusedAgent,
+            "expansion": ExpansionAgent,
+            "defensive": DefensiveAgent,
+            "state_conditioned": StateConditionedAgent,
+            "llm": LLMAgent,
+        }
+    except Exception:
+        AGENT_CLASSES = {
+            "random": RandomAgent,
+            "behavior_tree": BehaviorTreeAgent,
+        }
+        try:
+            from agents.llm_agent import LLMAgent
+            AGENT_CLASSES["llm"] = LLMAgent
+        except Exception:
+            pass
+
+    agent_class = AGENT_CLASSES.get(agent_type, RandomAgent)
+    if agent_type == "llm":
+        import os
+        api_key = (
+            os.getenv("OPENAI_API_KEY")
+            or os.getenv("ANTHROPIC_API_KEY")
+            or os.getenv("GEMINI_API_KEY")
+            or os.getenv("LLM_API_KEY")
+        )
+        model = os.getenv("LLM_MODEL", "gpt-5.1")
+        return agent_class(player_id, api_key=api_key, model=model, enable_retrieval=False)
+    return agent_class(player_id)
+
+
+def _canonical_action_dict(action_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize action dicts for comparison."""
+    if not isinstance(action_dict, dict):
+        return {"type": None, "payload": None}
+    action_type = action_dict.get("type")
+    payload = action_dict.get("payload", None)
+    if payload is None:
+        return {"type": action_type}
+    if isinstance(payload, dict):
+        # Remove nulls to avoid trivial mismatches between absent vs null
+        cleaned = {k: v for k, v in payload.items() if v is not None}
+        return {"type": action_type, "payload": cleaned}
+    return {"type": action_type, "payload": payload}
+
+
+class EvaluateDrillRequest(BaseModel):
+    agent_type: str = "random"
+
+
+@router.post("/drills/{drill_id}/evaluate")
+async def evaluate_drill(drill_id: int, request: EvaluateDrillRequest):
+    drill_row = get_drill_from_db(drill_id)
+    if not drill_row:
+        raise HTTPException(status_code=404, detail="Drill not found")
+    steps = get_drill_steps_from_db(drill_id)
+    if not steps:
+        raise HTTPException(status_code=400, detail="Drill has no steps")
+
+    results = []
+    passed_all = True
+    for r in steps:
+        player_id = r["player_id"]
+        state_json = json.loads(r["state_json"])
+        expected_action = json.loads(r["expected_action_json"])
+        state = deserialize_game_state(state_json)
+        la_list = legal_actions(state, player_id)
+
+        agent = _make_agent(request.agent_type, player_id)
+        try:
+            choice = agent.choose_action(state, la_list)
+            if isinstance(choice, tuple) and len(choice) == 4:
+                action, payload, reasoning, raw_llm_response = choice
+            elif isinstance(choice, tuple) and len(choice) == 3:
+                action, payload, reasoning = choice
+                raw_llm_response = None
+            else:
+                action, payload = choice
+                reasoning = None
+                raw_llm_response = None
+        except Exception as e:
+            passed_all = False
+            results.append(
+                {
+                    "idx": r["idx"],
+                    "player_id": player_id,
+                    "match": False,
+                    "error": str(e),
+                    "expected_action": expected_action,
+                    "actual_action": None,
+                }
+            )
+            continue
+
+        actual_action_dict: Dict[str, Any] = {"type": serialize_action(action)}
+        if payload is not None:
+            actual_action_dict["payload"] = serialize_action_payload(payload)
+        if reasoning:
+            actual_action_dict["reasoning"] = reasoning
+        if raw_llm_response is not None:
+            actual_action_dict["raw_llm_response"] = raw_llm_response
+
+        match = _canonical_action_dict(actual_action_dict) == _canonical_action_dict(expected_action)
+        if not match:
+            passed_all = False
+
+        results.append(
+            {
+                "idx": r["idx"],
+                "player_id": player_id,
+                "match": match,
+                "expected_action": expected_action,
+                "actual_action": actual_action_dict,
+            }
+        )
+
+    return {
+        "drill_id": drill_id,
+        "agent_type": request.agent_type,
+        "passed": passed_all,
+        "results": results,
+    }
+
+
+class EvaluateAllDrillsRequest(BaseModel):
+    agent_type: str = "random"
+    limit: int = 200
+    include_step_results: bool = False
+
+
+@router.post("/drills/evaluate_all")
+async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
+    drill_rows = list_drills_from_db(limit=request.limit)
+    evaluated_at = datetime.utcnow().isoformat()
+    run_id = str(uuid.uuid4())
+    summaries = []
+    for d in drill_rows:
+        drill_id = int(d["id"])
+        steps = get_drill_steps_from_db(drill_id)
+        if not steps:
+            summaries.append(
+                {
+                    "drill_id": drill_id,
+                    "name": d["name"],
+                    "passed": False,
+                    "error": "No steps",
+                }
+            )
+            continue
+
+        passed = True
+        first_mismatch = None
+        step_results = [] if request.include_step_results else None
+        for r in steps:
+            player_id = r["player_id"]
+            state_json = json.loads(r["state_json"])
+            expected_action = json.loads(r["expected_action_json"])
+            state = deserialize_game_state(state_json)
+            la_list = legal_actions(state, player_id)
+            agent = _make_agent(request.agent_type, player_id)
+
+            try:
+                choice = agent.choose_action(state, la_list)
+                if isinstance(choice, tuple) and len(choice) == 4:
+                    action, payload, _, _ = choice
+                elif isinstance(choice, tuple) and len(choice) == 3:
+                    action, payload, _ = choice
+                else:
+                    action, payload = choice
+            except Exception as e:
+                passed = False
+                first_mismatch = {
+                    "idx": r["idx"],
+                    "error": str(e),
+                }
+                if request.include_step_results:
+                    step_results.append(
+                        {
+                            "idx": r["idx"],
+                            "player_id": player_id,
+                            "match": False,
+                            "expected_action": expected_action,
+                            "actual_action": None,
+                            "error": str(e),
+                        }
+                    )
+                break
+
+            actual_action_dict: Dict[str, Any] = {"type": serialize_action(action)}
+            if payload is not None:
+                actual_action_dict["payload"] = serialize_action_payload(payload)
+
+            match = _canonical_action_dict(actual_action_dict) == _canonical_action_dict(expected_action)
+            if request.include_step_results:
+                step_results.append(
+                    {
+                        "idx": r["idx"],
+                        "player_id": player_id,
+                        "match": match,
+                        "expected_action": expected_action,
+                        "actual_action": actual_action_dict,
+                    }
+                )
+
+            if not match:
+                passed = False
+                first_mismatch = {
+                    "idx": r["idx"],
+                    "expected_action": expected_action,
+                    "actual_action": actual_action_dict,
+                }
+                break
+
+        summaries.append(
+            {
+                "drill_id": drill_id,
+                "name": d["name"],
+                "source_game_id": d["source_game_id"],
+                "source_step_idx": d["source_step_idx"],
+                "player_id": d["player_id"],
+                "num_steps": d["num_steps"],
+                "passed": passed,
+                "first_mismatch": first_mismatch,
+                **({"step_results": step_results} if request.include_step_results else {}),
+            }
+        )
+
+    return {
+        "agent_type": request.agent_type,
+        "run_id": run_id,
+        "evaluated_at": evaluated_at,
+        "results": summaries,
+    }
 
 
 @router.post("/games/{game_id}/restore")
@@ -831,15 +1205,29 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
             player_id=None
         )
     
-    # Only run step if current player has an agent
-    if current_player.id not in agents:
-        # Current player is human - don't auto-advance
+    # Decide whether we can/should run an agent step.
+    #
+    # Important: even if the *current* player is human, we may still need to run
+    # an out-of-turn mandatory action for an agent (notably DISCARD_RESOURCES
+    # after a 7 roll). AgentRunner.run_step supports this, so don't early-return.
+    should_run = current_player.id in agents
+    if not should_run and current_state.phase == "playing" and current_state.dice_roll == 7:
+        # If any agent-controlled player still needs to discard, let the runner
+        # process one discard action.
+        for p in current_state.players:
+            if p.id in agents and sum(p.resources.values()) >= 8 and p.id not in current_state.players_discarded:
+                should_run = True
+                break
+
+    if not should_run:
+        # No agent action to take right now.
         return WatchAgentsResponse(
             game_id=game_id,
             game_continues=True,
             error=None,
             new_state=state_json,
-            player_id=None
+            player_id=None,
+            reasoning=None,
         )
     
     # Run a single step (agent's turn)

@@ -12,14 +12,21 @@ import {
   watchAgentsStep,
   queryEvents,
   addFeedback,
+  listDrills,
+  createDrill,
+  evaluateDrill,
+  evaluateAllDrills,
+  getDrill,
   type GameState,
   type LegalAction,
   type Player,
   type ReplayResponse,
-  type QueryEventsResponse
+  type QueryEventsResponse,
+  type DrillListItem,
+  type EvaluateAllDrillsResponse
 } from './api'
 
-type View = 'main' | 'game' | 'replay' | 'agent-watch' | 'event-query'
+type View = 'main' | 'game' | 'replay' | 'agent-watch' | 'event-query' | 'drills'
 
 // Resource icons mapping
 const RESOURCE_ICONS: Record<string, string> = {
@@ -64,6 +71,37 @@ function App() {
   const [replayData, setReplayData] = useState<ReplayResponse | null>(null)
   const [replayStepIndex, setReplayStepIndex] = useState(0)
   const [replayGameId, setReplayGameId] = useState('')
+
+  // Drill recording mode (started from replay viewer)
+  const [drillRecording, setDrillRecording] = useState<null | {
+    name: string
+    source_game_id: string
+    source_step_idx: number
+    drill_player_id: string
+    forked_game_id: string
+    steps: Array<{ player_id: string; state: GameState; expected_action: LegalAction }>
+  }>(null)
+
+  // Drills page state
+  const [drillsList, setDrillsList] = useState<DrillListItem[]>([])
+  const [drillsAgentType, setDrillsAgentType] = useState<string>('behavior_tree')
+  const [drillsEval, setDrillsEval] = useState<EvaluateAllDrillsResponse | null>(null)
+  const [drillsLoading, setDrillsLoading] = useState(false)
+  // Batch evaluation metadata (single run that should back both row PASS/FAIL and details)
+  const [drillsEvalRunMeta, setDrillsEvalRunMeta] = useState<{ run_id?: string; evaluated_at?: string } | null>(null)
+  const [drillDetailsById, setDrillDetailsById] = useState<Record<number, {
+    open: boolean
+    loading: boolean
+    error?: string | null
+    original_action?: any
+    original_player_id?: string | null
+    expected_action?: any
+    actual_action?: any
+    match?: boolean | null
+    agent_type?: string
+    evaluated_at?: string
+    drill?: any
+  }>>({})
   
   // For agent-watching mode
   const [agentWatchGameId, setAgentWatchGameId] = useState('')
@@ -178,6 +216,7 @@ function App() {
   // Dev mode: Auto-switch to players who need to discard when 7 is rolled
   // But only if we're still in the discard phase (not in robber phase)
   useEffect(() => {
+    if (drillRecording) return
     if (!devMode || !gameState || gameState.dice_roll !== 7) return
     
     // Don't auto-switch if we're already in the robber phase
@@ -219,6 +258,7 @@ function App() {
   // Auto-switch to current player in dev mode when turn changes
   // But don't interfere if we're auto-discarding
   useEffect(() => {
+    if (drillRecording) return
     if (devMode && gameState && view === 'game' && !isAutoDiscarding) {
       // Don't auto-switch if a 7 was rolled and players need to discard
       if (gameState.dice_roll === 7) {
@@ -275,6 +315,9 @@ function App() {
 
   // Auto-advance agent turns (must be before early returns)
   useEffect(() => {
+    // In drill recording mode, we freeze other players (including agents). The drill
+    // is meant to capture only the selected player's sub-turn decisions.
+    if (drillRecording) return
     if (!gameState || loading || view !== 'game') return
     
     const activePlayer = getCurrentPlayer()
@@ -282,6 +325,39 @@ function App() {
     
     // Check if current player is an agent
     const currentPlayerIsAgent = activePlayer.id in agentMapping
+
+    // Special case: after rolling a 7, *non-current* players may have a mandatory discard.
+    // If those players are agent-controlled, advance the backend one step to let the agent discard,
+    // even if it's currently the human player's turn.
+    if (
+      gameState.phase === 'playing' &&
+      gameState.dice_roll === 7 &&
+      !gameState.waiting_for_robber_move &&
+      !gameState.waiting_for_robber_steal
+    ) {
+      const discarded = new Set<string>(gameState.players_discarded || [])
+      const agentNeedsDiscard = gameState.players.some(p => {
+        const total = Object.values(p.resources || {}).reduce((a, b) => a + b, 0)
+        return total >= 8 && !discarded.has(p.id) && (p.id in agentMapping)
+      })
+      if (agentNeedsDiscard) {
+        const advanceDiscard = async () => {
+          try {
+            setLoading(true)
+            const result = await watchAgentsStep(gameState.game_id, agentMapping)
+            setGameState(result.new_state)
+            if (result.reasoning) setLastReasoning(result.reasoning)
+            if (result.error) setError(`Agent error: ${result.error}`)
+          } catch (err) {
+            setError(err instanceof Error ? err.message : 'Failed to advance agent discard')
+          } finally {
+            setLoading(false)
+          }
+        }
+        const timeout = setTimeout(advanceDiscard, 250)
+        return () => clearTimeout(timeout)
+      }
+    }
     
     // If there's a pending trade, only block auto-advancement if:
     // 1. The current player is the human player (they need to manually respond)
@@ -439,7 +515,7 @@ function App() {
     setView('game')
   }
 
-  const handleExecuteAction = async (action: LegalAction) => {
+  const handleExecuteAction = async (action: LegalAction): Promise<GameState | null> => {
     if (!gameState || !playerId) return
     
     setLoading(true)
@@ -460,6 +536,22 @@ function App() {
         type: action.type,
         payload: payload || undefined
       }
+
+      // If we are recording a drill, capture the decision point (state-before + chosen action)
+      if (drillRecording && playerId === drillRecording.drill_player_id) {
+        const stateSnapshot = JSON.parse(JSON.stringify(gameState)) as GameState
+        setDrillRecording(prev => {
+          if (!prev) return prev
+          if (playerId !== prev.drill_player_id) return prev
+          return {
+            ...prev,
+            steps: [
+              ...prev.steps,
+              { player_id: playerId, state: stateSnapshot, expected_action: actionToSend }
+            ]
+          }
+        })
+      }
       
       // Debug: log the action being sent
       console.log('Executing action:', actionToSend)
@@ -467,10 +559,12 @@ function App() {
       const newState = await postAction(gameState.game_id, playerId, actionToSend)
       setGameState(newState)
       // Legal actions will be refetched via useEffect
+      return newState
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error'
       setError(errorMessage)
       console.error('Action execution error:', err)
+      return null
     } finally {
       setLoading(false)
     }
@@ -544,6 +638,33 @@ function App() {
       setError(err instanceof Error ? err.message : 'Unknown error')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const refreshDrills = async () => {
+    setDrillsLoading(true)
+    setError(null)
+    try {
+      const data = await listDrills(200)
+      setDrillsList(data.drills || [])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load drills')
+    } finally {
+      setDrillsLoading(false)
+    }
+  }
+
+  const runAllDrillsEval = async () => {
+    setDrillsLoading(true)
+    setError(null)
+    try {
+      const result = await evaluateAllDrills({ agent_type: drillsAgentType, limit: 200, include_step_results: true })
+      setDrillsEval(result)
+      setDrillsEvalRunMeta({ run_id: result.run_id, evaluated_at: result.evaluated_at })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to evaluate drills')
+    } finally {
+      setDrillsLoading(false)
     }
   }
 
@@ -1342,6 +1463,27 @@ function App() {
                 </div>
               </div>
             </div>
+
+            <div className="menu-divider">OR</div>
+
+            <div className="menu-section">
+              <h2>🎯 Drills</h2>
+              <div className="form-group">
+                <button
+                  onClick={async () => {
+                    setView('drills')
+                    await refreshDrills()
+                  }}
+                  className="action-button"
+                  style={{ width: '100%' }}
+                >
+                  🎯 Open Drills
+                </button>
+                <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
+                  Run an agent against your curated “best action” drills and see pass/fail.
+                </div>
+              </div>
+            </div>
           </div>
           {error && <div className="error">Error: {error}</div>}
         </main>
@@ -1881,6 +2023,248 @@ function App() {
     )
   }
 
+  if (view === 'drills') {
+    return (
+      <div className="app">
+        <header>
+          <h1>🎯 Drills</h1>
+          <button onClick={() => setView('main')} className="back-button">
+            Back to Menu
+          </button>
+        </header>
+        <main className="game-main">
+          {error && <div className="error">Error: {error}</div>}
+
+          <div className="menu-section" style={{ maxWidth: '900px', margin: '0 auto' }}>
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              <button onClick={refreshDrills} disabled={drillsLoading} className="secondary">
+                {drillsLoading ? 'Loading...' : 'Refresh Drills'}
+              </button>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <strong>Agent:</strong>
+                <select value={drillsAgentType} onChange={(e) => setDrillsAgentType(e.target.value)}>
+                  <option value="llm">LLM Agent (GPT-5.1)</option>
+                  <option value="behavior_tree">Behavior Tree Agent</option>
+                  <option value="balanced">Balanced Agent</option>
+                  <option value="aggressive_builder">Aggressive Builder</option>
+                  <option value="dev_card_focused">Dev Card Focused</option>
+                  <option value="expansion">Expansion Agent</option>
+                  <option value="defensive">Defensive Agent</option>
+                  <option value="state_conditioned">State Conditioned</option>
+                  <option value="random">Random Agent</option>
+                </select>
+              </label>
+              <button onClick={runAllDrillsEval} disabled={drillsLoading || drillsList.length === 0}>
+                {drillsLoading ? 'Running...' : 'Run All Drills'}
+              </button>
+            </div>
+
+            <div style={{ marginTop: '1rem', fontSize: '0.9rem', color: '#555' }}>
+              Total drills: <strong>{drillsList.length}</strong>
+              {drillsEval && (
+                <>
+                  {' '}| Passed:{' '}
+                  <strong>
+                    {drillsEval.results.filter(r => r.passed).length}
+                  </strong>
+                  {' '} / {drillsEval.results.length}
+                  {' '} (batch run: <strong>{drillsEval.agent_type}</strong>
+                  {drillsEvalRunMeta?.evaluated_at ? <> @ {new Date(drillsEvalRunMeta.evaluated_at).toLocaleString()}</> : null}
+                  {drillsEvalRunMeta?.run_id ? <> | run_id: {drillsEvalRunMeta.run_id}</> : null}
+                  )
+                </>
+              )}
+            </div>
+
+            <div style={{ marginTop: '1rem' }}>
+              {drillsList.length === 0 ? (
+                <div style={{ color: '#666' }}>
+                  No drills yet. Open a replay and use “Start Drill Mode” to record your best actions.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {drillsList.map(d => {
+                    const evalRow = drillsEval?.results.find(r => r.drill_id === d.id)
+                    const passed = evalRow ? evalRow.passed : null
+                    const details = drillDetailsById[d.id]
+                    return (
+                      <div
+                        key={d.id}
+                        style={{
+                          padding: '0.75rem',
+                          border: '1px solid #ddd',
+                          borderRadius: '6px',
+                          background: passed == null ? '#fff' : passed ? '#e8f5e9' : '#ffebee'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+                          <div>
+                            <div style={{ fontWeight: 'bold' }}>
+                              #{d.id}{' '}
+                              {d.name ? d.name : '(unnamed)'}
+                            </div>
+                            <div style={{ fontSize: '0.85rem', color: '#666' }}>
+                              Player: {d.player_id} | Steps: {d.num_steps} | Source: {d.source_game_id} @ {d.source_step_idx}
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                            <div style={{ fontWeight: 'bold' }}>
+                              {passed == null ? '—' : passed ? 'PASS' : 'FAIL'}
+                            </div>
+                            {drillsEval && drillsEval.agent_type !== drillsAgentType && (
+                              <div style={{ fontSize: '0.8rem', color: '#a15c00' }}>
+                                (stale: showing {drillsEval.agent_type})
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {evalRow && !evalRow.passed && evalRow.first_mismatch && (
+                          <div style={{ marginTop: '0.5rem', fontSize: '0.85rem', color: '#b71c1c' }}>
+                            First mismatch at step idx {evalRow.first_mismatch.idx}
+                            {evalRow.first_mismatch.error && <>: {evalRow.first_mismatch.error}</>}
+                          </div>
+                        )}
+
+                        <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                          <button
+                            className="secondary"
+                            onClick={async () => {
+                              // Toggle open/closed
+                              const isOpen = !!details?.open
+                              setDrillDetailsById(prev => ({
+                                ...prev,
+                                [d.id]: {
+                                  ...(prev[d.id] || { open: false, loading: false }),
+                                  open: !isOpen,
+                                  error: null
+                                }
+                              }))
+                              if (isOpen) return
+
+                              // If opening, use the cached batch evaluation result (same run)
+                              // to avoid non-deterministic mismatches (especially for LLM).
+                              if (!drillsEval || drillsEval.agent_type !== drillsAgentType) {
+                                setDrillDetailsById(prev => ({
+                                  ...prev,
+                                  [d.id]: {
+                                    ...(prev[d.id] || { open: true }),
+                                    open: true,
+                                    loading: false,
+                                    error: 'Run “Run All Drills” for the currently selected agent first, then open details (details are tied to that batch run).'
+                                  }
+                                }))
+                                return
+                              }
+
+                              setDrillDetailsById(prev => ({
+                                ...prev,
+                                [d.id]: { ...(prev[d.id] || { open: true }), open: true, loading: true, error: null }
+                              }))
+                              try {
+                                const drillResp = await getDrill(d.id)
+                                const expectedAction = drillResp.steps?.[0]?.expected_action
+
+                                let originalAction: any = null
+                                let originalPlayerId: string | null = null
+                                if (drillResp.drill.source_game_id != null && drillResp.drill.source_step_idx != null) {
+                                  const replay = await getReplay(drillResp.drill.source_game_id)
+                                  const srcIdx = drillResp.drill.source_step_idx
+                                  const step = replay.steps?.[srcIdx]
+                                  originalAction = step?.action ?? null
+                                  originalPlayerId = (step as any)?.player_id ?? null
+                                }
+
+                                const batchRow = drillsEval.results.find(r => r.drill_id === d.id)
+                                const step0 = batchRow?.step_results?.find(sr => sr.idx === 0)
+
+                                setDrillDetailsById(prev => ({
+                                  ...prev,
+                                  [d.id]: {
+                                    open: true,
+                                    loading: false,
+                                    error: null,
+                                    agent_type: drillsAgentType,
+                                    evaluated_at: drillsEvalRunMeta?.evaluated_at,
+                                    drill: drillResp.drill,
+                                    original_action: originalAction,
+                                    original_player_id: originalPlayerId,
+                                    expected_action: expectedAction,
+                                    actual_action: step0?.actual_action ?? null,
+                                    match: step0?.match ?? null
+                                  }
+                                }))
+                              } catch (err) {
+                                setDrillDetailsById(prev => ({
+                                  ...prev,
+                                  [d.id]: {
+                                    ...(prev[d.id] || { open: true }),
+                                    open: true,
+                                    loading: false,
+                                    error: err instanceof Error ? err.message : 'Failed to load drill details'
+                                  }
+                                }))
+                              }
+                            }}
+                            disabled={drillsLoading || details?.loading}
+                          >
+                            {details?.loading ? 'Loading…' : details?.open ? 'Hide details' : 'View details'}
+                          </button>
+                        </div>
+
+                        {details?.open && (
+                          <div style={{ marginTop: '0.75rem', background: '#fafafa', border: '1px solid #eee', borderRadius: '6px', padding: '0.75rem' }}>
+                            {details.loading ? (
+                              <div style={{ color: '#666' }}>Loading details…</div>
+                            ) : details.error ? (
+                              <div style={{ color: '#b71c1c' }}>{details.error}</div>
+                            ) : (
+                              <>
+                                <div style={{ marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                                  <div>
+                                    <strong>Evaluation (same batch run):</strong>{' '}
+                                    {passed == null ? '—' : passed ? 'PASS' : 'FAIL'} | Match: <strong>{details.match ? 'true' : 'false'}</strong>{' '}
+                                    (agent: {drillsEval?.agent_type}
+                                    {drillsEvalRunMeta?.evaluated_at ? ` @ ${new Date(drillsEvalRunMeta.evaluated_at).toLocaleString()}` : ''}
+                                    {drillsEvalRunMeta?.run_id ? ` | run_id: ${drillsEvalRunMeta.run_id}` : ''}
+                                    )
+                                  </div>
+                                </div>
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '0.75rem' }}>
+                                  <div>
+                                    <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>1) Original game action</div>
+                                    {details.original_player_id && (
+                                      <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.25rem' }}>
+                                        player_id: {details.original_player_id}
+                                      </div>
+                                    )}
+                                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(details.original_action, null, 2)}</pre>
+                                  </div>
+                                  <div>
+                                    <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>2) Drill expected (your “correct”)</div>
+                                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(details.expected_action, null, 2)}</pre>
+                                  </div>
+                                  <div>
+                                    <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>3) Agent actual (evaluation)</div>
+                                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(details.actual_action, null, 2)}</pre>
+                                  </div>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </main>
+      </div>
+    )
+  }
+
   if (view === 'replay') {
     const maxSteps = replayData ? replayData.steps.length : 0
     const currentStep = replayData && replayStepIndex >= 0 && replayStepIndex < maxSteps 
@@ -1943,9 +2327,62 @@ function App() {
                 <div className="replay-step-info">
                   <h3>Step {replayStepIndex}</h3>
                   <div><strong>Action:</strong> {formatActionName(currentStep.action)}</div>
+                  {currentStep.player_id && <div><strong>Player:</strong> {currentStep.player_id}</div>}
                   {currentStep.dice_roll && <div><strong>Dice Roll:</strong> {currentStep.dice_roll}</div>}
                   <div><strong>Timestamp:</strong> {currentStep.timestamp}</div>
                   <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    <button
+                      onClick={async () => {
+                        if (!replayData || !currentStep?.state_before) return
+                        if (!currentStep.player_id) {
+                          alert('This replay step is missing player_id (update backend + reload).')
+                          return
+                        }
+                        const defaultName = `Drill: ${replayData.game_id} @ step ${replayStepIndex} (${currentStep.player_id})`
+                        const name = prompt('Name this drill:', defaultName) || defaultName
+                        setLoading(true)
+                        setError(null)
+                        try {
+                          const forkedGame = await forkGame(replayData.game_id, currentStep.state_before)
+                          setGameState(forkedGame.initial_state)
+                          setGameIdInput(forkedGame.game_id)
+
+                          // Preserve agent mapping if present
+                          if ((forkedGame.initial_state as any)._metadata && (forkedGame.initial_state as any)._metadata.agent_mapping) {
+                            setAgentMapping((forkedGame.initial_state as any)._metadata.agent_mapping)
+                          }
+
+                          setPlayerId(currentStep.player_id)
+                          // Freeze other players while recording a drill (prevents agents from auto-playing).
+                          setStepByStepMode(true)
+                          setDrillRecording({
+                            name,
+                            source_game_id: replayData.game_id,
+                            source_step_idx: replayStepIndex,
+                            drill_player_id: currentStep.player_id,
+                            forked_game_id: forkedGame.game_id,
+                            steps: []
+                          })
+                          setView('game')
+                          alert('Drill recording started. Take your actions, then use “Save Drill” in the game view.')
+                        } catch (err) {
+                          setError(err instanceof Error ? err.message : 'Failed to start drill')
+                        } finally {
+                          setLoading(false)
+                        }
+                      }}
+                      disabled={loading || !currentStep?.state_before}
+                      className="action-button"
+                      style={{
+                        backgroundColor: '#673ab7',
+                        color: 'white',
+                        padding: '0.75rem 1.5rem',
+                        fontSize: '1rem',
+                        fontWeight: 'bold'
+                      }}
+                    >
+                      {loading ? 'Starting...' : '🎯 Start Drill Mode (fork + record actions)'}
+                    </button>
                     <button
                       onClick={async () => {
                         if (!displayState) return
@@ -2146,6 +2583,89 @@ function App() {
       </header>
       <main className="game-main">
         {error && <div className="error">Error: {error}</div>}
+
+        {/* Drill Recording Banner */}
+        {drillRecording && (
+          <div
+            className="trading-panel"
+            style={{ marginBottom: '1rem', backgroundColor: '#f3e5f5', borderColor: '#673ab7' }}
+          >
+            <h2 style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span>🎯 Drill Recording</span>
+              <span style={{ fontSize: '0.9rem', color: '#555' }}>
+                Steps recorded: <strong>{drillRecording.steps.length}</strong>
+              </span>
+            </h2>
+            <div style={{ fontSize: '0.9rem', color: '#444', marginBottom: '0.5rem' }}>
+              <div>
+                <strong>Source:</strong> {drillRecording.source_game_id} @ step {drillRecording.source_step_idx} | <strong>Player:</strong> {drillRecording.drill_player_id}
+              </div>
+              <div>
+                <strong>Forked game:</strong> {drillRecording.forked_game_id}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+              <input
+                type="text"
+                value={drillRecording.name}
+                onChange={(e) => {
+                  const v = e.target.value
+                  setDrillRecording(prev => (prev ? { ...prev, name: v } : prev))
+                }}
+                style={{ flex: 1, minWidth: '280px', padding: '0.5rem' }}
+              />
+              <button
+                onClick={async () => {
+                  if (!drillRecording) return
+                  if (drillRecording.steps.length === 0) {
+                    alert('Record at least one action before saving.')
+                    return
+                  }
+                  setLoading(true)
+                  setError(null)
+                  try {
+                    const res = await createDrill({
+                      name: drillRecording.name,
+                      source_game_id: drillRecording.source_game_id,
+                      source_step_idx: drillRecording.source_step_idx,
+                      player_id: drillRecording.drill_player_id,
+                      steps: drillRecording.steps.map(s => ({
+                        player_id: s.player_id,
+                        state: s.state,
+                        expected_action: s.expected_action
+                      })),
+                      metadata: { forked_game_id: drillRecording.forked_game_id }
+                    })
+                    setDrillRecording(null)
+                    alert(`Saved drill #${res.drill_id}`)
+                    setView('drills')
+                    await refreshDrills()
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Failed to save drill')
+                  } finally {
+                    setLoading(false)
+                  }
+                }}
+                disabled={loading}
+                className="action-button"
+                style={{ backgroundColor: '#673ab7', color: 'white', fontWeight: 'bold' }}
+              >
+                {loading ? 'Saving...' : 'Save Drill'}
+              </button>
+              <button
+                onClick={() => {
+                  if (!confirm('Cancel drill recording? Recorded steps will be lost.')) return
+                  setDrillRecording(null)
+                }}
+                disabled={loading}
+                className="action-button"
+                style={{ backgroundColor: '#9e9e9e', color: 'white' }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
         
         {/* Feedback Panel for LLM Agent Teaching */}
         {lastAction && (
@@ -2708,6 +3228,21 @@ function App() {
                                     }
                                     
                                     console.log('Executing discard action:', discardAction)
+                                    // Drill recording: capture decision point
+                                    if (drillRecording && playerId === drillRecording.drill_player_id) {
+                                      const stateSnapshot = JSON.parse(JSON.stringify(gameState)) as GameState
+                                      setDrillRecording(prev => {
+                                        if (!prev) return prev
+                                        if (playerId !== prev.drill_player_id) return prev
+                                        return {
+                                          ...prev,
+                                          steps: [
+                                            ...prev.steps,
+                                            { player_id: playerId, state: stateSnapshot, expected_action: discardAction }
+                                          ]
+                                        }
+                                      })
+                                    }
                                     const newState = await postAction(gameState.game_id, playerId, discardAction)
                                     setGameState(newState)
                                     
@@ -3111,6 +3646,21 @@ function App() {
                                       }
                                     }
                                     
+                                    // Drill recording: capture decision point
+                                    if (drillRecording && playerId === drillRecording.drill_player_id) {
+                                      const stateSnapshot = JSON.parse(JSON.stringify(gameState)) as GameState
+                                      setDrillRecording(prev => {
+                                        if (!prev) return prev
+                                        if (playerId !== prev.drill_player_id) return prev
+                                        return {
+                                          ...prev,
+                                          steps: [
+                                            ...prev.steps,
+                                            { player_id: playerId, state: stateSnapshot, expected_action: tradeAction }
+                                          ]
+                                        }
+                                      })
+                                    }
                                     const newState = await postAction(gameState!.game_id, playerId, tradeAction)
                                     setGameState(newState)
                                     

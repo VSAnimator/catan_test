@@ -126,6 +126,44 @@ def init_db():
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_steps_game_step ON steps(game_id, step_idx)
     """)
+
+    # ---------------------------------------------------------------------
+    # Drills tables (curated "best action" datasets for agent evaluation)
+    # ---------------------------------------------------------------------
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS drills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            name TEXT,
+            source_game_id TEXT,
+            source_step_idx INTEGER,
+            player_id TEXT,
+            metadata TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS drill_steps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            drill_id INTEGER NOT NULL,
+            idx INTEGER NOT NULL,
+            player_id TEXT NOT NULL,
+            state_json TEXT NOT NULL,
+            expected_action_json TEXT NOT NULL,
+            state_text TEXT,
+            legal_actions_text TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (drill_id) REFERENCES drills(id)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_drills_created_at ON drills(created_at)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_drill_steps_drill_idx ON drill_steps(drill_id, idx)
+    """)
     
     # Enable WAL mode for better concurrency
     cursor.execute("PRAGMA journal_mode=WAL")
@@ -137,6 +175,117 @@ def init_db():
     # Guidelines DB will be initialized when first used
     
     # Don't close - keep connection for thread
+
+
+# =============================================================================
+# Drills persistence helpers
+# =============================================================================
+
+def create_drill(
+    *,
+    name: Optional[str],
+    source_game_id: Optional[str],
+    source_step_idx: Optional[int],
+    player_id: str,
+    metadata: Optional[Dict[str, Any]],
+    steps: List[Dict[str, Any]],
+) -> int:
+    """
+    Create a drill and its ordered drill_steps.
+
+    steps item format:
+      {
+        "idx": int,
+        "player_id": str,
+        "state_json": dict,
+        "expected_action_json": dict,
+        "state_text": Optional[str],
+        "legal_actions_text": Optional[str],
+      }
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO drills (name, source_game_id, source_step_idx, player_id, metadata)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            name,
+            source_game_id,
+            source_step_idx,
+            player_id,
+            json.dumps(metadata) if metadata else None,
+        ),
+    )
+    drill_id = int(cursor.lastrowid)
+
+    cursor.executemany(
+        """
+        INSERT INTO drill_steps (
+            drill_id, idx, player_id,
+            state_json, expected_action_json,
+            state_text, legal_actions_text
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                drill_id,
+                int(step["idx"]),
+                step["player_id"],
+                json.dumps(step["state_json"]),
+                json.dumps(step["expected_action_json"]),
+                step.get("state_text"),
+                step.get("legal_actions_text"),
+            )
+            for step in steps
+        ],
+    )
+
+    conn.commit()
+    return drill_id
+
+
+def list_drills(limit: int = 200) -> List[sqlite3.Row]:
+    """List drills newest-first."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT
+            d.*,
+            (SELECT COUNT(*) FROM drill_steps ds WHERE ds.drill_id = d.id) AS num_steps
+        FROM drills d
+        ORDER BY d.created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    return cursor.fetchall()
+
+
+def get_drill(drill_id: int) -> Optional[sqlite3.Row]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM drills WHERE id = ?", (drill_id,))
+    return cursor.fetchone()
+
+
+def get_drill_steps(drill_id: int) -> List[sqlite3.Row]:
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT *
+        FROM drill_steps
+        WHERE drill_id = ?
+        ORDER BY idx ASC
+        """,
+        (drill_id,),
+    )
+    return cursor.fetchall()
 
 
 def create_game(
