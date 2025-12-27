@@ -1257,7 +1257,11 @@ function App() {
                         style={{ flex: 1, padding: '0.25rem' }}
                       >
                         <option value="">Human Player</option>
-                        <option value="llm">LLM Agent (GPT-5.1)</option>
+                        <option value="llm">LLM Agent (legacy: env LLM_MODEL)</option>
+                        <option value="llm:gpt-4o">LLM Agent (gpt-4o)</option>
+                        <option value="llm:gpt-4.1">LLM Agent (gpt-4.1)</option>
+                        <option value="llm:gpt-5.2">LLM Agent (gpt-5.2)</option>
+                        <option value="llm:gpt-5.2:thinking:medium">LLM Agent (gpt-5.2 thinking · medium)</option>
                         <option value="behavior_tree">Behavior Tree Agent</option>
                         <option value="balanced">Balanced Agent</option>
                         <option value="aggressive_builder">Aggressive Builder</option>
@@ -2043,7 +2047,11 @@ function App() {
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <strong>Agent:</strong>
                 <select value={drillsAgentType} onChange={(e) => setDrillsAgentType(e.target.value)}>
-                  <option value="llm">LLM Agent (GPT-5.1)</option>
+                  <option value="llm">LLM Agent (legacy: env LLM_MODEL)</option>
+                  <option value="llm:gpt-4o">LLM Agent (gpt-4o)</option>
+                  <option value="llm:gpt-4.1">LLM Agent (gpt-4.1)</option>
+                  <option value="llm:gpt-5.2">LLM Agent (gpt-5.2)</option>
+                  <option value="llm:gpt-5.2:thinking:medium">LLM Agent (gpt-5.2 thinking · medium)</option>
                   <option value="behavior_tree">Behavior Tree Agent</option>
                   <option value="balanced">Balanced Agent</option>
                   <option value="aggressive_builder">Aggressive Builder</option>

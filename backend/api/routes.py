@@ -5,6 +5,7 @@ from typing import Optional, List, Dict, Any
 from typing import List, Dict, Optional, Any
 from pydantic import BaseModel
 from datetime import datetime
+import asyncio
 import uuid
 import random
 import json
@@ -548,6 +549,45 @@ async def create_drill_endpoint(request: CreateDrillRequest):
     return CreateDrillResponse(drill_id=drill_id, message="Drill created")
 
 
+def _parse_llm_agent_spec(agent_type_str: str) -> Optional[Dict[str, Any]]:
+    """
+    Parse frontend agent_type strings for LLM variants.
+
+    Supported:
+      - "llm" (legacy; use env vars)
+      - "llm:<model>" (explicit model; thinking disabled)
+      - "llm:<model>:thinking:<effort>" (explicit model + thinking effort)
+      - "llm:<model>:thinking-<effort>" (alternate shorthand)
+
+    Returns None if not an LLM spec.
+    """
+    if agent_type_str == "llm":
+        return {"model": None, "thinking_mode": None, "thinking_effort": None}
+    if not agent_type_str.startswith("llm:"):
+        return None
+
+    parts = agent_type_str.split(":")
+    model = parts[1].strip() if len(parts) > 1 else None
+    if not model:
+        return {"model": None, "thinking_mode": False, "thinking_effort": "medium"}
+
+    thinking_mode = False
+    thinking_effort: Optional[str] = "medium"
+
+    if len(parts) >= 3:
+        p2 = parts[2].strip().lower()
+        if p2 in ("thinking", "think", "reasoning"):
+            thinking_mode = True
+            if len(parts) >= 4 and parts[3].strip():
+                thinking_effort = parts[3].strip().lower()
+        elif p2.startswith("thinking-") or p2.startswith("think-") or p2.startswith("reasoning-"):
+            thinking_mode = True
+            _, _, effort = p2.partition("-")
+            thinking_effort = (effort or "medium").strip().lower()
+
+    return {"model": model, "thinking_mode": thinking_mode, "thinking_effort": thinking_effort}
+
+
 def _make_agent(agent_type: str, player_id: str):
     # Mirror watch_agents_step behavior to keep a single mental model in the UI.
     from agents import RandomAgent, BehaviorTreeAgent
@@ -584,8 +624,9 @@ def _make_agent(agent_type: str, player_id: str):
         except Exception:
             pass
 
-    agent_class = AGENT_CLASSES.get(agent_type, RandomAgent)
-    if agent_type == "llm":
+    llm_spec = _parse_llm_agent_spec(agent_type)
+    if llm_spec is not None:
+        agent_class = AGENT_CLASSES.get("llm", RandomAgent)
         import os
         api_key = (
             os.getenv("OPENAI_API_KEY")
@@ -593,8 +634,16 @@ def _make_agent(agent_type: str, player_id: str):
             or os.getenv("GEMINI_API_KEY")
             or os.getenv("LLM_API_KEY")
         )
-        model = os.getenv("LLM_MODEL", "gpt-5.1")
-        return agent_class(player_id, api_key=api_key, model=model, enable_retrieval=False)
+        model = llm_spec["model"] or os.getenv("LLM_MODEL", "gpt-5.1")
+        return agent_class(
+            player_id,
+            api_key=api_key,
+            model=model,
+            enable_retrieval=False,
+            thinking_mode=llm_spec["thinking_mode"],
+            thinking_effort=llm_spec["thinking_effort"],
+        )
+    agent_class = AGENT_CLASSES.get(agent_type, RandomAgent)
     return agent_class(player_id)
 
 
@@ -695,35 +744,67 @@ class EvaluateAllDrillsRequest(BaseModel):
     agent_type: str = "random"
     limit: int = 200
     include_step_results: bool = False
+    max_concurrency: int = 4
 
 
 @router.post("/drills/evaluate_all")
 async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
+    if request.max_concurrency < 1 or request.max_concurrency > 32:
+        raise HTTPException(status_code=400, detail="max_concurrency must be between 1 and 32")
+
     drill_rows = list_drills_from_db(limit=request.limit)
     evaluated_at = datetime.utcnow().isoformat()
     run_id = str(uuid.uuid4())
-    summaries = []
+    # Preload all drill steps in the main thread (read-only), then evaluate drills concurrently.
+    prepared: List[Dict[str, Any]] = []
     for d in drill_rows:
         drill_id = int(d["id"])
-        steps = get_drill_steps_from_db(drill_id)
-        if not steps:
-            summaries.append(
+        step_rows = get_drill_steps_from_db(drill_id)
+        steps_prepped = []
+        for r in step_rows:
+            steps_prepped.append(
                 {
-                    "drill_id": drill_id,
-                    "name": d["name"],
-                    "passed": False,
-                    "error": "No steps",
+                    "idx": int(r["idx"]),
+                    "player_id": r["player_id"],
+                    "state_json": json.loads(r["state_json"]),
+                    "expected_action": json.loads(r["expected_action_json"]),
                 }
             )
-            continue
+        prepared.append(
+            {
+                "drill_id": drill_id,
+                "name": d["name"],
+                "source_game_id": d["source_game_id"],
+                "source_step_idx": d["source_step_idx"],
+                "player_id": d["player_id"],
+                "num_steps": d["num_steps"],
+                "steps": steps_prepped,
+            }
+        )
+
+    def _eval_one_drill(prep: Dict[str, Any]) -> Dict[str, Any]:
+        steps = prep["steps"]
+        if not steps:
+            return {
+                "drill_id": prep["drill_id"],
+                "name": prep["name"],
+                "source_game_id": prep["source_game_id"],
+                "source_step_idx": prep["source_step_idx"],
+                "player_id": prep["player_id"],
+                "num_steps": prep["num_steps"],
+                "passed": False,
+                "first_mismatch": {"idx": 0, "error": "No steps"},
+                **({"step_results": []} if request.include_step_results else {}),
+            }
 
         passed = True
         first_mismatch = None
         step_results = [] if request.include_step_results else None
-        for r in steps:
-            player_id = r["player_id"]
-            state_json = json.loads(r["state_json"])
-            expected_action = json.loads(r["expected_action_json"])
+
+        for s in steps:
+            player_id = s["player_id"]
+            state_json = s["state_json"]
+            expected_action = s["expected_action"]
             state = deserialize_game_state(state_json)
             la_list = legal_actions(state, player_id)
             agent = _make_agent(request.agent_type, player_id)
@@ -741,14 +822,11 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
                     raw_llm_response = None
             except Exception as e:
                 passed = False
-                first_mismatch = {
-                    "idx": r["idx"],
-                    "error": str(e),
-                }
+                first_mismatch = {"idx": s["idx"], "error": str(e)}
                 if request.include_step_results:
                     step_results.append(
                         {
-                            "idx": r["idx"],
+                            "idx": s["idx"],
                             "player_id": player_id,
                             "match": False,
                             "expected_action": expected_action,
@@ -770,7 +848,7 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
             if request.include_step_results:
                 step_results.append(
                     {
-                        "idx": r["idx"],
+                        "idx": s["idx"],
                         "player_id": player_id,
                         "match": match,
                         "expected_action": expected_action,
@@ -781,30 +859,55 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
             if not match:
                 passed = False
                 first_mismatch = {
-                    "idx": r["idx"],
+                    "idx": s["idx"],
                     "expected_action": expected_action,
                     "actual_action": actual_action_dict,
                 }
                 break
 
-        summaries.append(
-            {
-                "drill_id": drill_id,
-                "name": d["name"],
-                "source_game_id": d["source_game_id"],
-                "source_step_idx": d["source_step_idx"],
-                "player_id": d["player_id"],
-                "num_steps": d["num_steps"],
-                "passed": passed,
-                "first_mismatch": first_mismatch,
-                **({"step_results": step_results} if request.include_step_results else {}),
-            }
-        )
+        return {
+            "drill_id": prep["drill_id"],
+            "name": prep["name"],
+            "source_game_id": prep["source_game_id"],
+            "source_step_idx": prep["source_step_idx"],
+            "player_id": prep["player_id"],
+            "num_steps": prep["num_steps"],
+            "passed": passed,
+            "first_mismatch": first_mismatch,
+            **({"step_results": step_results} if request.include_step_results else {}),
+        }
+
+    sem = asyncio.Semaphore(request.max_concurrency)
+
+    async def _run_one(prep: Dict[str, Any]) -> Dict[str, Any]:
+        async with sem:
+            return await asyncio.to_thread(_eval_one_drill, prep)
+
+    results = await asyncio.gather(*[_run_one(p) for p in prepared], return_exceptions=True)
+    summaries: List[Dict[str, Any]] = []
+    for prep, res in zip(prepared, results):
+        if isinstance(res, Exception):
+            summaries.append(
+                {
+                    "drill_id": prep["drill_id"],
+                    "name": prep["name"],
+                    "source_game_id": prep["source_game_id"],
+                    "source_step_idx": prep["source_step_idx"],
+                    "player_id": prep["player_id"],
+                    "num_steps": prep["num_steps"],
+                    "passed": False,
+                    "first_mismatch": {"idx": 0, "error": str(res)},
+                    **({"step_results": []} if request.include_step_results else {}),
+                }
+            )
+        else:
+            summaries.append(res)
 
     return {
         "agent_type": request.agent_type,
         "run_id": run_id,
         "evaluated_at": evaluated_at,
+        "max_concurrency": request.max_concurrency,
         "results": summaries,
     }
 
@@ -1121,10 +1224,11 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
     for player in current_state.players:
         if player.id in agent_mapping:
             agent_type = agent_mapping[player.id]
-            agent_class = AGENT_CLASSES.get(agent_type, RandomAgent)
+            llm_spec = _parse_llm_agent_spec(agent_type)
+            agent_class = AGENT_CLASSES.get("llm" if llm_spec is not None else agent_type, RandomAgent)
             
             # Special handling for LLM agent
-            if agent_type == "llm":
+            if llm_spec is not None:
                 import os
                 # Get API key and model from env vars
                 api_key = (
@@ -1133,13 +1237,15 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
                     os.getenv("GEMINI_API_KEY") or
                     os.getenv("LLM_API_KEY")
                 )
-                model = os.getenv("LLM_MODEL", "gpt-5.1")  # Default to gpt-5.1 (latest model)
+                model = llm_spec["model"] or os.getenv("LLM_MODEL", "gpt-5.1")  # Default to gpt-5.1 (latest model)
                 # Zero-shot mode: disable retrieval
                 agents[player.id] = agent_class(
                     player.id,
                     api_key=api_key,
                     model=model,
-                    enable_retrieval=False  # Zero-shot mode
+                    enable_retrieval=False,  # Zero-shot mode
+                    thinking_mode=llm_spec["thinking_mode"],
+                    thinking_effort=llm_spec["thinking_effort"],
                 )
             else:
                 agents[player.id] = agent_class(player.id)

@@ -43,6 +43,15 @@ dist-ssr/
 *.log
 .cache/
 
+# Local environment / secrets
+.env
+
+# Local backup artifacts
+*.backup
+
+# Local npm cache folders (we keep node_modules ignored separately)
+.npm-cache/
+
 # IDEs
 .vscode/
 .idea/

@@ -36,7 +36,9 @@ class LLMAgent(BaseAgent):
         model: str = "gpt-5.1",
         temperature: float = 0.7,
         max_examples: int = 5,
-        enable_retrieval: bool = True
+        enable_retrieval: bool = True,
+        thinking_mode: Optional[bool] = None,
+        thinking_effort: Optional[str] = None,
     ):
         # Token usage tracking
         self.token_usage_history: List[Dict[str, int]] = []
@@ -64,6 +66,23 @@ class LLMAgent(BaseAgent):
         self.model = model
         self.temperature = temperature
         self.enable_retrieval = enable_retrieval
+
+        # --- GPT-5 "thinking mode" / reasoning effort ---
+        # Docs: https://platform.openai.com/docs/guides/reasoning
+        # Note: we call `litellm.completion(...)` (Chat/Completions-style). The OpenAI API
+        # rejects a nested `reasoning: { effort: ... }` object in that endpoint.
+        # For this codepath we send `reasoning_effort=<effort>` instead.
+        #
+        # Values commonly used in our UI: low | medium | high (default medium)
+        env_thinking_mode = os.getenv("LLM_THINKING_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+        env_thinking_effort = os.getenv("LLM_THINKING_EFFORT", "").strip().lower() or None
+
+        self.thinking_mode = env_thinking_mode if thinking_mode is None else bool(thinking_mode)
+        self.thinking_effort = (thinking_effort or env_thinking_effort or "medium").strip().lower()
+        if self.thinking_effort not in ("low", "medium", "high"):
+            raise ValueError(
+                f"Invalid thinking_effort='{self.thinking_effort}'. Must be one of: low, medium, high."
+            )
         # Only create retriever if retrieval is enabled (for zero-shot, skip this)
         self.retriever = StateRetriever(max_examples=max_examples) if enable_retrieval else None
         
@@ -80,12 +99,22 @@ class LLMAgent(BaseAgent):
                 # Default to OpenAI for unknown models
                 os.environ["OPENAI_API_KEY"] = api_key
     
-    def _call_llm(self, messages: List[Dict[str, str]]) -> str:
+    def _call_llm(
+        self,
+        messages: List[Dict[str, str]],
+        *,
+        model_override: Optional[str] = None,
+        thinking_mode_override: Optional[bool] = None,
+        thinking_effort_override: Optional[str] = None,
+    ) -> str:
         """
         Call the LLM API using LiteLLM (supports OpenAI, Anthropic, Google, etc.).
         
         Args:
             messages: List of message dicts with "role" and "content"
+            model_override: If provided, use this model for the call (does not mutate self.model)
+            thinking_mode_override: If provided, overrides thinking mode for this call
+            thinking_effort_override: If provided, overrides thinking effort for this call
             
         Returns:
             LLM response text
@@ -97,17 +126,42 @@ class LLMAgent(BaseAgent):
             # Set drop_params to handle unsupported parameters gracefully
             litellm.drop_params = True
             
+            model = model_override or self.model
+            thinking_mode = self.thinking_mode if thinking_mode_override is None else bool(thinking_mode_override)
+            thinking_effort = (thinking_effort_override or self.thinking_effort).strip().lower()
+
             # Adjust temperature for GPT-5 models
             temperature = self.temperature
-            if self.model.startswith("gpt-5"):
+            if model.startswith("gpt-5"):
                 temperature = 1.0
-            
-            response = litellm.completion(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=2000
-            )
+
+            completion_kwargs: Dict[str, Any] = {
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": 2000,
+            }
+
+            # Enable "thinking mode" for GPT-5.* by setting reasoning effort (default: medium).
+            # We only set this for GPT-5 models to avoid passing provider-specific params to other models.
+            if thinking_mode and model.startswith("gpt-5"):
+                completion_kwargs["reasoning_effort"] = thinking_effort
+
+            try:
+                response = litellm.completion(**completion_kwargs)
+            except Exception as e:
+                # If the provider rejects the reasoning param, retry without it (fail-soft).
+                msg = str(e)
+                if (
+                    thinking_mode
+                    and model.startswith("gpt-5")
+                    and ("Unknown parameter: 'reasoning'" in msg or "Unknown parameter: 'reasoning_effort'" in msg)
+                ):
+                    completion_kwargs.pop("reasoning", None)
+                    completion_kwargs.pop("reasoning_effort", None)
+                    response = litellm.completion(**completion_kwargs)
+                else:
+                    raise
             
             # Track token usage
             if hasattr(response, 'usage') and response.usage:
@@ -123,6 +177,546 @@ class LLMAgent(BaseAgent):
             raise ImportError("litellm package required. Install with: pip install litellm")
         except Exception as e:
             raise RuntimeError(f"LLM API error: {str(e)}")
+
+    def _parse_llm_action_response(
+        self,
+        response_text: str,
+        state: GameState,
+        legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]],
+    ) -> Tuple[Action, Optional[ActionPayload], Optional[str], Optional[str]]:
+        """Parse an LLM response into a legal action tuple or raise on failure."""
+        # Parse response
+        # (This is factored out so we can retry LLM calls if parsing fails.)
+        try:
+            # Try to extract JSON from response (might have markdown code blocks)
+            original_response = response_text
+            response_text = response_text.strip()
+            
+            # Try multiple extraction methods
+            if "```json" in response_text:
+                response_text = response_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in response_text:
+                # Try to find JSON block
+                parts = response_text.split("```")
+                for i, part in enumerate(parts):
+                    if i % 2 == 1:  # Odd indices are code blocks
+                        part = part.strip()
+                        if part.startswith("json"):
+                            part = part[4:].strip()
+                        # Try to parse this part as JSON
+                        try:
+                            json.loads(part)
+                            response_text = part
+                            break
+                        except:
+                            continue
+            
+            # Try to find JSON object in text if not already extracted
+            if not response_text.startswith("{"):
+                # Look for first { and last }
+                start_idx = response_text.find("{")
+                end_idx = response_text.rfind("}")
+                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                    response_text = response_text[start_idx:end_idx+1]
+            
+            response_json = json.loads(response_text)
+            
+            action_type_str = response_json.get("action_type", "").lower()
+            action_payload_dict = response_json.get("action_payload", {})
+            reasoning = response_json.get("reasoning", None)  # Extract reasoning
+            
+            # Special handling: During setup phase, map "build_settlement" to "setup_place_settlement"
+            # and "build_road" to "setup_place_road" if those are the legal actions
+            # This is critical because LLMs often use "build_settlement" even during setup
+            if state.phase == "setup":
+                if action_type_str == "build_settlement":
+                    # Check if setup_place_settlement is legal
+                    if any(a == Action.SETUP_PLACE_SETTLEMENT for a, _ in legal_actions_list):
+                        action_type_str = "setup_place_settlement"
+                        print(f"  Mapped 'build_settlement' to 'setup_place_settlement' during setup phase", flush=True)
+                elif action_type_str == "build_road":
+                    # Check if setup_place_road is legal
+                    if any(a == Action.SETUP_PLACE_ROAD for a, _ in legal_actions_list):
+                        action_type_str = "setup_place_road"
+                        print(f"  Mapped 'build_road' to 'setup_place_road' during setup phase", flush=True)
+            
+            # Handle compound or invalid action names BEFORE normalization
+            # If the LLM returns a compound action, try to map it to the appropriate single action
+            if "move_robber" in action_type_str and "steal" in action_type_str:
+                # Compound action: move_robber_and_steal
+                # Check what's actually legal - if only steal is legal, use that
+                has_steal = any(a == Action.STEAL_RESOURCE for a, _ in legal_actions_list)
+                has_move = any(a == Action.MOVE_ROBBER for a, _ in legal_actions_list)
+                if has_steal and not has_move:
+                    action_type_str = "steal_resource"
+                elif has_move:
+                    action_type_str = "move_robber"
+                else:
+                    # Neither is legal, will be caught later
+                    action_type_str = "steal_resource"  # Default fallback
+            elif "pass" in action_type_str or "skip" in action_type_str:
+                # LLM trying to "pass" or "skip" - map to appropriate action based on what's legal
+                if any(a == Action.STEAL_RESOURCE for a, _ in legal_actions_list):
+                    # Must steal before passing/skipping
+                    action_type_str = "steal_resource"
+                elif any(a == Action.END_TURN for a, _ in legal_actions_list):
+                    action_type_str = "end_turn"
+                else:
+                    # Use first available action
+                    if legal_actions_list:
+                        # Map to the first legal action's type
+                        first_action = legal_actions_list[0][0]
+                        action_type_str = first_action.value
+            elif "resolve" in action_type_str and "robber" in action_type_str:
+                # LLM trying to "resolve_robber" - map to appropriate robber action
+                if any(a == Action.STEAL_RESOURCE for a, _ in legal_actions_list):
+                    action_type_str = "steal_resource"
+                elif any(a == Action.MOVE_ROBBER for a, _ in legal_actions_list):
+                    action_type_str = "move_robber"
+            
+            # Normalize action type string: replace spaces/hyphens with underscores, remove extra chars
+            action_type_normalized = action_type_str.replace(" ", "_").replace("-", "_").strip()
+            
+            # Find matching action - try multiple matching strategies
+            action_type_map = {
+                "build_settlement": Action.BUILD_SETTLEMENT,
+                "build_city": Action.BUILD_CITY,
+                "build_road": Action.BUILD_ROAD,
+                "buy_dev_card": Action.BUY_DEV_CARD,
+                "buy_devcard": Action.BUY_DEV_CARD,  # Alternative spelling
+                "play_dev_card": Action.PLAY_DEV_CARD,
+                "play_devcard": Action.PLAY_DEV_CARD,  # Alternative spelling
+                "play_development_card": Action.PLAY_DEV_CARD,  # Full name variant
+                "play_knight": Action.PLAY_DEV_CARD,  # Common variant (knight is a dev card)
+                "play_monopoly": Action.PLAY_DEV_CARD,  # Common variant
+                "play_year_of_plenty": Action.PLAY_DEV_CARD,  # Common variant
+                "play_road_building": Action.PLAY_DEV_CARD,  # Common variant
+                "trade_bank": Action.TRADE_BANK,
+                "propose_trade": Action.PROPOSE_TRADE,
+                "accept_trade": Action.ACCEPT_TRADE,
+                "reject_trade": Action.REJECT_TRADE,
+                "select_trade_partner": Action.SELECT_TRADE_PARTNER,
+                "move_robber": Action.MOVE_ROBBER,
+                "robber_move": Action.MOVE_ROBBER,  # Alternative name
+                "steal_resource": Action.STEAL_RESOURCE,
+                "discard_resources": Action.DISCARD_RESOURCES,
+                "end_turn": Action.END_TURN,
+                "setup_place_settlement": Action.SETUP_PLACE_SETTLEMENT,
+                "setup_place_road": Action.SETUP_PLACE_ROAD,
+                "start_game": Action.START_GAME,
+            }
+            
+            # Try exact match first (normalized)
+            target_action = action_type_map.get(action_type_normalized)
+            
+            # Try original string too
+            if not target_action:
+                target_action = action_type_map.get(action_type_str)
+            
+            # Try matching against legal actions with fuzzy matching
+            if not target_action:
+                # Remove common words and normalize
+                action_clean = action_type_normalized.replace("dev", "dev_card").replace("card", "dev_card")
+                for action, _ in legal_actions_list:
+                    action_value_lower = action.value.lower()
+                    # Check if normalized string matches action value
+                    if (action_type_normalized == action_value_lower or
+                        action_clean == action_value_lower or
+                        action_type_normalized in action_value_lower or
+                        action_value_lower in action_type_normalized):
+                        target_action = action
+                        print(f"  Matched via fuzzy: '{action_type_str}' -> {action.value}", flush=True)
+                        break
+            
+            if not target_action:
+                # Try harder to find a match
+                action_type_clean = action_type_str.replace("_", "").replace("-", "")
+                for action, _ in legal_actions_list:
+                    action_value_clean = action.value.replace("_", "").replace("-", "")
+                    if action_type_clean in action_value_clean or action_value_clean in action_type_clean:
+                        target_action = action
+                        print(f"  Matched action via fuzzy matching: {action_type_str} -> {action.value}", flush=True)
+                        break
+                
+                if not target_action:
+                    print(f"Warning: Could not map action type '{action_type_str}' to any legal action", flush=True)
+                    print(f"  Available actions: {[a.value for a, _ in legal_actions_list]}", flush=True)
+                    raise ValueError(f"Could not map action type: {action_type_str}")
+            
+            # Find the matching legal action with payload
+            matching_action = None
+            exact_match = None
+            preferred_match = None
+            
+            # For actions with tile_id (like MOVE_ROBBER), try to match the LLM's preference
+            if target_action == Action.MOVE_ROBBER and action_payload_dict and "tile_id" in action_payload_dict:
+                llm_tile_id = action_payload_dict["tile_id"]
+                # Try to find exact match first
+                for action, payload in legal_actions_list:
+                    if action == target_action and payload and hasattr(payload, "tile_id"):
+                        if payload.tile_id == llm_tile_id:
+                            exact_match = (action, payload)
+                            break
+                        # Also store first match as fallback
+                        if not preferred_match:
+                            preferred_match = (action, payload)
+                
+                if exact_match:
+                    matching_action = exact_match
+                elif preferred_match:
+                    # LLM specified a tile_id but it doesn't match any legal action
+                    # This might be a parsing error - log it
+                    print(f"Warning: LLM requested tile_id {llm_tile_id} but it's not in legal actions. Using first available.", flush=True)
+                    matching_action = preferred_match
+            
+            # For BUILD_ROAD actions, handle both "road_id" and "road_edge_id" field names
+            elif target_action == Action.BUILD_ROAD and action_payload_dict:
+                # LLM might use "road_id" instead of "road_edge_id"
+                llm_road_id = action_payload_dict.get("road_edge_id") or action_payload_dict.get("road_id")
+                if llm_road_id is not None:
+                    # Try to find exact match first
+                    for action, payload in legal_actions_list:
+                        if action == target_action and payload and hasattr(payload, "road_edge_id"):
+                            if payload.road_edge_id == llm_road_id:
+                                exact_match = (action, payload)
+                                break
+                            # Also store first match as fallback
+                            if not preferred_match:
+                                preferred_match = (action, payload)
+                    
+                    if exact_match:
+                        matching_action = exact_match
+                    elif preferred_match:
+                        # LLM specified a road_id but it doesn't match any legal action
+                        print(f"Warning: LLM requested road_id {llm_road_id} but it's not in legal actions. Using first available.", flush=True)
+                        matching_action = preferred_match
+            
+            # For SETUP_PLACE_SETTLEMENT and BUILD_SETTLEMENT actions, match by intersection_id
+            elif target_action in (Action.SETUP_PLACE_SETTLEMENT, Action.BUILD_SETTLEMENT) and action_payload_dict:
+                # LLM might use "intersection" or "intersectionId" instead of "intersection_id"
+                llm_intersection_id = (action_payload_dict.get("intersection_id") or 
+                                      action_payload_dict.get("intersection") or
+                                      action_payload_dict.get("intersectionId"))
+                if llm_intersection_id is not None:
+                    # Try to find exact match first
+                    for action, payload in legal_actions_list:
+                        if action == target_action and payload and hasattr(payload, "intersection_id"):
+                            if payload.intersection_id == llm_intersection_id:
+                                exact_match = (action, payload)
+                                break
+                            # Also store first match as fallback
+                            if not preferred_match:
+                                preferred_match = (action, payload)
+                    
+                    if exact_match:
+                        matching_action = exact_match
+                    elif preferred_match:
+                        # LLM specified an intersection_id but it doesn't match any legal action
+                        print(f"Warning: LLM requested intersection_id {llm_intersection_id} but it's not in legal actions. Using first available.", flush=True)
+                        matching_action = preferred_match
+            
+            # For BUILD_CITY actions, match by intersection_id
+            elif target_action == Action.BUILD_CITY and action_payload_dict:
+                # LLM might use "intersection" or "intersectionId" instead of "intersection_id"
+                llm_intersection_id = (action_payload_dict.get("intersection_id") or 
+                                      action_payload_dict.get("intersection") or
+                                      action_payload_dict.get("intersectionId"))
+                if llm_intersection_id is not None:
+                    # Try to find exact match first
+                    for action, payload in legal_actions_list:
+                        if action == target_action and payload and hasattr(payload, "intersection_id"):
+                            if payload.intersection_id == llm_intersection_id:
+                                exact_match = (action, payload)
+                                break
+                            # Also store first match as fallback
+                            if not preferred_match:
+                                preferred_match = (action, payload)
+                    
+                    if exact_match:
+                        matching_action = exact_match
+                    elif preferred_match:
+                        # LLM specified an intersection_id but it doesn't match any legal action
+                        print(f"Warning: LLM requested intersection_id {llm_intersection_id} but it's not in legal actions. Using first available.", flush=True)
+                        matching_action = preferred_match
+            
+            # For PROPOSE_TRADE, construct payload from LLM response
+            # This allows the agent to propose any trade, not just pre-enumerated ones
+            if target_action == Action.PROPOSE_TRADE and action_payload_dict:
+                if "give_resources" in action_payload_dict and "receive_resources" in action_payload_dict:
+                    llm_give = action_payload_dict["give_resources"]
+                    llm_receive = action_payload_dict["receive_resources"]
+                    llm_target_players = action_payload_dict.get("target_player_ids", [])
+                    
+                    # Check if legal action has None payload (meaning we can construct any trade)
+                    has_none_payload = any(action == target_action and payload is None for action, payload in legal_actions_list)
+                    
+                    if has_none_payload:
+                        # Construct ProposeTradePayload from LLM's response
+                        from engine import ResourceType, ProposeTradePayload
+                        
+                        # Convert string resource names to ResourceType enum
+                        def convert_resource_dict(d):
+                            """Convert resource dict with string keys to ResourceType keys."""
+                            result = {}
+                            for k, v in d.items():
+                                if isinstance(k, str):
+                                    # Find matching ResourceType
+                                    found = False
+                                    for rt in ResourceType:
+                                        if rt.value == k.lower():
+                                            result[rt] = v
+                                            found = True
+                                            break
+                                    if not found:
+                                        raise ValueError(f"Invalid resource type: {k}. Valid types: {[rt.value for rt in ResourceType]}")
+                                else:
+                                    result[k] = v
+                            return result
+                        
+                        try:
+                            give_resources = convert_resource_dict(llm_give)
+                            receive_resources = convert_resource_dict(llm_receive)
+                            
+                            # Validate target_player_ids
+                            if not llm_target_players:
+                                raise ValueError("target_player_ids is required for PROPOSE_TRADE")
+                            
+                            # Construct the payload
+                            constructed_payload = ProposeTradePayload(
+                                target_player_ids=llm_target_players,
+                                give_resources=give_resources,
+                                receive_resources=receive_resources
+                            )
+                            
+                            # Use the constructed payload
+                            matching_action = (target_action, constructed_payload)
+                            print(f"  Constructed PROPOSE_TRADE payload: give={llm_give}, receive={llm_receive}, targets={llm_target_players}", flush=True)
+                        except (ValueError, KeyError, TypeError) as e:
+                            # Invalid trade format - raise error to trigger retry
+                            error_msg = f"Invalid PROPOSE_TRADE format: {str(e)}. Required fields: give_resources (dict), receive_resources (dict), target_player_ids (list). Resource types must be: {[rt.value for rt in ResourceType]}"
+                            print(f"Error: {error_msg}", flush=True)
+                            raise ValueError(error_msg)
+                    else:
+                        # Old behavior: try to match against pre-enumerated trades
+                        # Normalize LLM's resource dict (convert string keys to ResourceType if needed)
+                        def normalize_llm_resource_dict(d):
+                            """Normalize LLM's resource dict to match legal action format."""
+                            result = {}
+                            for k, v in d.items():
+                                # Convert string resource names to ResourceType enum if needed
+                                if isinstance(k, str):
+                                    from engine import ResourceType
+                                    try:
+                                        # Try to find matching ResourceType
+                                        for rt in ResourceType:
+                                            if rt.value == k.lower():
+                                                result[rt] = v
+                                                break
+                                        else:
+                                            # Keep as string if no match
+                                            result[k] = v
+                                    except:
+                                        result[k] = v
+                                else:
+                                    result[k] = v
+                            return result
+                        
+                        llm_give_normalized = normalize_llm_resource_dict(llm_give)
+                        llm_receive_normalized = normalize_llm_resource_dict(llm_receive)
+                        
+                        # Try to find exact match
+                        for action, payload in legal_actions_list:
+                            if action == target_action and payload:
+                                payload_dict = self._payload_to_dict(payload)
+                                legal_give = payload_dict.get("give_resources", {})
+                                legal_receive = payload_dict.get("receive_resources", {})
+                                # Check if give_resources and receive_resources match exactly
+                                if legal_give == llm_give_normalized and legal_receive == llm_receive_normalized:
+                                    matching_action = (action, payload)
+                                    break
+                        
+                        if not matching_action:
+                            print(f"Warning: LLM requested PROPOSE_TRADE with give_resources={llm_give}, receive_resources={llm_receive}, but no exact match found in legal actions", flush=True)
+                            print(f"  Available trades: {[(self._payload_to_dict(p).get('give_resources'), self._payload_to_dict(p).get('receive_resources')) for a, p in legal_actions_list if a == target_action][:5]}", flush=True)
+                            # Don't fallback - require exact match for PROPOSE_TRADE
+                            # This prevents executing wrong trades
+                else:
+                    # Missing required fields - raise error to trigger retry
+                    error_msg = "PROPOSE_TRADE requires 'give_resources' and 'receive_resources' in action_payload. Format: {\"action_type\": \"propose_trade\", \"action_payload\": {\"give_resources\": {\"wood\": 1}, \"receive_resources\": {\"sheep\": 1}, \"target_player_ids\": [\"player_1\"]}}"
+                    print(f"Error: {error_msg}", flush=True)
+                    raise ValueError(error_msg)
+            
+            # For DISCARD_RESOURCES, handle payload generation if LLM provides resources dict
+            if target_action == Action.DISCARD_RESOURCES and action_payload_dict and "resources" in action_payload_dict:
+                from engine import DiscardResourcesPayload, ResourceType
+                
+                # Get the player to validate discard amount
+                player = next((p for p in state.players if p.id == self.player_id), None)
+                if player:
+                    total_resources = sum(player.resources.values())
+                    expected_discard = total_resources // 2
+                    
+                    # Convert LLM's resource dict (string keys) to ResourceType keys
+                    llm_resources = action_payload_dict["resources"]
+                    discard_dict = {}
+                    for k, v in llm_resources.items():
+                        if isinstance(k, str):
+                            # Find matching ResourceType
+                            for rt in ResourceType:
+                                if rt.value == k.lower():
+                                    discard_dict[rt] = v
+                                    break
+                            else:
+                                raise ValueError(f"Invalid resource type: {k}. Valid types: {[rt.value for rt in ResourceType]}")
+                        else:
+                            discard_dict[k] = v
+                    
+                    # Validate discard amount
+                    total_discard = sum(discard_dict.values())
+                    if total_discard != expected_discard:
+                        # LLM provided wrong amount - log warning and fall through to fallback generation
+                        print(f"  Warning: LLM provided discard amount {total_discard}, but expected {expected_discard}. Using fallback generation.", flush=True)
+                        # Don't set matching_action - let it fall through to fallback generation below
+                    else:
+                        # Validate player has enough of each resource
+                        valid = True
+                        for resource_type, amount in discard_dict.items():
+                            if player.resources.get(resource_type, 0) < amount:
+                                print(f"  Warning: LLM wants to discard {amount} {resource_type.value}, but player only has {player.resources.get(resource_type, 0)}. Using fallback generation.", flush=True)
+                                valid = False
+                                break
+                        
+                        if valid:
+                            # Create payload from LLM's specification
+                            constructed_payload = DiscardResourcesPayload(resources=discard_dict)
+                            matching_action = (target_action, constructed_payload)
+                            print(f"  Constructed DISCARD_RESOURCES payload from LLM: {discard_dict}", flush=True)
+            
+            # For other actions, use standard matching
+            if not matching_action:
+                for action, payload in legal_actions_list:
+                    if action == target_action:
+                        # If payload is provided, try to match it
+                        if action_payload_dict and payload:
+                            # Simple matching - check if keys match
+                            payload_dict = self._payload_to_dict(payload)
+                            if self._payloads_match(payload_dict, action_payload_dict):
+                                matching_action = (action, payload)
+                                break
+                        elif not action_payload_dict and not payload:
+                            # Both are None
+                            matching_action = (action, payload)
+                            break
+                
+                # Fallback only if still no match (and not PROPOSE_TRADE which requires exact match)
+                if not matching_action and target_action != Action.PROPOSE_TRADE:
+                    # Store first match as fallback
+                    for action, payload in legal_actions_list:
+                        if action == target_action:
+                            matching_action = (action, payload)
+                            break
+            
+            if not matching_action:
+                # Fallback: just pick the first matching action type
+                for action, payload in legal_actions_list:
+                    if action == target_action:
+                        matching_action = (action, payload)
+                        break
+            
+            if not matching_action:
+                print(f"Warning: Could not find exact matching legal action for {action_type_str}", flush=True)
+                print(f"  Target action enum: {target_action.value if target_action else 'None'}", flush=True)
+                print(f"  Legal actions of this type: {[(a.value, type(p).__name__ if p else None) for a, p in legal_actions_list if a == target_action]}", flush=True)
+                print(f"  All available legal actions: {[a.value for a, _ in legal_actions_list]}", flush=True)
+                print(f"  LLM response JSON: {json.dumps(response_json, indent=2)[:500]}", flush=True)
+                
+                # Last resort: pick first matching action type
+                for action, payload in legal_actions_list:
+                    if action == target_action:
+                        matching_action = (action, payload)
+                        print(f"  Using first available action: {action.value}", flush=True)
+                        break
+                
+                if not matching_action:
+                    # The LLM returned an action that isn't legal. Try to find a similar legal action
+                    # For example, if LLM said "move_robber" but only "steal_resource" is legal,
+                    # that might mean the robber was already moved
+                    if target_action == Action.MOVE_ROBBER:
+                        # Check if STEAL_RESOURCE is available (robber already moved)
+                        for action, payload in legal_actions_list:
+                            if action == Action.STEAL_RESOURCE:
+                                print(f"  LLM wanted MOVE_ROBBER but it's not legal. Using STEAL_RESOURCE instead.", flush=True)
+                                matching_action = (action, payload)
+                                break
+                    elif target_action == Action.END_TURN:
+                        # Check if STEAL_RESOURCE is available (must steal before ending turn)
+                        for action, payload in legal_actions_list:
+                            if action == Action.STEAL_RESOURCE:
+                                print(f"  LLM wanted END_TURN but STEAL_RESOURCE is required first. Using STEAL_RESOURCE instead.", flush=True)
+                                matching_action = (action, payload)
+                                break
+                    else:
+                        # LLM returned an action that's not legal. Try to find the most appropriate legal action
+                        # Common case: LLM wants to build/trade but must steal first
+                        if any(a == Action.STEAL_RESOURCE for a, _ in legal_actions_list):
+                            for action, payload in legal_actions_list:
+                                if action == Action.STEAL_RESOURCE:
+                                    print(f"  LLM wanted {target_action.value if target_action else action_type_str} but STEAL_RESOURCE is required first. Using STEAL_RESOURCE instead.", flush=True)
+                                    matching_action = (action, payload)
+                                    break
+                        # If no special case matches, just use the first legal action
+                        if not matching_action and legal_actions_list:
+                            matching_action = legal_actions_list[0]
+                            print(f"  LLM wanted {target_action.value if target_action else action_type_str} but it's not legal. Using first available action: {matching_action[0].value}", flush=True)
+                    
+                    if not matching_action:
+                        raise ValueError(f"Could not find matching legal action for {action_type_str}. Available: {[a.value for a, _ in legal_actions_list]}")
+            
+            # Return action, payload, reasoning, and raw response
+            action, payload = matching_action
+            
+            # Handle DISCARD_RESOURCES actions that have None payload
+            # Generate a valid discard payload if needed
+            if action == Action.DISCARD_RESOURCES and payload is None:
+                from engine import DiscardResourcesPayload
+                import random
+                
+                # Get the player
+                player = next((p for p in state.players if p.id == self.player_id), None)
+                if player:
+                    total_resources = sum(player.resources.values())
+                    discard_count = total_resources // 2
+                    
+                    # Create a list of all resources the player has
+                    available_resources = []
+                    for resource_type, amount in player.resources.items():
+                        available_resources.extend([resource_type] * amount)
+                    
+                    # Randomly select resources to discard
+                    if len(available_resources) >= discard_count:
+                        resources_to_discard = random.sample(available_resources, discard_count)
+                        
+                        # Count resources by type
+                        discard_dict = {}
+                        for resource in resources_to_discard:
+                            discard_dict[resource] = discard_dict.get(resource, 0) + 1
+                        
+                        # Create payload
+                        payload = DiscardResourcesPayload(resources=discard_dict)
+                        print(f"  Generated DISCARD_RESOURCES payload: {discard_dict}", flush=True)
+                    else:
+                        # Shouldn't happen, but raise error if it does
+                        raise ValueError(f"Cannot discard {discard_count} resources when player only has {len(available_resources)}")
+                else:
+                    raise ValueError(f"Player {self.player_id} not found for DISCARD_RESOURCES")
+            
+            return (action, payload, reasoning, response_text)
+            
+        except json.JSONDecodeError as e:
+            raise
+        except Exception:
+            # Re-raise for caller to decide if a retry is appropriate.
+            raise
     
     def _retrieve_context(
         self,
@@ -510,595 +1104,55 @@ Now reason about the best action and respond in JSON format as specified."""
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-        
-        # Call LLM
-        response_text = self._call_llm(messages)
-        
-        # Store response for debugging
-        self._last_llm_response = response_text
-        
-        # Parse response
-        try:
-            # Try to extract JSON from response (might have markdown code blocks)
-            original_response = response_text
-            response_text = response_text.strip()
-            
-            # Try multiple extraction methods
-            if "```json" in response_text:
-                response_text = response_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in response_text:
-                # Try to find JSON block
-                parts = response_text.split("```")
-                for i, part in enumerate(parts):
-                    if i % 2 == 1:  # Odd indices are code blocks
-                        part = part.strip()
-                        if part.startswith("json"):
-                            part = part[4:].strip()
-                        # Try to parse this part as JSON
-                        try:
-                            json.loads(part)
-                            response_text = part
-                            break
-                        except:
-                            continue
-            
-            # Try to find JSON object in text if not already extracted
-            if not response_text.startswith("{"):
-                # Look for first { and last }
-                start_idx = response_text.find("{")
-                end_idx = response_text.rfind("}")
-                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                    response_text = response_text[start_idx:end_idx+1]
-            
-            response_json = json.loads(response_text)
-            
-            action_type_str = response_json.get("action_type", "").lower()
-            action_payload_dict = response_json.get("action_payload", {})
-            reasoning = response_json.get("reasoning", None)  # Extract reasoning
-            
-            # Special handling: During setup phase, map "build_settlement" to "setup_place_settlement"
-            # and "build_road" to "setup_place_road" if those are the legal actions
-            # This is critical because LLMs often use "build_settlement" even during setup
-            if state.phase == "setup":
-                if action_type_str == "build_settlement":
-                    # Check if setup_place_settlement is legal
-                    if any(a == Action.SETUP_PLACE_SETTLEMENT for a, _ in legal_actions_list):
-                        action_type_str = "setup_place_settlement"
-                        print(f"  Mapped 'build_settlement' to 'setup_place_settlement' during setup phase", flush=True)
-                elif action_type_str == "build_road":
-                    # Check if setup_place_road is legal
-                    if any(a == Action.SETUP_PLACE_ROAD for a, _ in legal_actions_list):
-                        action_type_str = "setup_place_road"
-                        print(f"  Mapped 'build_road' to 'setup_place_road' during setup phase", flush=True)
-            
-            # Handle compound or invalid action names BEFORE normalization
-            # If the LLM returns a compound action, try to map it to the appropriate single action
-            if "move_robber" in action_type_str and "steal" in action_type_str:
-                # Compound action: move_robber_and_steal
-                # Check what's actually legal - if only steal is legal, use that
-                has_steal = any(a == Action.STEAL_RESOURCE for a, _ in legal_actions_list)
-                has_move = any(a == Action.MOVE_ROBBER for a, _ in legal_actions_list)
-                if has_steal and not has_move:
-                    action_type_str = "steal_resource"
-                elif has_move:
-                    action_type_str = "move_robber"
+
+        # Call + parse with one retry. If parsing fails, retry using gpt-5.2 with thinking disabled.
+        first_response_text: Optional[str] = None
+        last_error: Optional[Exception] = None
+        for attempt in range(2):
+            try:
+                if attempt == 0:
+                    response_text = self._call_llm(messages)
                 else:
-                    # Neither is legal, will be caught later
-                    action_type_str = "steal_resource"  # Default fallback
-            elif "pass" in action_type_str or "skip" in action_type_str:
-                # LLM trying to "pass" or "skip" - map to appropriate action based on what's legal
-                if any(a == Action.STEAL_RESOURCE for a, _ in legal_actions_list):
-                    # Must steal before passing/skipping
-                    action_type_str = "steal_resource"
-                elif any(a == Action.END_TURN for a, _ in legal_actions_list):
-                    action_type_str = "end_turn"
-                else:
-                    # Use first available action
-                    if legal_actions_list:
-                        # Map to the first legal action's type
-                        first_action = legal_actions_list[0][0]
-                        action_type_str = first_action.value
-            elif "resolve" in action_type_str and "robber" in action_type_str:
-                # LLM trying to "resolve_robber" - map to appropriate robber action
-                if any(a == Action.STEAL_RESOURCE for a, _ in legal_actions_list):
-                    action_type_str = "steal_resource"
-                elif any(a == Action.MOVE_ROBBER for a, _ in legal_actions_list):
-                    action_type_str = "move_robber"
-            
-            # Normalize action type string: replace spaces/hyphens with underscores, remove extra chars
-            action_type_normalized = action_type_str.replace(" ", "_").replace("-", "_").strip()
-            
-            # Find matching action - try multiple matching strategies
-            action_type_map = {
-                "build_settlement": Action.BUILD_SETTLEMENT,
-                "build_city": Action.BUILD_CITY,
-                "build_road": Action.BUILD_ROAD,
-                "buy_dev_card": Action.BUY_DEV_CARD,
-                "buy_devcard": Action.BUY_DEV_CARD,  # Alternative spelling
-                "play_dev_card": Action.PLAY_DEV_CARD,
-                "play_devcard": Action.PLAY_DEV_CARD,  # Alternative spelling
-                "play_development_card": Action.PLAY_DEV_CARD,  # Full name variant
-                "play_knight": Action.PLAY_DEV_CARD,  # Common variant (knight is a dev card)
-                "play_monopoly": Action.PLAY_DEV_CARD,  # Common variant
-                "play_year_of_plenty": Action.PLAY_DEV_CARD,  # Common variant
-                "play_road_building": Action.PLAY_DEV_CARD,  # Common variant
-                "trade_bank": Action.TRADE_BANK,
-                "propose_trade": Action.PROPOSE_TRADE,
-                "accept_trade": Action.ACCEPT_TRADE,
-                "reject_trade": Action.REJECT_TRADE,
-                "select_trade_partner": Action.SELECT_TRADE_PARTNER,
-                "move_robber": Action.MOVE_ROBBER,
-                "robber_move": Action.MOVE_ROBBER,  # Alternative name
-                "steal_resource": Action.STEAL_RESOURCE,
-                "discard_resources": Action.DISCARD_RESOURCES,
-                "end_turn": Action.END_TURN,
-                "setup_place_settlement": Action.SETUP_PLACE_SETTLEMENT,
-                "setup_place_road": Action.SETUP_PLACE_ROAD,
-                "start_game": Action.START_GAME,
-            }
-            
-            # Try exact match first (normalized)
-            target_action = action_type_map.get(action_type_normalized)
-            
-            # Try original string too
-            if not target_action:
-                target_action = action_type_map.get(action_type_str)
-            
-            # Try matching against legal actions with fuzzy matching
-            if not target_action:
-                # Remove common words and normalize
-                action_clean = action_type_normalized.replace("dev", "dev_card").replace("card", "dev_card")
-                for action, _ in legal_actions_list:
-                    action_value_lower = action.value.lower()
-                    # Check if normalized string matches action value
-                    if (action_type_normalized == action_value_lower or
-                        action_clean == action_value_lower or
-                        action_type_normalized in action_value_lower or
-                        action_value_lower in action_type_normalized):
-                        target_action = action
-                        print(f"  Matched via fuzzy: '{action_type_str}' -> {action.value}", flush=True)
-                        break
-            
-            if not target_action:
-                # Try harder to find a match
-                action_type_clean = action_type_str.replace("_", "").replace("-", "")
-                for action, _ in legal_actions_list:
-                    action_value_clean = action.value.replace("_", "").replace("-", "")
-                    if action_type_clean in action_value_clean or action_value_clean in action_type_clean:
-                        target_action = action
-                        print(f"  Matched action via fuzzy matching: {action_type_str} -> {action.value}", flush=True)
-                        break
-                
-                if not target_action:
-                    print(f"Warning: Could not map action type '{action_type_str}' to any legal action", flush=True)
-                    print(f"  Available actions: {[a.value for a, _ in legal_actions_list]}", flush=True)
-                    raise ValueError(f"Could not map action type: {action_type_str}")
-            
-            # Find the matching legal action with payload
-            matching_action = None
-            exact_match = None
-            preferred_match = None
-            
-            # For actions with tile_id (like MOVE_ROBBER), try to match the LLM's preference
-            if target_action == Action.MOVE_ROBBER and action_payload_dict and "tile_id" in action_payload_dict:
-                llm_tile_id = action_payload_dict["tile_id"]
-                # Try to find exact match first
-                for action, payload in legal_actions_list:
-                    if action == target_action and payload and hasattr(payload, "tile_id"):
-                        if payload.tile_id == llm_tile_id:
-                            exact_match = (action, payload)
-                            break
-                        # Also store first match as fallback
-                        if not preferred_match:
-                            preferred_match = (action, payload)
-                
-                if exact_match:
-                    matching_action = exact_match
-                elif preferred_match:
-                    # LLM specified a tile_id but it doesn't match any legal action
-                    # This might be a parsing error - log it
-                    print(f"Warning: LLM requested tile_id {llm_tile_id} but it's not in legal actions. Using first available.", flush=True)
-                    matching_action = preferred_match
-            
-            # For BUILD_ROAD actions, handle both "road_id" and "road_edge_id" field names
-            elif target_action == Action.BUILD_ROAD and action_payload_dict:
-                # LLM might use "road_id" instead of "road_edge_id"
-                llm_road_id = action_payload_dict.get("road_edge_id") or action_payload_dict.get("road_id")
-                if llm_road_id is not None:
-                    # Try to find exact match first
-                    for action, payload in legal_actions_list:
-                        if action == target_action and payload and hasattr(payload, "road_edge_id"):
-                            if payload.road_edge_id == llm_road_id:
-                                exact_match = (action, payload)
-                                break
-                            # Also store first match as fallback
-                            if not preferred_match:
-                                preferred_match = (action, payload)
-                    
-                    if exact_match:
-                        matching_action = exact_match
-                    elif preferred_match:
-                        # LLM specified a road_id but it doesn't match any legal action
-                        print(f"Warning: LLM requested road_id {llm_road_id} but it's not in legal actions. Using first available.", flush=True)
-                        matching_action = preferred_match
-            
-            # For SETUP_PLACE_SETTLEMENT and BUILD_SETTLEMENT actions, match by intersection_id
-            elif target_action in (Action.SETUP_PLACE_SETTLEMENT, Action.BUILD_SETTLEMENT) and action_payload_dict:
-                # LLM might use "intersection" or "intersectionId" instead of "intersection_id"
-                llm_intersection_id = (action_payload_dict.get("intersection_id") or 
-                                      action_payload_dict.get("intersection") or
-                                      action_payload_dict.get("intersectionId"))
-                if llm_intersection_id is not None:
-                    # Try to find exact match first
-                    for action, payload in legal_actions_list:
-                        if action == target_action and payload and hasattr(payload, "intersection_id"):
-                            if payload.intersection_id == llm_intersection_id:
-                                exact_match = (action, payload)
-                                break
-                            # Also store first match as fallback
-                            if not preferred_match:
-                                preferred_match = (action, payload)
-                    
-                    if exact_match:
-                        matching_action = exact_match
-                    elif preferred_match:
-                        # LLM specified an intersection_id but it doesn't match any legal action
-                        print(f"Warning: LLM requested intersection_id {llm_intersection_id} but it's not in legal actions. Using first available.", flush=True)
-                        matching_action = preferred_match
-            
-            # For BUILD_CITY actions, match by intersection_id
-            elif target_action == Action.BUILD_CITY and action_payload_dict:
-                # LLM might use "intersection" or "intersectionId" instead of "intersection_id"
-                llm_intersection_id = (action_payload_dict.get("intersection_id") or 
-                                      action_payload_dict.get("intersection") or
-                                      action_payload_dict.get("intersectionId"))
-                if llm_intersection_id is not None:
-                    # Try to find exact match first
-                    for action, payload in legal_actions_list:
-                        if action == target_action and payload and hasattr(payload, "intersection_id"):
-                            if payload.intersection_id == llm_intersection_id:
-                                exact_match = (action, payload)
-                                break
-                            # Also store first match as fallback
-                            if not preferred_match:
-                                preferred_match = (action, payload)
-                    
-                    if exact_match:
-                        matching_action = exact_match
-                    elif preferred_match:
-                        # LLM specified an intersection_id but it doesn't match any legal action
-                        print(f"Warning: LLM requested intersection_id {llm_intersection_id} but it's not in legal actions. Using first available.", flush=True)
-                        matching_action = preferred_match
-            
-            # For PROPOSE_TRADE, construct payload from LLM response
-            # This allows the agent to propose any trade, not just pre-enumerated ones
-            if target_action == Action.PROPOSE_TRADE and action_payload_dict:
-                if "give_resources" in action_payload_dict and "receive_resources" in action_payload_dict:
-                    llm_give = action_payload_dict["give_resources"]
-                    llm_receive = action_payload_dict["receive_resources"]
-                    llm_target_players = action_payload_dict.get("target_player_ids", [])
-                    
-                    # Check if legal action has None payload (meaning we can construct any trade)
-                    has_none_payload = any(action == target_action and payload is None for action, payload in legal_actions_list)
-                    
-                    if has_none_payload:
-                        # Construct ProposeTradePayload from LLM's response
-                        from engine import ResourceType, ProposeTradePayload
-                        
-                        # Convert string resource names to ResourceType enum
-                        def convert_resource_dict(d):
-                            """Convert resource dict with string keys to ResourceType keys."""
-                            result = {}
-                            for k, v in d.items():
-                                if isinstance(k, str):
-                                    # Find matching ResourceType
-                                    found = False
-                                    for rt in ResourceType:
-                                        if rt.value == k.lower():
-                                            result[rt] = v
-                                            found = True
-                                            break
-                                    if not found:
-                                        raise ValueError(f"Invalid resource type: {k}. Valid types: {[rt.value for rt in ResourceType]}")
-                                else:
-                                    result[k] = v
-                            return result
-                        
-                        try:
-                            give_resources = convert_resource_dict(llm_give)
-                            receive_resources = convert_resource_dict(llm_receive)
-                            
-                            # Validate target_player_ids
-                            if not llm_target_players:
-                                raise ValueError("target_player_ids is required for PROPOSE_TRADE")
-                            
-                            # Validate that player has the resources they're giving
-                            # (This validation will also happen in the engine, but we can catch it early)
-                            
-                            # Construct the payload
-                            constructed_payload = ProposeTradePayload(
-                                target_player_ids=llm_target_players,
-                                give_resources=give_resources,
-                                receive_resources=receive_resources
-                            )
-                            
-                            # Use the constructed payload
-                            matching_action = (target_action, constructed_payload)
-                            print(f"  Constructed PROPOSE_TRADE payload: give={llm_give}, receive={llm_receive}, targets={llm_target_players}", flush=True)
-                        except (ValueError, KeyError, TypeError) as e:
-                            # Invalid trade format - raise error to trigger retry
-                            error_msg = f"Invalid PROPOSE_TRADE format: {str(e)}. Required fields: give_resources (dict), receive_resources (dict), target_player_ids (list). Resource types must be: {[rt.value for rt in ResourceType]}"
-                            print(f"Error: {error_msg}", flush=True)
-                            raise ValueError(error_msg)
-                    else:
-                        # Old behavior: try to match against pre-enumerated trades
-                        # Normalize LLM's resource dict (convert string keys to ResourceType if needed)
-                        def normalize_llm_resource_dict(d):
-                            """Normalize LLM's resource dict to match legal action format."""
-                            result = {}
-                            for k, v in d.items():
-                                # Convert string resource names to ResourceType enum if needed
-                                if isinstance(k, str):
-                                    from engine import ResourceType
-                                    try:
-                                        # Try to find matching ResourceType
-                                        for rt in ResourceType:
-                                            if rt.value == k.lower():
-                                                result[rt] = v
-                                                break
-                                        else:
-                                            # Keep as string if no match
-                                            result[k] = v
-                                    except:
-                                        result[k] = v
-                                else:
-                                    result[k] = v
-                            return result
-                        
-                        llm_give_normalized = normalize_llm_resource_dict(llm_give)
-                        llm_receive_normalized = normalize_llm_resource_dict(llm_receive)
-                        
-                        # Try to find exact match
-                        for action, payload in legal_actions_list:
-                            if action == target_action and payload:
-                                payload_dict = self._payload_to_dict(payload)
-                                legal_give = payload_dict.get("give_resources", {})
-                                legal_receive = payload_dict.get("receive_resources", {})
-                                # Check if give_resources and receive_resources match exactly
-                                if legal_give == llm_give_normalized and legal_receive == llm_receive_normalized:
-                                    matching_action = (action, payload)
-                                    break
-                        
-                        if not matching_action:
-                            print(f"Warning: LLM requested PROPOSE_TRADE with give_resources={llm_give}, receive_resources={llm_receive}, but no exact match found in legal actions", flush=True)
-                            print(f"  Available trades: {[(self._payload_to_dict(p).get('give_resources'), self._payload_to_dict(p).get('receive_resources')) for a, p in legal_actions_list if a == target_action][:5]}", flush=True)
-                            # Don't fallback - require exact match for PROPOSE_TRADE
-                            # This prevents executing wrong trades
-                else:
-                    # Missing required fields - raise error to trigger retry
-                    error_msg = "PROPOSE_TRADE requires 'give_resources' and 'receive_resources' in action_payload. Format: {\"action_type\": \"propose_trade\", \"action_payload\": {\"give_resources\": {\"wood\": 1}, \"receive_resources\": {\"sheep\": 1}, \"target_player_ids\": [\"player_1\"]}}"
-                    print(f"Error: {error_msg}", flush=True)
-                    raise ValueError(error_msg)
-            
-            # For DISCARD_RESOURCES, handle payload generation if LLM provides resources dict
-            if target_action == Action.DISCARD_RESOURCES and action_payload_dict and "resources" in action_payload_dict:
-                from engine import DiscardResourcesPayload, ResourceType
-                
-                # Get the player to validate discard amount
-                player = next((p for p in state.players if p.id == self.player_id), None)
-                if player:
-                    total_resources = sum(player.resources.values())
-                    expected_discard = total_resources // 2
-                    
-                    # Convert LLM's resource dict (string keys) to ResourceType keys
-                    llm_resources = action_payload_dict["resources"]
-                    discard_dict = {}
-                    for k, v in llm_resources.items():
-                        if isinstance(k, str):
-                            # Find matching ResourceType
-                            for rt in ResourceType:
-                                if rt.value == k.lower():
-                                    discard_dict[rt] = v
-                                    break
-                            else:
-                                raise ValueError(f"Invalid resource type: {k}. Valid types: {[rt.value for rt in ResourceType]}")
-                        else:
-                            discard_dict[k] = v
-                    
-                    # Validate discard amount
-                    total_discard = sum(discard_dict.values())
-                    if total_discard != expected_discard:
-                        # LLM provided wrong amount - log warning and fall through to fallback generation
-                        print(f"  Warning: LLM provided discard amount {total_discard}, but expected {expected_discard}. Using fallback generation.", flush=True)
-                        # Don't set matching_action - let it fall through to fallback generation below
-                    else:
-                        # Validate player has enough of each resource
-                        valid = True
-                        for resource_type, amount in discard_dict.items():
-                            if player.resources.get(resource_type, 0) < amount:
-                                print(f"  Warning: LLM wants to discard {amount} {resource_type.value}, but player only has {player.resources.get(resource_type, 0)}. Using fallback generation.", flush=True)
-                                valid = False
-                                break
-                        
-                        if valid:
-                            # Create payload from LLM's specification
-                            constructed_payload = DiscardResourcesPayload(resources=discard_dict)
-                            matching_action = (target_action, constructed_payload)
-                            print(f"  Constructed DISCARD_RESOURCES payload from LLM: {discard_dict}", flush=True)
-            
-            # For other actions, use standard matching
-            if not matching_action:
-                for action, payload in legal_actions_list:
-                    if action == target_action:
-                        # If payload is provided, try to match it
-                        if action_payload_dict and payload:
-                            # Simple matching - check if keys match
-                            payload_dict = self._payload_to_dict(payload)
-                            if self._payloads_match(payload_dict, action_payload_dict):
-                                matching_action = (action, payload)
-                                break
-                        elif not action_payload_dict and not payload:
-                            # Both are None
-                            matching_action = (action, payload)
-                            break
-                
-                # Fallback only if still no match (and not PROPOSE_TRADE which requires exact match)
-                if not matching_action and target_action != Action.PROPOSE_TRADE:
-                    # Store first match as fallback
-                    for action, payload in legal_actions_list:
-                        if action == target_action:
-                            matching_action = (action, payload)
-                            break
-            
-            if not matching_action:
-                # Fallback: just pick the first matching action type
-                for action, payload in legal_actions_list:
-                    if action == target_action:
-                        matching_action = (action, payload)
-                        break
-            
-            if not matching_action:
-                print(f"Warning: Could not find exact matching legal action for {action_type_str}", flush=True)
-                print(f"  Target action enum: {target_action.value if target_action else 'None'}", flush=True)
-                print(f"  Legal actions of this type: {[(a.value, type(p).__name__ if p else None) for a, p in legal_actions_list if a == target_action]}", flush=True)
-                print(f"  All available legal actions: {[a.value for a, _ in legal_actions_list]}", flush=True)
-                print(f"  LLM response JSON: {json.dumps(response_json, indent=2)[:500]}", flush=True)
-                
-                # Last resort: pick first matching action type
-                for action, payload in legal_actions_list:
-                    if action == target_action:
-                        matching_action = (action, payload)
-                        print(f"  Using first available action: {action.value}", flush=True)
-                        break
-                
-                if not matching_action:
-                    # The LLM returned an action that isn't legal. Try to find a similar legal action
-                    # For example, if LLM said "move_robber" but only "steal_resource" is legal,
-                    # that might mean the robber was already moved
-                    if target_action == Action.MOVE_ROBBER:
-                        # Check if STEAL_RESOURCE is available (robber already moved)
-                        for action, payload in legal_actions_list:
-                            if action == Action.STEAL_RESOURCE:
-                                print(f"  LLM wanted MOVE_ROBBER but it's not legal. Using STEAL_RESOURCE instead.", flush=True)
-                                matching_action = (action, payload)
-                                break
-                    elif target_action == Action.END_TURN:
-                        # Check if STEAL_RESOURCE is available (must steal before ending turn)
-                        for action, payload in legal_actions_list:
-                            if action == Action.STEAL_RESOURCE:
-                                print(f"  LLM wanted END_TURN but STEAL_RESOURCE is required first. Using STEAL_RESOURCE instead.", flush=True)
-                                matching_action = (action, payload)
-                                break
-                    else:
-                        # LLM returned an action that's not legal. Try to find the most appropriate legal action
-                        # Common case: LLM wants to build/trade but must steal first
-                        if any(a == Action.STEAL_RESOURCE for a, _ in legal_actions_list):
-                            for action, payload in legal_actions_list:
-                                if action == Action.STEAL_RESOURCE:
-                                    print(f"  LLM wanted {target_action.value if target_action else action_type_str} but STEAL_RESOURCE is required first. Using STEAL_RESOURCE instead.", flush=True)
-                                    matching_action = (action, payload)
-                                    break
-                        # If no special case matches, just use the first legal action
-                        if not matching_action and legal_actions_list:
-                            matching_action = legal_actions_list[0]
-                            print(f"  LLM wanted {target_action.value if target_action else action_type_str} but it's not legal. Using first available action: {matching_action[0].value}", flush=True)
-                    
-                    if not matching_action:
-                        raise ValueError(f"Could not find matching legal action for {action_type_str}. Available: {[a.value for a, _ in legal_actions_list]}")
-            
-            # Return action, payload, reasoning, and raw response
-            action, payload = matching_action
-            
-            # Handle DISCARD_RESOURCES actions that have None payload
-            # Generate a valid discard payload if needed
-            if action == Action.DISCARD_RESOURCES and payload is None:
-                from engine import DiscardResourcesPayload
-                import random
-                
-                # Get the player
-                player = next((p for p in state.players if p.id == self.player_id), None)
-                if player:
-                    total_resources = sum(player.resources.values())
-                    discard_count = total_resources // 2
-                    
-                    # Create a list of all resources the player has
-                    available_resources = []
-                    for resource_type, amount in player.resources.items():
-                        available_resources.extend([resource_type] * amount)
-                    
-                    # Randomly select resources to discard
-                    if len(available_resources) >= discard_count:
-                        resources_to_discard = random.sample(available_resources, discard_count)
-                        
-                        # Count resources by type
-                        discard_dict = {}
-                        for resource in resources_to_discard:
-                            discard_dict[resource] = discard_dict.get(resource, 0) + 1
-                        
-                        # Create payload
-                        payload = DiscardResourcesPayload(resources=discard_dict)
-                        print(f"  Generated DISCARD_RESOURCES payload: {discard_dict}", flush=True)
-                    else:
-                        # Shouldn't happen, but raise error if it does
-                        raise ValueError(f"Cannot discard {discard_count} resources when player only has {len(available_resources)}")
-                else:
-                    raise ValueError(f"Player {self.player_id} not found for DISCARD_RESOURCES")
-            
-            return (action, payload, reasoning, response_text)
-            
-        except json.JSONDecodeError as e:
-            # Check if this is a PROPOSE_TRADE action - if so, don't fallback, raise error for retry
-            import re
-            action_match = re.search(r'"action_type"\s*:\s*"([^"]+)"', response_text, re.IGNORECASE)
-            if action_match and action_match.group(1).lower() == "propose_trade":
-                error_msg = f"Failed to parse PROPOSE_TRADE JSON response: {e}. Please ensure your response is valid JSON with the format: {{\"action_type\": \"propose_trade\", \"action_payload\": {{\"give_resources\": {{\"wood\": 1}}, \"receive_resources\": {{\"sheep\": 1}}, \"target_player_ids\": [\"player_1\"]}}}}"
-                print(f"Error: {error_msg}", flush=True)
-                raise ValueError(error_msg)
-            
-            # Fallback: try to extract action from text using regex
-            print(f"Warning: Failed to parse LLM response as JSON: {e}", flush=True)
-            print(f"Response (first 500 chars): {response_text[:500]}", flush=True)
-            
-            # Try to extract action_type from text using regex
-            if not action_match:
-                action_match = re.search(r'action_type["\']?\s*[:=]\s*["\']?([a-z_]+)', response_text, re.IGNORECASE)
-            
-            if action_match:
-                action_type_str = action_match.group(1).lower()
-                # If it's PROPOSE_TRADE, don't fallback
-                if action_type_str == "propose_trade":
-                    error_msg = f"Failed to parse PROPOSE_TRADE from text. Please provide valid JSON. Format: {{\"action_type\": \"propose_trade\", \"action_payload\": {{\"give_resources\": {{\"wood\": 1}}, \"receive_resources\": {{\"sheep\": 1}}, \"target_player_ids\": [\"player_1\"]}}}}"
-                    print(f"Error: {error_msg}", flush=True)
-                    raise ValueError(error_msg)
-                
-                # Try to find matching action
-                for action, payload in legal_actions_list:
-                    if action_type_str in action.value.lower() or action.value.lower() in action_type_str:
-                        print(f"  Extracted action from text: {action.value}", flush=True)
-                        return (action, payload, f"Parsed from text (JSON parse failed): {e}", response_text)
-            
-            # Last resort: fallback to first legal action (unless it's PROPOSE_TRADE)
-            if any(a == Action.PROPOSE_TRADE for a, _ in legal_actions_list):
-                error_msg = f"Failed to parse LLM response as JSON: {e}. PROPOSE_TRADE requires valid JSON format. Please retry with proper JSON."
-                print(f"Error: {error_msg}", flush=True)
-                raise ValueError(error_msg)
-            
-            print(f"  Falling back to first legal action: {legal_actions_list[0][0].value}", flush=True)
-            action, payload = legal_actions_list[0]
-            return (action, payload, f"Failed to parse LLM response: {e}", response_text)
-        except ValueError as e:
-            # Re-raise ValueError (these are our intentional errors for PROPOSE_TRADE)
-            raise
-        except Exception as e:
-            print(f"Warning: Error processing LLM response: {e}", flush=True)
-            if 'response_text' in locals():
-                print(f"Response (first 500 chars): {response_text[:500]}", flush=True)
-            import traceback
-            traceback.print_exc()
-            # Fallback to first legal action
-            action, payload = legal_actions_list[0]
-            raw_response = response_text if 'response_text' in locals() else None
-            return (action, payload, f"Error processing LLM response: {e}", raw_response)
+                    # Fallback call: gpt-5.2 without thinking, and with strict JSON-only instruction.
+                    prev = (first_response_text or "")[:1500]
+                    retry_messages = messages + [
+                        {
+                            "role": "system",
+                            "content": (
+                                "CRITICAL: Output MUST be a single valid JSON object (no markdown/code fences, no extra text). "
+                                "Use an action_type that exactly matches one of the legal actions."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your previous response could not be parsed or mapped to a legal action. "
+                                "Return ONLY valid JSON in the specified schema.\n\n"
+                                f"Previous response (truncated):\n{prev}"
+                            ),
+                        },
+                    ]
+                    response_text = self._call_llm(
+                        retry_messages,
+                        model_override="gpt-5.2",
+                        thinking_mode_override=False,
+                    )
+
+                # Store response for debugging
+                self._last_llm_response = response_text
+                if attempt == 0:
+                    first_response_text = response_text
+
+                return self._parse_llm_action_response(response_text, state, legal_actions_list)
+            except Exception as e:
+                last_error = e
+                # Retry once; otherwise fall through to final fallback.
+                continue
+
+        # Final fallback: pick first legal action so the game keeps moving.
+        print(f"Warning: LLM parsing failed twice; falling back to first legal action. Error: {last_error}", flush=True)
+        action, payload = legal_actions_list[0]
+        return (action, payload, f"Fallback: LLM parsing failed twice ({last_error})", first_response_text)
     
     def _payload_to_dict(self, payload: ActionPayload) -> Dict[str, Any]:
         """Convert action payload to dictionary."""
