@@ -939,10 +939,22 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
     return legal
 
 
-def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, Optional[ActionPayload]]] = None) -> str:
+def state_to_text(
+    state: GameState, 
+    player_id: str, 
+    history: List[Tuple[Action, Optional[ActionPayload]]] = None,
+    exclude_higher_level_features: bool = False
+) -> str:
     """
     Convert game state to LLM-friendly text description from a player's perspective.
     Enhanced with spatial relationships, production analysis, and strategic information.
+    
+    Args:
+        state: Current game state
+        player_id: ID of the player viewing the state
+        history: Optional history of recent actions
+        exclude_higher_level_features: If True, exclude computed features like production analysis,
+            available intersection rankings, dice probabilities, resource scarcity, etc.
     """
     if history is None:
         history = []
@@ -1073,63 +1085,79 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
     
     # Compact graph representation
     lines.append("=== Board Graph (Compact) ===")
-    graph_lines = _generate_compact_graph(state, player_id, tile_map, dice_probs)
+    graph_lines = _generate_compact_graph(state, player_id, tile_map, dice_probs, exclude_higher_level_features)
     lines.extend(graph_lines)
     lines.append("")
     
-    # Resource scarcity analysis
-    resource_counts = {}
-    for tile in state.tiles:
-        if tile.resource_type:
-            resource_counts[tile.resource_type] = resource_counts.get(tile.resource_type, 0) + 1
-    if resource_counts:
-        lines.append("Resource Scarcity (tiles per resource type):")
-        scarcity_str = ", ".join([f"{rt.value}: {count} tiles" for rt, count in sorted(resource_counts.items(), key=lambda x: -x[1])])
-        lines.append(f"  {scarcity_str}")
+    # Resource scarcity analysis (exclude if flag is set)
+    if not exclude_higher_level_features:
+        resource_counts = {}
+        for tile in state.tiles:
+            if tile.resource_type:
+                resource_counts[tile.resource_type] = resource_counts.get(tile.resource_type, 0) + 1
+        if resource_counts:
+            lines.append("Resource Scarcity (tiles per resource type):")
+            scarcity_str = ", ".join([f"{rt.value}: {count} tiles" for rt, count in sorted(resource_counts.items(), key=lambda x: -x[1])])
+            lines.append(f"  {scarcity_str}")
+            lines.append("")
+    
+    # Available card counts (bank supply) (exclude if flag is set)
+    if not exclude_higher_level_features:
+        lines.append("=== Available Cards in Bank ===")
+        if state.resource_card_counts:
+            lines.append("Resource Cards Available:")
+            for rt in ResourceType:
+                count = state.resource_card_counts.get(rt, 0)
+                scarcity_indicator = " (LOW)" if count < 5 else " (OK)" if count < 10 else ""
+                lines.append(f"  {rt.value.capitalize()}: {count}/19{scarcity_indicator}")
+            lines.append("  Note: If there aren't enough cards available when resources are distributed, no one gets those resources.")
+            lines.append("")
+        
+        if state.dev_card_counts:
+            lines.append("Development Cards Available:")
+            total_dev = sum(state.dev_card_counts.values())
+            for card_type, count in sorted(state.dev_card_counts.items()):
+                lines.append(f"  {card_type.replace('_', ' ').title()}: {count}")
+            lines.append(f"  Total: {total_dev}/25")
+            lines.append("  Note: Once cards are purchased, they are removed from the bank (not reshuffled).")
+            lines.append("")
+    
+    # Dice probability reference (exclude if flag is set)
+    if not exclude_higher_level_features:
+        lines.append("Dice Roll Probabilities (for resource production):")
+        lines.append("  2: 2.8% | 3: 5.6% | 4: 8.3% | 5: 11.1% | 6: 13.9%")
+        lines.append("  8: 13.9% | 9: 11.1% | 10: 8.3% | 11: 5.6% | 12: 2.8%")
+        lines.append("  (7: 16.7% - triggers robber, no production)")
+        lines.append("  Best numbers: 6 and 8 (13.9% each)")
         lines.append("")
     
-    # Available card counts (bank supply)
-    lines.append("=== Available Cards in Bank ===")
-    if state.resource_card_counts:
-        lines.append("Resource Cards Available:")
-        for rt in ResourceType:
-            count = state.resource_card_counts.get(rt, 0)
-            scarcity_indicator = " (LOW)" if count < 5 else " (OK)" if count < 10 else ""
-            lines.append(f"  {rt.value.capitalize()}: {count}/19{scarcity_indicator}")
-        lines.append("  Note: If there aren't enough cards available when resources are distributed, no one gets those resources.")
-        lines.append("")
-    
-    if state.dev_card_counts:
-        lines.append("Development Cards Available:")
-        total_dev = sum(state.dev_card_counts.values())
-        for card_type, count in sorted(state.dev_card_counts.items()):
-            lines.append(f"  {card_type.replace('_', ' ').title()}: {count}")
-        lines.append(f"  Total: {total_dev}/25")
-        lines.append("  Note: Once cards are purchased, they are removed from the bank (not reshuffled).")
-        lines.append("")
-    
-    # Dice probability reference
-    lines.append("Dice Roll Probabilities (for resource production):")
-    lines.append("  2: 2.8% | 3: 5.6% | 4: 8.3% | 5: 11.1% | 6: 13.9%")
-    lines.append("  8: 13.9% | 9: 11.1% | 10: 8.3% | 11: 5.6% | 12: 2.8%")
-    lines.append("  (7: 16.7% - triggers robber, no production)")
-    lines.append("  Best numbers: 6 and 8 (13.9% each)")
-    lines.append("")
-    
-    # Tiles with production value
-    lines.append("Tiles (with production value):")
-    for tile in state.tiles:
-        if tile.resource_type:
-            token_value = tile.number_token.value if tile.number_token else None
-            if token_value:
-                prob = dice_probs[token_value] * 100
-                lines.append(f"  Tile {tile.id}: {tile.resource_type.value} (token: {token_value}, {prob:.1f}% roll probability)")
+    # Tiles (with or without production value based on flag)
+    if not exclude_higher_level_features:
+        lines.append("Tiles (with production value):")
+        for tile in state.tiles:
+            if tile.resource_type:
+                token_value = tile.number_token.value if tile.number_token else None
+                if token_value:
+                    prob = dice_probs[token_value] * 100
+                    lines.append(f"  Tile {tile.id}: {tile.resource_type.value} (token: {token_value}, {prob:.1f}% roll probability)")
+                else:
+                    lines.append(f"  Tile {tile.id}: {tile.resource_type.value} (no token)")
             else:
-                lines.append(f"  Tile {tile.id}: {tile.resource_type.value} (no token)")
-        else:
-            lines.append(f"  Tile {tile.id}: Desert (robber location)" if tile.id == state.robber_tile_id else f"  Tile {tile.id}: Desert")
-    
-    lines.append("")
+                lines.append(f"  Tile {tile.id}: Desert (robber location)" if tile.id == state.robber_tile_id else f"  Tile {tile.id}: Desert")
+        lines.append("")
+    else:
+        # Just show basic tile info without production probabilities
+        lines.append("Tiles:")
+        for tile in state.tiles:
+            if tile.resource_type:
+                token_value = tile.number_token.value if tile.number_token else None
+                if token_value:
+                    lines.append(f"  Tile {tile.id}: {tile.resource_type.value} (token: {token_value})")
+                else:
+                    lines.append(f"  Tile {tile.id}: {tile.resource_type.value} (no token)")
+            else:
+                lines.append(f"  Tile {tile.id}: Desert (robber location)" if tile.id == state.robber_tile_id else f"  Tile {tile.id}: Desert")
+        lines.append("")
     
     # Intersections with full spatial information
     lines.append("=== Intersections (Spatial Information) ===")
@@ -1155,28 +1183,38 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
             if inter.port_type:
                 lines.append(f"    Port: {inter.port_type}")
             
-            # Adjacent tiles with production analysis
+            # Adjacent tiles (with or without production analysis)
             if inter.adjacent_tiles:
                 lines.append(f"    Adjacent Tiles:")
-                total_production_value = 0.0
-                resource_production = {}
-                for tile_id in inter.adjacent_tiles:
-                    tile = tile_map.get(tile_id)
-                    if tile and tile.resource_type and tile.number_token:
-                        token_value = tile.number_token.value
-                        prob = dice_probs[token_value]
-                        total_production_value += prob
-                        resource_type = tile.resource_type.value
-                        if resource_type not in resource_production:
-                            resource_production[resource_type] = 0.0
-                        resource_production[resource_type] += prob
-                        lines.append(f"      Tile {tile_id}: {tile.resource_type.value} (token {token_value}, {prob*100:.1f}% chance)")
-                
-                if total_production_value > 0:
-                    lines.append(f"    Expected Production: {total_production_value*100:.1f}% per roll")
-                    lines.append(f"    Resource Breakdown:")
-                    for res_type, prob in sorted(resource_production.items(), key=lambda x: -x[1]):
-                        lines.append(f"      {res_type}: {prob*100:.1f}% per roll")
+                if exclude_higher_level_features:
+                    # Just show tile IDs and basic info, no production analysis
+                    for tile_id in inter.adjacent_tiles:
+                        tile = tile_map.get(tile_id)
+                        if tile and tile.resource_type and tile.number_token:
+                            lines.append(f"      Tile {tile_id}: {tile.resource_type.value} (token {tile.number_token.value})")
+                        elif tile:
+                            lines.append(f"      Tile {tile_id}: {tile.resource_type.value if tile.resource_type else 'Desert'}")
+                else:
+                    # Include production analysis
+                    total_production_value = 0.0
+                    resource_production = {}
+                    for tile_id in inter.adjacent_tiles:
+                        tile = tile_map.get(tile_id)
+                        if tile and tile.resource_type and tile.number_token:
+                            token_value = tile.number_token.value
+                            prob = dice_probs[token_value]
+                            total_production_value += prob
+                            resource_type = tile.resource_type.value
+                            if resource_type not in resource_production:
+                                resource_production[resource_type] = 0.0
+                            resource_production[resource_type] += prob
+                            lines.append(f"      Tile {tile_id}: {tile.resource_type.value} (token {token_value}, {prob*100:.1f}% chance)")
+                    
+                    if total_production_value > 0:
+                        lines.append(f"    Expected Production: {total_production_value*100:.1f}% per roll")
+                        lines.append(f"    Resource Breakdown:")
+                        for res_type, prob in sorted(resource_production.items(), key=lambda x: -x[1]):
+                            lines.append(f"      {res_type}: {prob*100:.1f}% per roll")
             
             # Adjacent intersections
             if inter.adjacent_intersections:
@@ -1208,63 +1246,98 @@ def state_to_text(state: GameState, player_id: str, history: List[Tuple[Action, 
                 if tile_info:
                     lines.append(f"    Tiles: {', '.join(tile_info)}")
     
-    # Available intersections for building (with production analysis)
+    # Available intersections for building (with or without production analysis)
     if empty_intersections and (state.phase == "setup" or state.phase == "playing"):
         lines.append("")
         lines.append("Available Intersections (for building):")
-        # Show top candidates by production value
-        candidates = []
-        for inter in empty_intersections:
-            # Check distance rule (can't build adjacent to existing buildings)
-            can_build = True
-            for adj_id in inter.adjacent_intersections:
-                adj_inter = next((i for i in state.intersections if i.id == adj_id), None)
-                if adj_inter and adj_inter.owner:
-                    can_build = False
-                    break
+        
+        if exclude_higher_level_features:
+            # Just show all available intersections without production analysis or sorting
+            candidates = []
+            for inter in empty_intersections:
+                # Check distance rule (can't build adjacent to existing buildings)
+                can_build = True
+                for adj_id in inter.adjacent_intersections:
+                    adj_inter = next((i for i in state.intersections if i.id == adj_id), None)
+                    if adj_inter and adj_inter.owner:
+                        can_build = False
+                        break
+                
+                if can_build:
+                    candidates.append(inter)
             
-            if can_build:
-                total_production = 0.0
-                resource_prod = {}
-                tile_details = []  # Store actual tile info: (resource_type, token_value)
-                port_bonus = ""
-                if inter.port_type:
-                    port_bonus = f" [PORT: {inter.port_type}]"
+            lines.append(f"  Total available: {len(candidates)} intersections")
+            for inter in candidates:
+                port_str = f" [PORT: {inter.port_type}]" if inter.port_type else ""
+                lines.append(f"  Intersection {inter.id}{port_str}:")
+                # Show adjacent tiles (basic info only)
+                if inter.adjacent_tiles:
+                    tile_info = []
+                    for tile_id in inter.adjacent_tiles:
+                        tile = tile_map.get(tile_id)
+                        if tile and tile.resource_type and tile.number_token:
+                            tile_info.append(f"Tile {tile_id}: {tile.resource_type.value} (token {tile.number_token.value})")
+                        elif tile:
+                            tile_info.append(f"Tile {tile_id}: {tile.resource_type.value if tile.resource_type else 'Desert'}")
+                    if tile_info:
+                        lines.append(f"    Adjacent Tiles: {', '.join(tile_info)}")
+                if inter.adjacent_intersections:
+                    adj_str = ", ".join([str(aid) for aid in sorted(inter.adjacent_intersections)])
+                    lines.append(f"    Adjacent Intersections: {adj_str}")
+        else:
+            # Show top candidates by production value (with production analysis)
+            candidates = []
+            for inter in empty_intersections:
+                # Check distance rule (can't build adjacent to existing buildings)
+                can_build = True
+                for adj_id in inter.adjacent_intersections:
+                    adj_inter = next((i for i in state.intersections if i.id == adj_id), None)
+                    if adj_inter and adj_inter.owner:
+                        can_build = False
+                        break
                 
-                for tile_id in inter.adjacent_tiles:
-                    tile = tile_map.get(tile_id)
-                    if tile and tile.resource_type and tile.number_token:
-                        token_value = tile.number_token.value
-                        prob = dice_probs[token_value]
-                        total_production += prob
-                        res_type = tile.resource_type.value
-                        if res_type not in resource_prod:
-                            resource_prod[res_type] = 0.0
-                        resource_prod[res_type] += prob
-                        # Store actual tile details
-                        tile_details.append((res_type, token_value))
-                
-                candidates.append((inter.id, total_production, resource_prod, tile_details, port_bonus, inter.adjacent_intersections))
-        
-        # Sort by production value (descending)
-        candidates.sort(key=lambda x: -x[1])
-        
-        # Show ALL available candidates (not just top 15)
-        lines.append(f"  Total available: {len(candidates)} intersections")
-        for inter_id, prod, res_prod, tile_details, port, adj_inters in candidates:
-            lines.append(f"  Intersection {inter_id}{port}:")
-            lines.append(f"    Production Value: {prod*100:.1f}% per roll")
-            # Show actual tiles with resource types and number tokens
-            if tile_details:
-                tile_str = ", ".join([f"{res_type} {token}" for res_type, token in sorted(tile_details, key=lambda x: (x[0], x[1]))])
-                lines.append(f"    Tiles: {tile_str}")
-            # Also show aggregated percentages for quick reference
-            if res_prod:
-                res_str = ", ".join([f"{k}: {v*100:.1f}%" for k, v in sorted(res_prod.items(), key=lambda x: -x[1])])
-                lines.append(f"    Resource Production: {res_str}")
-            if adj_inters:
-                adj_str = ", ".join([str(aid) for aid in sorted(adj_inters)])
-                lines.append(f"    Adjacent Intersections: {adj_str}")
+                if can_build:
+                    total_production = 0.0
+                    resource_prod = {}
+                    tile_details = []  # Store actual tile info: (resource_type, token_value)
+                    port_bonus = ""
+                    if inter.port_type:
+                        port_bonus = f" [PORT: {inter.port_type}]"
+                    
+                    for tile_id in inter.adjacent_tiles:
+                        tile = tile_map.get(tile_id)
+                        if tile and tile.resource_type and tile.number_token:
+                            token_value = tile.number_token.value
+                            prob = dice_probs[token_value]
+                            total_production += prob
+                            res_type = tile.resource_type.value
+                            if res_type not in resource_prod:
+                                resource_prod[res_type] = 0.0
+                            resource_prod[res_type] += prob
+                            # Store actual tile details
+                            tile_details.append((res_type, token_value))
+                    
+                    candidates.append((inter.id, total_production, resource_prod, tile_details, port_bonus, inter.adjacent_intersections))
+            
+            # Sort by production value (descending)
+            candidates.sort(key=lambda x: -x[1])
+            
+            # Show ALL available candidates (not just top 15)
+            lines.append(f"  Total available: {len(candidates)} intersections")
+            for inter_id, prod, res_prod, tile_details, port, adj_inters in candidates:
+                lines.append(f"  Intersection {inter_id}{port}:")
+                lines.append(f"    Production Value: {prod*100:.1f}% per roll")
+                # Show actual tiles with resource types and number tokens
+                if tile_details:
+                    tile_str = ", ".join([f"{res_type} {token}" for res_type, token in sorted(tile_details, key=lambda x: (x[0], x[1]))])
+                    lines.append(f"    Tiles: {tile_str}")
+                # Also show aggregated percentages for quick reference
+                if res_prod:
+                    res_str = ", ".join([f"{k}: {v*100:.1f}%" for k, v in sorted(res_prod.items(), key=lambda x: -x[1])])
+                    lines.append(f"    Resource Production: {res_str}")
+                if adj_inters:
+                    adj_str = ", ".join([str(aid) for aid in sorted(adj_inters)])
+                    lines.append(f"    Adjacent Intersections: {adj_str}")
     
     lines.append("")
     
@@ -1677,7 +1750,13 @@ def _calculate_min_roads_to_reach(state: GameState, target_inter_id: int, player
     return None  # Not reachable
 
 
-def _generate_compact_graph(state: GameState, player_id: str, tile_map: Dict[int, 'Tile'], dice_probs: Dict[int, float]) -> List[str]:
+def _generate_compact_graph(
+    state: GameState, 
+    player_id: str, 
+    tile_map: Dict[int, 'Tile'], 
+    dice_probs: Dict[int, float],
+    exclude_higher_level_features: bool = False
+) -> List[str]:
     """
     Generate a compact graph representation of the Catan board.
     Shows tiles, intersections, and roads as nodes and edges with spatial relationships.
@@ -1726,8 +1805,8 @@ def _generate_compact_graph(state: GameState, player_id: str, tile_map: Dict[int
         else:
             empty_intersections.append(inter)
     
-    # Calculate production for empty intersections (only legal build sites)
-    empty_with_prod = []
+    # Find legal build sites (empty intersections that can be built)
+    legal_build_sites = []
     for inter in empty_intersections:
         # Check distance rule - can only build if no adjacent buildings
         can_build = True
@@ -1738,18 +1817,23 @@ def _generate_compact_graph(state: GameState, player_id: str, tile_map: Dict[int
                 break
         
         if can_build:
-            total_prod = 0.0
-            for tile_id in inter.adjacent_tiles:
-                tile = tile_map.get(tile_id)
-                if tile and tile.resource_type and tile.number_token:
-                    total_prod += dice_probs[tile.number_token.value]
-            empty_with_prod.append((inter, total_prod))
+            if exclude_higher_level_features:
+                legal_build_sites.append(inter)
+            else:
+                # Calculate production for sorting
+                total_prod = 0.0
+                for tile_id in inter.adjacent_tiles:
+                    tile = tile_map.get(tile_id)
+                    if tile and tile.resource_type and tile.number_token:
+                        total_prod += dice_probs[tile.number_token.value]
+                legal_build_sites.append((inter, total_prod))
     
-    # Sort by production (descending)
-    empty_with_prod.sort(key=lambda x: -x[1])
+    # Sort by production if not excluding features
+    if not exclude_higher_level_features:
+        legal_build_sites.sort(key=lambda x: -x[1])
     
     # Show intersections
-    lines.append(f"Intersections: 54 nodes (showing occupied + all {len(empty_with_prod)} legal build sites)")
+    lines.append(f"Intersections: 54 nodes (showing occupied + all {len(legal_build_sites)} legal build sites)")
     
     # Your intersections
     if your_intersections:
@@ -1770,21 +1854,28 @@ def _generate_compact_graph(state: GameState, player_id: str, tile_map: Dict[int
             building_str = f",{inter.building_type}" if inter.building_type else ""
             lines.append(f"  I{inter.id}→tiles:[{tiles_str}],adj:[{adj_str}],owner:{owner_name}{building_str}{port_str}")
     
-    # All legal empty intersections by production (with reachability info)
-    for inter, prod in empty_with_prod:
-        tiles_str = ",".join([f"T{tid}" for tid in sorted(inter.adjacent_tiles)])
-        adj_str = ",".join([f"I{aid}" for aid in sorted(inter.adjacent_intersections)])
-        port_str = f",port:{inter.port_type}" if inter.port_type else ""
-        prod_pct = prod * 100
-        
-        # Calculate reachability
-        min_roads = _calculate_min_roads_to_reach(state, inter.id, player_id)
-        if min_roads is not None:
-            reachable_str = f",reachable:true,min_roads:{min_roads}"
-        else:
-            reachable_str = ",reachable:false"
-        
-        lines.append(f"  I{inter.id}→tiles:[{tiles_str}],adj:[{adj_str}],owner:null,prod:{prod_pct:.1f}%{port_str}{reachable_str}")
+    # All legal empty intersections (with or without production/reachability info)
+    if exclude_higher_level_features:
+        for inter in legal_build_sites:
+            tiles_str = ",".join([f"T{tid}" for tid in sorted(inter.adjacent_tiles)])
+            adj_str = ",".join([f"I{aid}" for aid in sorted(inter.adjacent_intersections)])
+            port_str = f",port:{inter.port_type}" if inter.port_type else ""
+            lines.append(f"  I{inter.id}→tiles:[{tiles_str}],adj:[{adj_str}],owner:null{port_str}")
+    else:
+        for inter, prod in legal_build_sites:
+            tiles_str = ",".join([f"T{tid}" for tid in sorted(inter.adjacent_tiles)])
+            adj_str = ",".join([f"I{aid}" for aid in sorted(inter.adjacent_intersections)])
+            port_str = f",port:{inter.port_type}" if inter.port_type else ""
+            prod_pct = prod * 100
+            
+            # Calculate reachability
+            min_roads = _calculate_min_roads_to_reach(state, inter.id, player_id)
+            if min_roads is not None:
+                reachable_str = f",reachable:true,min_roads:{min_roads}"
+            else:
+                reachable_str = ",reachable:false"
+            
+            lines.append(f"  I{inter.id}→tiles:[{tiles_str}],adj:[{adj_str}],owner:null,prod:{prod_pct:.1f}%{port_str}{reachable_str}")
     
     lines.append("")
     
