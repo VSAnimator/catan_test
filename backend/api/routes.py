@@ -83,6 +83,8 @@ class CreateGameRequest(BaseModel):
     """Request to create a new game."""
     player_names: List[str]
     rng_seed: Optional[int] = None  # Optional RNG seed for reproducibility
+    exclude_strategic_advice: bool = False  # Exclude strategic advice from LLM prompts
+    exclude_higher_level_features: bool = False  # Exclude higher-level features from LLM prompts
 
 
 class CreateGameResponse(BaseModel):
@@ -182,6 +184,8 @@ async def create_game(request: CreateGameRequest):
     metadata = {
         "player_names": final_names,
         "num_players": len(final_names),
+        "exclude_strategic_advice": request.exclude_strategic_advice,
+        "exclude_higher_level_features": request.exclude_higher_level_features,
     }
     create_game_in_db(
         game_id,
@@ -440,6 +444,7 @@ from .database import (
     list_drills as list_drills_from_db,
     get_drill as get_drill_from_db,
     get_drill_steps as get_drill_steps_from_db,
+    update_drill as update_drill_in_db,
 )
 
 
@@ -451,6 +456,7 @@ class DrillStepCreate(BaseModel):
 
 class CreateDrillRequest(BaseModel):
     name: Optional[str] = None
+    guideline_text: Optional[str] = None
     source_game_id: Optional[str] = None
     source_step_idx: Optional[int] = None
     player_id: str
@@ -463,24 +469,61 @@ class CreateDrillResponse(BaseModel):
     message: str
 
 
+@router.get("/drills/test")
+async def test_drills():
+    """Simple test endpoint to verify routing works."""
+    return {"status": "ok", "message": "Drills endpoint is reachable"}
+
 @router.get("/drills")
 async def list_drills(limit: int = 200):
-    rows = list_drills_from_db(limit=limit)
-    drills = []
-    for r in rows:
-        drills.append(
-            {
-                "id": r["id"],
-                "created_at": r["created_at"],
-                "name": r["name"],
-                "source_game_id": r["source_game_id"],
-                "source_step_idx": r["source_step_idx"],
-                "player_id": r["player_id"],
-                "metadata": json.loads(r["metadata"]) if r["metadata"] else None,
-                "num_steps": r["num_steps"],
-            }
-        )
-    return {"drills": drills}
+    import time
+    import asyncio
+    try:
+        print(f"[DEBUG] list_drills: Starting, limit={limit}", flush=True)
+        start_time = time.time()
+        # Run database query in thread pool to avoid blocking
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+        rows = await loop.run_in_executor(None, list_drills_from_db, limit)
+        query_time = time.time() - start_time
+        print(f"[DEBUG] list_drills: Query completed in {query_time:.4f}s, got {len(rows)} rows", flush=True)
+        
+        start_time = time.time()
+        drills = []
+        for r in rows:
+            # Direct access - columns are guaranteed by the SELECT statement
+            metadata_val = r["metadata"]
+            try:
+                metadata_parsed = json.loads(metadata_val) if metadata_val else None
+            except json.JSONDecodeError as e:
+                print(f"[WARN] Failed to parse metadata for drill {r['id']}: {e}", flush=True)
+                metadata_parsed = None
+            
+            drills.append(
+                {
+                    "id": r["id"],
+                    "created_at": r["created_at"],
+                    "name": r["name"],
+                    "guideline_text": r["guideline_text"],
+                    "source_game_id": r["source_game_id"],
+                    "source_step_idx": r["source_step_idx"],
+                    "player_id": r["player_id"],
+                    "metadata": metadata_parsed,
+                    "num_steps": r["num_steps"],
+                }
+            )
+        processing_time = time.time() - start_time
+        total_time = query_time + processing_time
+        
+        print(f"[DEBUG] list_drills: Complete in {total_time:.4f}s (query={query_time:.4f}s, processing={processing_time:.4f}s)", flush=True)
+        return {"drills": drills}
+    except Exception as e:
+        print(f"[ERROR] list_drills failed: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to list drills: {str(e)}")
 
 
 @router.get("/drills/{drill_id}")
@@ -494,6 +537,7 @@ async def get_drill(drill_id: int):
             "id": drill_row["id"],
             "created_at": drill_row["created_at"],
             "name": drill_row["name"],
+            "guideline_text": drill_row["guideline_text"] if "guideline_text" in drill_row.keys() else None,
             "source_game_id": drill_row["source_game_id"],
             "source_step_idx": drill_row["source_step_idx"],
             "player_id": drill_row["player_id"],
@@ -540,6 +584,7 @@ async def create_drill_endpoint(request: CreateDrillRequest):
 
     drill_id = create_drill_in_db(
         name=request.name,
+        guideline_text=request.guideline_text,
         source_game_id=request.source_game_id,
         source_step_idx=request.source_step_idx,
         player_id=request.player_id,
@@ -547,6 +592,19 @@ async def create_drill_endpoint(request: CreateDrillRequest):
         steps=steps_for_db,
     )
     return CreateDrillResponse(drill_id=drill_id, message="Drill created")
+
+
+class UpdateDrillRequest(BaseModel):
+    name: Optional[str] = None
+    guideline_text: Optional[str] = None
+
+
+@router.put("/drills/{drill_id}")
+async def update_drill_endpoint(drill_id: int, request: UpdateDrillRequest):
+    updated = update_drill_in_db(drill_id, **request.dict(exclude_unset=True))
+    if not updated:
+        raise HTTPException(status_code=404, detail="Drill not found or no fields to update")
+    return {"message": "Drill updated"}
 
 
 def _parse_llm_agent_spec(agent_type_str: str) -> Optional[Dict[str, Any]]:
@@ -588,7 +646,14 @@ def _parse_llm_agent_spec(agent_type_str: str) -> Optional[Dict[str, Any]]:
     return {"model": model, "thinking_mode": thinking_mode, "thinking_effort": thinking_effort}
 
 
-def _make_agent(agent_type: str, player_id: str):
+def _make_agent(
+    agent_type: str, 
+    player_id: str, 
+    *, 
+    drill_guideline_text: Optional[str] = None,
+    exclude_strategic_advice: bool = False,
+    exclude_higher_level_features: bool = False
+):
     # Mirror watch_agents_step behavior to keep a single mental model in the UI.
     from agents import RandomAgent, BehaviorTreeAgent
     try:
@@ -600,6 +665,7 @@ def _make_agent(agent_type: str, player_id: str):
             ExpansionAgent,
             DefensiveAgent,
             StateConditionedAgent,
+            ImitationBehaviorTreeAgent,
         )
 
         AGENT_CLASSES = {
@@ -612,6 +678,7 @@ def _make_agent(agent_type: str, player_id: str):
             "defensive": DefensiveAgent,
             "state_conditioned": StateConditionedAgent,
             "llm": LLMAgent,
+            "imitation_bt": ImitationBehaviorTreeAgent,
         }
     except Exception:
         AGENT_CLASSES = {
@@ -642,8 +709,19 @@ def _make_agent(agent_type: str, player_id: str):
             enable_retrieval=False,
             thinking_mode=llm_spec["thinking_mode"],
             thinking_effort=llm_spec["thinking_effort"],
+            drill_guideline_text=drill_guideline_text,
+            exclude_strategic_advice=exclude_strategic_advice,
+            exclude_higher_level_features=exclude_higher_level_features,
         )
     agent_class = AGENT_CLASSES.get(agent_type, RandomAgent)
+    if agent_type == "imitation_bt":
+        # Requires env var for now; this is primarily for offline evaluation.
+        import os
+        ref_game_id = os.getenv("IMITATION_GAME_ID")
+        ref_player_id = os.getenv("IMITATION_PLAYER_ID", "player_0")
+        if not ref_game_id:
+            return RandomAgent(player_id)
+        return agent_class(player_id, reference_game_id=ref_game_id, reference_player_id=ref_player_id)
     return agent_class(player_id)
 
 
@@ -664,6 +742,9 @@ def _canonical_action_dict(action_dict: Dict[str, Any]) -> Dict[str, Any]:
 
 class EvaluateDrillRequest(BaseModel):
     agent_type: str = "random"
+    include_guidelines: bool = False
+    exclude_strategic_advice: bool = False  # Exclude strategic advice from LLM prompt
+    exclude_higher_level_features: bool = False  # Exclude computed features like production analysis
 
 
 @router.post("/drills/{drill_id}/evaluate")
@@ -677,6 +758,7 @@ async def evaluate_drill(drill_id: int, request: EvaluateDrillRequest):
 
     results = []
     passed_all = True
+    drill_guideline_text = drill_row["guideline_text"] if "guideline_text" in drill_row.keys() else None
     for r in steps:
         player_id = r["player_id"]
         state_json = json.loads(r["state_json"])
@@ -684,7 +766,13 @@ async def evaluate_drill(drill_id: int, request: EvaluateDrillRequest):
         state = deserialize_game_state(state_json)
         la_list = legal_actions(state, player_id)
 
-        agent = _make_agent(request.agent_type, player_id)
+        agent = _make_agent(
+            request.agent_type,
+            player_id,
+            drill_guideline_text=(drill_guideline_text if request.include_guidelines else None),
+            exclude_strategic_advice=request.exclude_strategic_advice,
+            exclude_higher_level_features=request.exclude_higher_level_features,
+        )
         try:
             choice = agent.choose_action(state, la_list)
             if isinstance(choice, tuple) and len(choice) == 4:
@@ -745,6 +833,10 @@ class EvaluateAllDrillsRequest(BaseModel):
     limit: int = 200
     include_step_results: bool = False
     max_concurrency: int = 4
+    include_guidelines: bool = False
+    drill_ids: Optional[List[int]] = None
+    exclude_strategic_advice: bool = False  # Exclude strategic advice from LLM prompt
+    exclude_higher_level_features: bool = False  # Exclude computed features like production analysis
 
 
 @router.post("/drills/evaluate_all")
@@ -752,14 +844,47 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
     if request.max_concurrency < 1 or request.max_concurrency > 32:
         raise HTTPException(status_code=400, detail="max_concurrency must be between 1 and 32")
 
-    drill_rows = list_drills_from_db(limit=request.limit)
+    drill_rows = []
+    if request.drill_ids is not None:
+        # Evaluate only specified drills (preserve provided order)
+        for did in request.drill_ids:
+            try:
+                drill_row = get_drill_from_db(int(did))
+            except Exception:
+                drill_row = None
+            if drill_row is None:
+                # Represent missing drill as a pseudo-row; handled below
+                drill_rows.append(
+                    {
+                        "id": int(did),
+                        "name": None,
+                        "guideline_text": None,
+                        "source_game_id": None,
+                        "source_step_idx": None,
+                        "player_id": None,
+                        "num_steps": 0,
+                        "_missing": True,
+                    }
+                )
+            else:
+                # Enrich with num_steps (for response parity with list_drills)
+                steps_for_count = get_drill_steps_from_db(int(did))
+                drill_rows.append(
+                    {
+                        **{k: drill_row[k] for k in drill_row.keys()},
+                        "num_steps": len(steps_for_count),
+                        "_missing": False,
+                    }
+                )
+    else:
+        drill_rows = list_drills_from_db(limit=request.limit)
     evaluated_at = datetime.utcnow().isoformat()
     run_id = str(uuid.uuid4())
     # Preload all drill steps in the main thread (read-only), then evaluate drills concurrently.
     prepared: List[Dict[str, Any]] = []
     for d in drill_rows:
         drill_id = int(d["id"])
-        step_rows = get_drill_steps_from_db(drill_id)
+        step_rows = get_drill_steps_from_db(drill_id) if hasattr(d, "__getitem__") else []
         steps_prepped = []
         for r in step_rows:
             steps_prepped.append(
@@ -774,16 +899,33 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
             {
                 "drill_id": drill_id,
                 "name": d["name"],
+                "guideline_text": d["guideline_text"] if "guideline_text" in d.keys() else None,
                 "source_game_id": d["source_game_id"],
                 "source_step_idx": d["source_step_idx"],
                 "player_id": d["player_id"],
                 "num_steps": d["num_steps"],
                 "steps": steps_prepped,
+                "missing": bool(d.get("_missing", False)) if isinstance(d, dict) else False,
             }
         )
 
     def _eval_one_drill(prep: Dict[str, Any]) -> Dict[str, Any]:
+        if prep.get("missing"):
+            return {
+                "drill_id": prep["drill_id"],
+                "name": prep["name"],
+                "source_game_id": prep["source_game_id"],
+                "source_step_idx": prep["source_step_idx"],
+                "player_id": prep["player_id"],
+                "num_steps": prep["num_steps"],
+                "passed": False,
+                "first_mismatch": {"idx": 0, "error": "Drill not found"},
+                **({"step_results": []} if request.include_step_results else {}),
+            }
         steps = prep["steps"]
+        drill_guideline_text = prep.get("guideline_text")
+        if not request.include_guidelines:
+            drill_guideline_text = None
         if not steps:
             return {
                 "drill_id": prep["drill_id"],
@@ -807,7 +949,13 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
             expected_action = s["expected_action"]
             state = deserialize_game_state(state_json)
             la_list = legal_actions(state, player_id)
-            agent = _make_agent(request.agent_type, player_id)
+            agent = _make_agent(
+                request.agent_type, 
+                player_id, 
+                drill_guideline_text=drill_guideline_text,
+                exclude_strategic_advice=request.exclude_strategic_advice,
+                exclude_higher_level_features=request.exclude_higher_level_features,
+            )
 
             try:
                 choice = agent.choose_action(state, la_list)
@@ -908,6 +1056,7 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
         "run_id": run_id,
         "evaluated_at": evaluated_at,
         "max_concurrency": request.max_concurrency,
+        "include_guidelines": request.include_guidelines,
         "results": summaries,
     }
 
@@ -1011,6 +1160,8 @@ async def fork_game(game_id: str, state: Dict[str, Any]):
 class RunAgentsRequest(BaseModel):
     """Request to run agents automatically."""
     max_turns: int = 1000  # Maximum number of turns
+    exclude_strategic_advice: bool = False  # Exclude strategic advice from LLM prompt
+    exclude_higher_level_features: bool = False  # Exclude computed features like production analysis
 
 
 class RunAgentsResponse(BaseModel):
@@ -1120,6 +1271,8 @@ class WatchAgentsRequest(BaseModel):
     """Request to watch agents play (step-by-step mode)."""
     agent_mapping: Optional[Dict[str, str]] = None  # player_id -> agent_type (e.g., "behavior_tree", "random")
     # If a player is not in agent_mapping, they are treated as human players
+    exclude_strategic_advice: Optional[bool] = None  # Exclude strategic advice from LLM prompt (defaults to game metadata)
+    exclude_higher_level_features: Optional[bool] = None  # Exclude computed features like production analysis (defaults to game metadata)
 
 
 class WatchAgentsResponse(BaseModel):
@@ -1159,20 +1312,32 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
     if game_row["rng_seed"] is not None:
         random.seed(game_row["rng_seed"])
     
+    # Get flags from metadata if not provided in request (use metadata as defaults)
+    current_metadata = {}
+    if game_row["metadata"]:
+        try:
+            current_metadata = json.loads(game_row["metadata"])
+        except:
+            current_metadata = {}
+    
+    exclude_strategic_advice = request.exclude_strategic_advice
+    if exclude_strategic_advice is None and "exclude_strategic_advice" in current_metadata:
+        exclude_strategic_advice = current_metadata["exclude_strategic_advice"]
+    else:
+        exclude_strategic_advice = exclude_strategic_advice if exclude_strategic_advice is not None else False
+    
+    exclude_higher_level_features = request.exclude_higher_level_features
+    if exclude_higher_level_features is None and "exclude_higher_level_features" in current_metadata:
+        exclude_higher_level_features = current_metadata["exclude_higher_level_features"]
+    else:
+        exclude_higher_level_features = exclude_higher_level_features if exclude_higher_level_features is not None else False
+    
     # Create agents only for players specified in agent_mapping
     agents = {}
     agent_mapping = request.agent_mapping or {}
     
     # Store agent_mapping in game metadata if provided (for future restoration)
     if agent_mapping:
-        # Get current metadata
-        current_metadata = {}
-        if game_row["metadata"]:
-            try:
-                current_metadata = json.loads(game_row["metadata"])
-            except:
-                current_metadata = {}
-        
         # Update agent_mapping in metadata (merge with existing)
         if "agent_mapping" not in current_metadata or current_metadata["agent_mapping"] != agent_mapping:
             current_metadata["agent_mapping"] = agent_mapping
@@ -1198,6 +1363,7 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
             ExpansionAgent,
             DefensiveAgent,
             StateConditionedAgent,
+            PlayerStyleImitationAgent,
         )
         AGENT_CLASSES = {
             "random": RandomAgent,
@@ -1208,6 +1374,7 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
             "expansion": ExpansionAgent,
             "defensive": DefensiveAgent,
             "state_conditioned": StateConditionedAgent,
+            "player_style_imitation": PlayerStyleImitationAgent,
             "llm": LLMAgent,
         }
     except ImportError:
@@ -1246,6 +1413,8 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
                     enable_retrieval=False,  # Zero-shot mode
                     thinking_mode=llm_spec["thinking_mode"],
                     thinking_effort=llm_spec["thinking_effort"],
+                    exclude_strategic_advice=exclude_strategic_advice,
+                    exclude_higher_level_features=exclude_higher_level_features,
                 )
             else:
                 agents[player.id] = agent_class(player.id)

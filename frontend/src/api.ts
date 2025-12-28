@@ -203,6 +203,7 @@ export interface DrillListItem {
   id: number
   created_at: string
   name: string | null
+  guideline_text?: string | null
   source_game_id: string | null
   source_step_idx: number | null
   player_id: string
@@ -218,6 +219,7 @@ export interface DrillStepCreate {
 
 export interface CreateDrillRequest {
   name?: string | null
+  guideline_text?: string | null
   source_game_id?: string | null
   source_step_idx?: number | null
   player_id: string
@@ -246,6 +248,9 @@ export async function createDrill(request: CreateDrillRequest): Promise<CreateDr
 
 export interface EvaluateDrillRequest {
   agent_type: string
+  include_guidelines?: boolean
+  exclude_strategic_advice?: boolean
+  exclude_higher_level_features?: boolean
 }
 
 export interface EvaluateDrillResultItem {
@@ -277,12 +282,19 @@ export interface EvaluateAllDrillsRequest {
   agent_type: string
   limit?: number
   include_step_results?: boolean
+  include_guidelines?: boolean
+  max_concurrency?: number
+  drill_ids?: number[]
+  exclude_strategic_advice?: boolean
+  exclude_higher_level_features?: boolean
 }
 
 export interface EvaluateAllDrillsResponse {
   agent_type: string
   run_id?: string
   evaluated_at?: string
+  include_guidelines?: boolean
+  max_concurrency?: number
   results: Array<{
     drill_id: number
     name: string | null
@@ -318,6 +330,7 @@ export interface GetDrillResponse {
     id: number
     created_at: string
     name: string | null
+    guideline_text: string | null
     source_game_id: string | null
     source_step_idx: number | null
     player_id: string
@@ -333,6 +346,20 @@ export interface GetDrillResponse {
   }>
 }
 
+export interface UpdateDrillRequest {
+  name?: string | null
+  guideline_text?: string | null
+}
+
+export async function updateDrill(drillId: number, request: UpdateDrillRequest): Promise<{ message: string }> {
+  const response = await fetch(`${getApiBase()}/drills/${drillId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request)
+  })
+  return handleResponse<{ message: string }>(response)
+}
+
 export async function getDrill(drillId: number): Promise<GetDrillResponse> {
   const response = await fetch(`${getApiBase()}/drills/${drillId}`)
   return handleResponse<GetDrillResponse>(response)
@@ -341,6 +368,8 @@ export async function getDrill(drillId: number): Promise<GetDrillResponse> {
 export interface CreateGameRequest {
   player_names: string[]
   rng_seed?: number
+  exclude_strategic_advice?: boolean
+  exclude_higher_level_features?: boolean
 }
 
 export interface CreateGameResponse {
@@ -424,6 +453,8 @@ export async function forkGame(gameId: string, state: GameState): Promise<Create
 
 export interface RunAgentsRequest {
   max_turns?: number
+  exclude_strategic_advice?: boolean
+  exclude_higher_level_features?: boolean
 }
 
 export interface RunAgentsResponse {
@@ -445,6 +476,8 @@ export async function runAgents(gameId: string, request: RunAgentsRequest = {}):
 
 export interface WatchAgentsRequest {
   agent_mapping?: Record<string, string>  // player_id -> agent_type
+  exclude_strategic_advice?: boolean
+  exclude_higher_level_features?: boolean
 }
 
 export interface WatchAgentsResponse {
@@ -456,11 +489,20 @@ export interface WatchAgentsResponse {
   reasoning?: string | null
 }
 
-export async function watchAgentsStep(gameId: string, agentMapping?: Record<string, string>): Promise<WatchAgentsResponse> {
+export async function watchAgentsStep(
+  gameId: string, 
+  agentMapping?: Record<string, string>,
+  excludeStrategicAdvice?: boolean,
+  excludeHigherLevelFeatures?: boolean
+): Promise<WatchAgentsResponse> {
   const response = await fetch(`${getApiBase()}/games/${gameId}/watch_agents_step`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ agent_mapping: agentMapping || {} })
+    body: JSON.stringify({ 
+      agent_mapping: agentMapping || {},
+      exclude_strategic_advice: excludeStrategicAdvice || false,
+      exclude_higher_level_features: excludeHigherLevelFeatures || false
+    })
   })
   return handleResponse<WatchAgentsResponse>(response)
 }

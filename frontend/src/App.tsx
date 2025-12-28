@@ -17,6 +17,7 @@ import {
   evaluateDrill,
   evaluateAllDrills,
   getDrill,
+  updateDrill,
   type GameState,
   type LegalAction,
   type Player,
@@ -66,6 +67,8 @@ function App() {
   const [playerNameInput, setPlayerNameInput] = useState('')
   const [numPlayers, setNumPlayers] = useState(2)
   const [agentMapping, setAgentMapping] = useState<Record<string, string>>({})  // player_id -> agent_type
+  const [createGameExcludeStrategicAdvice, setCreateGameExcludeStrategicAdvice] = useState<boolean>(false)
+  const [createGameExcludeHigherLevelFeatures, setCreateGameExcludeHigherLevelFeatures] = useState<boolean>(false)
 
   // For replay view
   const [replayData, setReplayData] = useState<ReplayResponse | null>(null)
@@ -75,6 +78,7 @@ function App() {
   // Drill recording mode (started from replay viewer)
   const [drillRecording, setDrillRecording] = useState<null | {
     name: string
+    guideline_text: string
     source_game_id: string
     source_step_idx: number
     drill_player_id: string
@@ -85,6 +89,10 @@ function App() {
   // Drills page state
   const [drillsList, setDrillsList] = useState<DrillListItem[]>([])
   const [drillsAgentType, setDrillsAgentType] = useState<string>('behavior_tree')
+  const [drillsUseGuidelines, setDrillsUseGuidelines] = useState<boolean>(false)
+  const [drillsExcludeStrategicAdvice, setDrillsExcludeStrategicAdvice] = useState<boolean>(false)
+  const [drillsExcludeHigherLevelFeatures, setDrillsExcludeHigherLevelFeatures] = useState<boolean>(false)
+  const [selectedDrillIds, setSelectedDrillIds] = useState<Set<number>>(new Set())
   const [drillsEval, setDrillsEval] = useState<EvaluateAllDrillsResponse | null>(null)
   const [drillsLoading, setDrillsLoading] = useState(false)
   // Batch evaluation metadata (single run that should back both row PASS/FAIL and details)
@@ -101,6 +109,8 @@ function App() {
     agent_type?: string
     evaluated_at?: string
     drill?: any
+    draft_guideline_text?: string
+    saving_guideline?: boolean
   }>>({})
   
   // For agent-watching mode
@@ -109,6 +119,8 @@ function App() {
   const [watchInterval, setWatchInterval] = useState<number | null>(null)
   const [stepByStepMode, setStepByStepMode] = useState(false)  // Step-by-step mode (manual advance)
   const [lastReasoning, setLastReasoning] = useState<string | null>(null)  // Last agent reasoning
+  const [agentWatchExcludeStrategicAdvice, setAgentWatchExcludeStrategicAdvice] = useState<boolean>(false)
+  const [agentWatchExcludeHigherLevelFeatures, setAgentWatchExcludeHigherLevelFeatures] = useState<boolean>(false)
   
   // For trading UI
   const [showTradingPanel, setShowTradingPanel] = useState(false)
@@ -344,7 +356,12 @@ function App() {
         const advanceDiscard = async () => {
           try {
             setLoading(true)
-            const result = await watchAgentsStep(gameState.game_id, agentMapping)
+            const result = await watchAgentsStep(
+              gameState.game_id, 
+              agentMapping,
+              agentWatchExcludeStrategicAdvice,
+              agentWatchExcludeHigherLevelFeatures
+            )
             setGameState(result.new_state)
             if (result.reasoning) setLastReasoning(result.reasoning)
             if (result.error) setError(`Agent error: ${result.error}`)
@@ -464,7 +481,11 @@ function App() {
       // Generate random names on backend, so just pass empty or same name
       const playerNames = Array.from({ length: numPlayers }, () => playerNameInput || '')
       
-      const response = await apiCreateGame({ player_names: playerNames })
+      const response = await apiCreateGame({ 
+        player_names: playerNames,
+        exclude_strategic_advice: createGameExcludeStrategicAdvice,
+        exclude_higher_level_features: createGameExcludeHigherLevelFeatures
+      })
       setGameState(response.initial_state)
       
       // Set player ID to first non-agent player, or first player if all are agents
@@ -645,20 +666,47 @@ function App() {
     setDrillsLoading(true)
     setError(null)
     try {
+      console.log('[DEBUG] refreshDrills: Starting...')
       const data = await listDrills(200)
+      console.log('[DEBUG] refreshDrills: Got data:', data)
       setDrillsList(data.drills || [])
+      // Keep only selections that still exist
+      setSelectedDrillIds(prev => {
+        const allowed = new Set<number>((data.drills || []).map(d => d.id))
+        const next = new Set<number>()
+        for (const id of prev) if (allowed.has(id)) next.add(id)
+        return next
+      })
     } catch (err) {
+      console.error('[ERROR] refreshDrills failed:', err)
       setError(err instanceof Error ? err.message : 'Failed to load drills')
     } finally {
       setDrillsLoading(false)
     }
   }
 
+  // Auto-load drills when drills view is opened (only once)
+  useEffect(() => {
+    if (view === 'drills' && drillsList.length === 0 && !drillsLoading) {
+      console.log('[DEBUG] Auto-loading drills on view change')
+      refreshDrills()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]) // Only depend on view to avoid infinite loops
+
   const runAllDrillsEval = async () => {
     setDrillsLoading(true)
     setError(null)
     try {
-      const result = await evaluateAllDrills({ agent_type: drillsAgentType, limit: 200, include_step_results: true })
+      const result = await evaluateAllDrills({
+        agent_type: drillsAgentType,
+        limit: 200,
+        include_step_results: true,
+        include_guidelines: drillsUseGuidelines,
+        exclude_strategic_advice: drillsExcludeStrategicAdvice,
+        exclude_higher_level_features: drillsExcludeHigherLevelFeatures,
+        drill_ids: selectedDrillIds.size > 0 ? Array.from(selectedDrillIds) : undefined
+      })
       setDrillsEval(result)
       setDrillsEvalRunMeta({ run_id: result.run_id, evaluated_at: result.evaluated_at })
     } catch (err) {
@@ -1278,6 +1326,30 @@ function App() {
                   💡 Tip: Set 3 players as "Behavior Tree Agent" to play against 3 bots!
                 </div>
               </div>
+              <div className="form-group" style={{ fontSize: '0.9rem', marginTop: '1rem' }}>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                  LLM Agent Prompt Options (for LLM agents only):
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={createGameExcludeStrategicAdvice}
+                    onChange={(e) => setCreateGameExcludeStrategicAdvice(e.target.checked)}
+                  />
+                  Exclude strategic advice from LLM prompt
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginTop: '0.5rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={createGameExcludeHigherLevelFeatures}
+                    onChange={(e) => setCreateGameExcludeHigherLevelFeatures(e.target.checked)}
+                  />
+                  Exclude higher-level features (production analysis, etc.)
+                </label>
+                <div style={{ fontSize: '0.8rem', color: '#666', marginTop: '0.5rem' }}>
+                  These settings will be used when agents play in this game.
+                </div>
+              </div>
               <button onClick={handleCreateGame} disabled={loading}>
                 {loading ? 'Creating...' : 'Create Game'}
               </button>
@@ -1381,6 +1453,24 @@ function App() {
                   />
                 </label>
               </div>
+              <div className="form-group" style={{ fontSize: '0.9rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={agentWatchExcludeStrategicAdvice}
+                    onChange={(e) => setAgentWatchExcludeStrategicAdvice(e.target.checked)}
+                  />
+                  Exclude strategic advice from LLM prompt
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginTop: '0.5rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={agentWatchExcludeHigherLevelFeatures}
+                    onChange={(e) => setAgentWatchExcludeHigherLevelFeatures(e.target.checked)}
+                  />
+                  Exclude higher-level features (production analysis, etc.)
+                </label>
+              </div>
               <div className="button-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 <button 
                   onClick={async () => {
@@ -1391,7 +1481,11 @@ function App() {
                     setLoading(true)
                     setError(null)
                     try {
-                      const result = await runAgents(agentWatchGameId, { max_turns: 1000 })
+                      const result = await runAgents(agentWatchGameId, { 
+                        max_turns: 1000,
+                        exclude_strategic_advice: agentWatchExcludeStrategicAdvice,
+                        exclude_higher_level_features: agentWatchExcludeHigherLevelFeatures
+                      })
                       if (result.error) {
                         alert(`Agents finished with error: ${result.error}\n\nGame ID: ${result.game_id}\nTurns played: ${result.turns_played}\nCompleted: ${result.completed}`)
                       } else {
@@ -1792,7 +1886,12 @@ function App() {
       if (!gameState || loading) return
       try {
         setLoading(true)
-        const result = await watchAgentsStep(gameState.game_id)
+        const result = await watchAgentsStep(
+          gameState.game_id,
+          undefined,
+          agentWatchExcludeStrategicAdvice,
+          agentWatchExcludeHigherLevelFeatures
+        )
         setGameState(result.new_state)
         
         // Store reasoning if available
@@ -2062,13 +2161,61 @@ function App() {
                   <option value="random">Random Agent</option>
                 </select>
               </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input
+                  type="checkbox"
+                  checked={drillsUseGuidelines}
+                  onChange={(e) => setDrillsUseGuidelines(e.target.checked)}
+                  disabled={!drillsAgentType.startsWith('llm')}
+                />
+                <span style={{ fontSize: '0.9rem' }}>
+                  Use drill guidelines
+                </span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input
+                  type="checkbox"
+                  checked={drillsExcludeStrategicAdvice}
+                  onChange={(e) => setDrillsExcludeStrategicAdvice(e.target.checked)}
+                  disabled={!drillsAgentType.startsWith('llm')}
+                />
+                <span style={{ fontSize: '0.9rem' }}>
+                  Exclude strategic advice
+                </span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <input
+                  type="checkbox"
+                  checked={drillsExcludeHigherLevelFeatures}
+                  onChange={(e) => setDrillsExcludeHigherLevelFeatures(e.target.checked)}
+                  disabled={!drillsAgentType.startsWith('llm')}
+                />
+                <span style={{ fontSize: '0.9rem' }}>
+                  Exclude higher-level features
+                </span>
+              </label>
               <button onClick={runAllDrillsEval} disabled={drillsLoading || drillsList.length === 0}>
-                {drillsLoading ? 'Running...' : 'Run All Drills'}
+                {drillsLoading ? 'Running...' : (selectedDrillIds.size > 0 ? 'Run selected' : 'Run all')}
+              </button>
+              <button
+                className="secondary"
+                disabled={drillsLoading || drillsList.length === 0}
+                onClick={() => setSelectedDrillIds(new Set(drillsList.map(d => d.id)))}
+              >
+                Select all
+              </button>
+              <button
+                className="secondary"
+                disabled={drillsLoading || selectedDrillIds.size === 0}
+                onClick={() => setSelectedDrillIds(new Set())}
+              >
+                Select none
               </button>
             </div>
 
             <div style={{ marginTop: '1rem', fontSize: '0.9rem', color: '#555' }}>
               Total drills: <strong>{drillsList.length}</strong>
+              {' '}| Selected: <strong>{selectedDrillIds.size}</strong>
               {drillsEval && (
                 <>
                   {' '}| Passed:{' '}
@@ -2077,6 +2224,9 @@ function App() {
                   </strong>
                   {' '} / {drillsEval.results.length}
                   {' '} (batch run: <strong>{drillsEval.agent_type}</strong>
+                  {typeof drillsEval.include_guidelines === 'boolean' ? (
+                    <> | guidelines: <strong>{drillsEval.include_guidelines ? 'on' : 'off'}</strong></>
+                  ) : null}
                   {drillsEvalRunMeta?.evaluated_at ? <> @ {new Date(drillsEvalRunMeta.evaluated_at).toLocaleString()}</> : null}
                   {drillsEvalRunMeta?.run_id ? <> | run_id: {drillsEvalRunMeta.run_id}</> : null}
                   )
@@ -2095,6 +2245,7 @@ function App() {
                     const evalRow = drillsEval?.results.find(r => r.drill_id === d.id)
                     const passed = evalRow ? evalRow.passed : null
                     const details = drillDetailsById[d.id]
+                    const isSelected = selectedDrillIds.has(d.id)
                     return (
                       <div
                         key={d.id}
@@ -2108,11 +2259,26 @@ function App() {
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
                           <div>
                             <div style={{ fontWeight: 'bold' }}>
+                              <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={(e) => {
+                                    setSelectedDrillIds(prev => {
+                                      const next = new Set(prev)
+                                      if (e.target.checked) next.add(d.id)
+                                      else next.delete(d.id)
+                                      return next
+                                    })
+                                  }}
+                                />
+                              </label>
                               #{d.id}{' '}
                               {d.name ? d.name : '(unnamed)'}
                             </div>
                             <div style={{ fontSize: '0.85rem', color: '#666' }}>
                               Player: {d.player_id} | Steps: {d.num_steps} | Source: {d.source_game_id} @ {d.source_step_idx}
+                              {d.guideline_text ? <span> | Guideline: ✅</span> : <span> | Guideline: —</span>}
                             </div>
                           </div>
                           <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
@@ -2152,14 +2318,19 @@ function App() {
 
                               // If opening, use the cached batch evaluation result (same run)
                               // to avoid non-deterministic mismatches (especially for LLM).
-                              if (!drillsEval || drillsEval.agent_type !== drillsAgentType) {
+                              const batchMatchesCurrent =
+                                drillsEval &&
+                                drillsEval.agent_type === drillsAgentType &&
+                                (typeof drillsEval.include_guidelines !== 'boolean' || drillsEval.include_guidelines === drillsUseGuidelines)
+
+                              if (!batchMatchesCurrent) {
                                 setDrillDetailsById(prev => ({
                                   ...prev,
                                   [d.id]: {
                                     ...(prev[d.id] || { open: true }),
                                     open: true,
                                     loading: false,
-                                    error: 'Run “Run All Drills” for the currently selected agent first, then open details (details are tied to that batch run).'
+                                    error: 'Run “Run All Drills” with the current agent + guideline toggle first (details are tied to that batch run).'
                                   }
                                 }))
                                 return
@@ -2195,6 +2366,7 @@ function App() {
                                     agent_type: drillsAgentType,
                                     evaluated_at: drillsEvalRunMeta?.evaluated_at,
                                     drill: drillResp.drill,
+                                    draft_guideline_text: drillResp.drill.guideline_text || '',
                                     original_action: originalAction,
                                     original_player_id: originalPlayerId,
                                     expected_action: expectedAction,
@@ -2233,9 +2405,69 @@ function App() {
                                     <strong>Evaluation (same batch run):</strong>{' '}
                                     {passed == null ? '—' : passed ? 'PASS' : 'FAIL'} | Match: <strong>{details.match ? 'true' : 'false'}</strong>{' '}
                                     (agent: {drillsEval?.agent_type}
+                                    {typeof drillsEval?.include_guidelines === 'boolean' ? ` | guidelines: ${drillsEval.include_guidelines ? 'on' : 'off'}` : ''}
                                     {drillsEvalRunMeta?.evaluated_at ? ` @ ${new Date(drillsEvalRunMeta.evaluated_at).toLocaleString()}` : ''}
                                     {drillsEvalRunMeta?.run_id ? ` | run_id: ${drillsEvalRunMeta.run_id}` : ''}
                                     )
+                                  </div>
+                                </div>
+                                <div style={{ marginBottom: '0.75rem' }}>
+                                  <div style={{ fontWeight: 'bold', marginBottom: '0.25rem' }}>Drill guideline</div>
+                                  <textarea
+                                    value={details.draft_guideline_text ?? ''}
+                                    onChange={(e) => {
+                                      const v = e.target.value
+                                      setDrillDetailsById(prev => ({
+                                        ...prev,
+                                        [d.id]: {
+                                          ...(prev[d.id] || { open: true, loading: false }),
+                                          draft_guideline_text: v
+                                        }
+                                      }))
+                                    }}
+                                    placeholder="(Optional) Guideline to show the LLM for this drill"
+                                    style={{ width: '100%', padding: '0.5rem', minHeight: '70px', resize: 'vertical' }}
+                                  />
+                                  <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                                    <button
+                                      className="secondary"
+                                      disabled={details.saving_guideline}
+                                      onClick={async () => {
+                                        const newText = (details.draft_guideline_text ?? '').trim()
+                                        setDrillDetailsById(prev => ({
+                                          ...prev,
+                                          [d.id]: { ...(prev[d.id] || { open: true }), saving_guideline: true, error: null }
+                                        }))
+                                        try {
+                                          await updateDrill(d.id, { guideline_text: newText || null })
+                                          // update drills list row
+                                          setDrillsList(prev => prev.map(x => (x.id === d.id ? { ...x, guideline_text: newText || null } : x)))
+                                          // update details cache
+                                          setDrillDetailsById(prev => ({
+                                            ...prev,
+                                            [d.id]: {
+                                              ...(prev[d.id] || { open: true }),
+                                              saving_guideline: false,
+                                              drill: { ...(prev[d.id]?.drill || {}), guideline_text: newText || null }
+                                            }
+                                          }))
+                                        } catch (err) {
+                                          setDrillDetailsById(prev => ({
+                                            ...prev,
+                                            [d.id]: {
+                                              ...(prev[d.id] || { open: true }),
+                                              saving_guideline: false,
+                                              error: err instanceof Error ? err.message : 'Failed to update guideline'
+                                            }
+                                          }))
+                                        }
+                                      }}
+                                    >
+                                      {details.saving_guideline ? 'Saving…' : 'Save guideline'}
+                                    </button>
+                                    <div style={{ fontSize: '0.85rem', color: '#666' }}>
+                                      Tip: toggle “Use drill guidelines” above + rerun to see if it changes LLM behavior.
+                                    </div>
                                   </div>
                                 </div>
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '0.75rem' }}>
@@ -2377,6 +2609,7 @@ function App() {
                           setStepByStepMode(true)
                           setDrillRecording({
                             name,
+                            guideline_text: '',
                             source_game_id: replayData.game_id,
                             source_step_idx: replayStepIndex,
                             drill_player_id: currentStep.player_id,
@@ -2634,6 +2867,15 @@ function App() {
                 }}
                 style={{ flex: 1, minWidth: '280px', padding: '0.5rem' }}
               />
+              <textarea
+                value={drillRecording.guideline_text}
+                onChange={(e) => {
+                  const v = e.target.value
+                  setDrillRecording(prev => (prev ? { ...prev, guideline_text: v } : prev))
+                }}
+                placeholder="Optional guideline for this drill (shown to LLM when running with guidelines)"
+                style={{ width: '100%', padding: '0.5rem', minHeight: '70px', resize: 'vertical' }}
+              />
               <button
                 onClick={async () => {
                   if (!drillRecording) return
@@ -2646,6 +2888,7 @@ function App() {
                   try {
                     const res = await createDrill({
                       name: drillRecording.name,
+                      guideline_text: drillRecording.guideline_text || null,
                       source_game_id: drillRecording.source_game_id,
                       source_step_idx: drillRecording.source_step_idx,
                       player_id: drillRecording.drill_player_id,
@@ -2841,7 +3084,12 @@ function App() {
                   if (!gameState || loading) return
                   try {
                     setLoading(true)
-                    const result = await watchAgentsStep(gameState.game_id, agentMapping)
+                    const result = await watchAgentsStep(
+              gameState.game_id, 
+              agentMapping,
+              agentWatchExcludeStrategicAdvice,
+              agentWatchExcludeHigherLevelFeatures
+            )
                     setGameState(result.new_state)
                     
                     // Store reasoning if available
