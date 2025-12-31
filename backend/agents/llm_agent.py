@@ -39,6 +39,9 @@ class LLMAgent(BaseAgent):
         enable_retrieval: bool = True,
         thinking_mode: Optional[bool] = None,
         thinking_effort: Optional[str] = None,
+        drill_guideline_text: Optional[str] = None,
+        exclude_strategic_advice: bool = False,
+        exclude_higher_level_features: bool = False,
     ):
         # Token usage tracking
         self.token_usage_history: List[Dict[str, int]] = []
@@ -66,6 +69,9 @@ class LLMAgent(BaseAgent):
         self.model = model
         self.temperature = temperature
         self.enable_retrieval = enable_retrieval
+        self.drill_guideline_text = (drill_guideline_text or "").strip() or None
+        self.exclude_strategic_advice = exclude_strategic_advice
+        self.exclude_higher_level_features = exclude_higher_level_features
 
         # --- GPT-5 "thinking mode" / reasoning effort ---
         # Docs: https://platform.openai.com/docs/guides/reasoning
@@ -785,7 +791,11 @@ class LLMAgent(BaseAgent):
         Returns:
             Formatted string
         """
-        state_text = state_to_text(state, self.player_id)
+        state_text = state_to_text(
+            state, 
+            self.player_id, 
+            exclude_higher_level_features=self.exclude_higher_level_features
+        )
         actions_text = legal_actions_to_text(legal_actions_list, state=state, player_id=self.player_id)
         
         return f"""## Current Game State:
@@ -1065,7 +1075,7 @@ Examples:
 - To build road on edge 34: {"action_type": "build_road", "action_payload": {"road_edge_id": 34}}
 - To build settlement at intersection 44: {"action_type": "build_settlement", "action_payload": {"intersection_id": 44}}
 - To end turn: {"action_type": "end_turn", "action_payload": null}
-
+""" + ("" if self.exclude_strategic_advice else """
 Be strategic and consider:
 - Building settlements/cities for VPs
 - Building roads for expansion and longest road
@@ -1073,6 +1083,7 @@ Be strategic and consider:
 - Trading when beneficial (but NEVER repeat the same trade proposal in one turn)
 - Playing development cards at the right time
 - Blocking opponents when advantageous
+""") + """
 
 **CRITICAL - Dynamic Legal Actions:**
 - Legal actions shown are based on your CURRENT resources and board state
@@ -1094,7 +1105,14 @@ Be strategic and consider:
                 current_player.id not in state.pending_trade_responses):
                 trade_urgency_note = "\n\n⚠️ URGENT: You MUST respond to the pending trade offer. You can only choose ACCEPT_TRADE or REJECT_TRADE. No other actions are available until you respond.\n"
         
-        user_prompt = f"""{state_and_actions}
+        drill_guideline_note = ""
+        if self.drill_guideline_text:
+            drill_guideline_note = (
+                "\n\nHere's a useful guideline you should follow in situations like this: "
+                f"{self.drill_guideline_text}\n"
+            )
+
+        user_prompt = f"""{state_and_actions}{drill_guideline_note}
 
 {context}{trade_urgency_note}
 

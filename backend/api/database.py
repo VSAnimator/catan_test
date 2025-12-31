@@ -135,12 +135,19 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             name TEXT,
+            guideline_text TEXT,
             source_game_id TEXT,
             source_step_idx INTEGER,
             player_id TEXT,
             metadata TEXT
         )
     """)
+
+    # Add guideline_text column if it doesn't exist (for existing databases)
+    try:
+        cursor.execute("ALTER TABLE drills ADD COLUMN guideline_text TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS drill_steps (
@@ -184,6 +191,7 @@ def init_db():
 def create_drill(
     *,
     name: Optional[str],
+    guideline_text: Optional[str],
     source_game_id: Optional[str],
     source_step_idx: Optional[int],
     player_id: str,
@@ -208,11 +216,12 @@ def create_drill(
 
     cursor.execute(
         """
-        INSERT INTO drills (name, source_game_id, source_step_idx, player_id, metadata)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO drills (name, guideline_text, source_game_id, source_step_idx, player_id, metadata)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
             name,
+            guideline_text,
             source_game_id,
             source_step_idx,
             player_id,
@@ -252,12 +261,22 @@ def list_drills(limit: int = 200) -> List[sqlite3.Row]:
     """List drills newest-first."""
     conn = get_db_connection()
     cursor = conn.cursor()
+    # Use LEFT JOIN with GROUP BY instead of correlated subquery for better performance
     cursor.execute(
         """
         SELECT
-            d.*,
-            (SELECT COUNT(*) FROM drill_steps ds WHERE ds.drill_id = d.id) AS num_steps
+            d.id,
+            d.created_at,
+            d.name,
+            d.guideline_text,
+            d.source_game_id,
+            d.source_step_idx,
+            d.player_id,
+            d.metadata,
+            COUNT(ds.id) AS num_steps
         FROM drills d
+        LEFT JOIN drill_steps ds ON ds.drill_id = d.id
+        GROUP BY d.id
         ORDER BY d.created_at DESC
         LIMIT ?
         """,
@@ -286,6 +305,32 @@ def get_drill_steps(drill_id: int) -> List[sqlite3.Row]:
         (drill_id,),
     )
     return cursor.fetchall()
+
+
+def update_drill(
+    drill_id: int,
+    *,
+    name: Optional[str] = None,
+    guideline_text: Optional[str] = None,
+) -> bool:
+    """Update drill fields. Returns True if updated, False if drill not found."""
+    fields = []
+    params = []
+    if name is not None:
+        fields.append("name = ?")
+        params.append(name)
+    if guideline_text is not None:
+        fields.append("guideline_text = ?")
+        params.append(guideline_text)
+    if not fields:
+        return False
+
+    params.append(drill_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(f"UPDATE drills SET {', '.join(fields)} WHERE id = ?", params)
+    conn.commit()
+    return cursor.rowcount > 0
 
 
 def create_game(

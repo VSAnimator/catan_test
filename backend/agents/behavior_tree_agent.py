@@ -10,8 +10,8 @@ Uses a hierarchical decision tree to make strategic choices:
 5. Handle robber/defense
 """
 import random
-from typing import Tuple, Optional, List, Dict
-from engine import GameState, Action, ActionPayload, ResourceType, ProposeTradePayload, SelectTradePartnerPayload
+from typing import Tuple, Optional, List, Dict, Set
+from engine import GameState, Action, ActionPayload, ResourceType, ProposeTradePayload, SelectTradePartnerPayload, BuildRoadPayload, BuildSettlementPayload
 from engine.serialization import legal_actions
 from .base_agent import BaseAgent
 
@@ -34,6 +34,24 @@ class BehaviorTreeAgent(BaseAgent):
     def __init__(self, player_id: str):
         super().__init__(player_id)
         self.preferred_resources = [ResourceType.WHEAT, ResourceType.ORE, ResourceType.SHEEP]
+        # Heuristic weights for placement decisions (used for drills & deterministic behavior)
+        # Slightly favor wheat to break ties like (ore+brick+wheat) vs (ore+brick+sheep).
+        self._resource_value = {
+            ResourceType.ORE: 3.0,
+            ResourceType.WHEAT: 3.2,
+            ResourceType.SHEEP: 2.0,
+            ResourceType.BRICK: 2.0,
+            ResourceType.WOOD: 2.0,
+        }
+        self._pip_count = {2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 8: 5, 9: 4, 10: 3, 11: 2, 12: 1}
+        self._port_bonus = {
+            "3:1": 0.75,
+            "wood": 0.5,
+            "brick": 0.5,
+            "wheat": 0.5,
+            "sheep": 0.5,
+            "ore": 0.5,
+        }
     
     def choose_action(
         self,
@@ -43,6 +61,15 @@ class BehaviorTreeAgent(BaseAgent):
         """Choose action using behavior tree logic."""
         if not legal_actions_list:
             raise ValueError("No legal actions available")
+
+        # Stash state for scoring helpers that are called from simple find_* methods.
+        self._last_state_for_scoring = state
+
+        # Setup phase: prefer high-quality placements deterministically (important for drills)
+        if state.phase == "setup":
+            setup_action = self._choose_setup_action(state, legal_actions_list)
+            if setup_action:
+                return setup_action
         
         player = next((p for p in state.players if p.id == self.player_id), None)
         if not player:
@@ -122,6 +149,127 @@ class BehaviorTreeAgent(BaseAgent):
         
         # Fallback: return first available action
         return legal_actions_list[0]
+
+    # ---------------------------------------------------------------------
+    # Placement heuristics (setup + roads)
+    # ---------------------------------------------------------------------
+
+    def _intersection_value(self, state: GameState, intersection_id: int) -> float:
+        inter = next((i for i in state.intersections if i.id == intersection_id), None)
+        if not inter:
+            return 0.0
+        tile_by_id = {t.id: t for t in state.tiles}
+        score = 0.0
+        has_wheat = False
+        for tid in inter.adjacent_tiles:
+            t = tile_by_id.get(tid)
+            if not t or not t.resource_type or not t.number_token:
+                continue
+            has_wheat = has_wheat or (t.resource_type == ResourceType.WHEAT)
+            score += self._resource_value.get(t.resource_type, 1.0) * self._pip_count.get(t.number_token.value, 0)
+        if inter.port_type:
+            score += self._port_bonus.get(inter.port_type, 0.4)
+        # Tiny tie-break toward wheat adjacency (city/dev strategy)
+        if has_wheat:
+            score += 0.05
+        return score
+
+    def _connected_intersections(self, state: GameState, player_id: str, extra_road_edge_id: Optional[int] = None) -> Set[int]:
+        """Compute intersections connected to the player's road network (including settlements/cities)."""
+        road_by_id = {r.id: r for r in state.road_edges}
+        owned_edges = [r for r in state.road_edges if r.owner == player_id]
+        if extra_road_edge_id is not None and extra_road_edge_id in road_by_id:
+            owned_edges = owned_edges + [road_by_id[extra_road_edge_id]]
+
+        # adjacency via owned roads
+        adj: Dict[int, Set[int]] = {}
+        for r in owned_edges:
+            adj.setdefault(r.intersection1_id, set()).add(r.intersection2_id)
+            adj.setdefault(r.intersection2_id, set()).add(r.intersection1_id)
+
+        seeds = set()
+        for inter in state.intersections:
+            if inter.owner == player_id and inter.building_type:
+                seeds.add(inter.id)
+        # also include endpoints of owned roads (helps early setup)
+        for r in owned_edges:
+            seeds.add(r.intersection1_id)
+            seeds.add(r.intersection2_id)
+
+        seen = set(seeds)
+        stack = list(seeds)
+        while stack:
+            cur = stack.pop()
+            for nxt in adj.get(cur, set()):
+                if nxt not in seen:
+                    seen.add(nxt)
+                    stack.append(nxt)
+        return seen
+
+    def _is_buildable_settlement_site(self, state: GameState, intersection_id: int) -> bool:
+        """Check distance rule + vacancy (ignores resource cost)."""
+        inter = next((i for i in state.intersections if i.id == intersection_id), None)
+        if not inter or inter.owner is not None or inter.building_type is not None:
+            return False
+        inter_by_id = {i.id: i for i in state.intersections}
+        for adj_id in inter.adjacent_intersections:
+            adj = inter_by_id.get(adj_id)
+            if adj and adj.building_type is not None:
+                return False
+        return True
+
+    def _best_future_settlement_value(self, state: GameState, player_id: str, extra_road_edge_id: Optional[int] = None) -> float:
+        connected = self._connected_intersections(state, player_id, extra_road_edge_id=extra_road_edge_id)
+        best = 0.0
+        for iid in connected:
+            if self._is_buildable_settlement_site(state, iid):
+                best = max(best, self._intersection_value(state, iid))
+        return best
+
+    def _road_value(self, state: GameState, player_id: str, road_edge_id: int) -> float:
+        """Score a road by how much it improves reachable buildable settlement quality."""
+        before = self._best_future_settlement_value(state, player_id, extra_road_edge_id=None)
+        after = self._best_future_settlement_value(state, player_id, extra_road_edge_id=road_edge_id)
+        # Prefer roads that actually improve future settlement options.
+        delta = after - before
+        return after + (2.0 * delta)
+
+    def _choose_setup_action(
+        self,
+        state: GameState,
+        legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
+    ) -> Optional[Tuple[Action, Optional[ActionPayload]]]:
+        # Place settlement: pick highest value intersection deterministically.
+        settlement_actions = [(a, p) for a, p in legal_actions_list if a == Action.SETUP_PLACE_SETTLEMENT and p is not None]
+        if settlement_actions:
+            best = None
+            best_score = -1e9
+            for a, p in settlement_actions:
+                assert isinstance(p, BuildSettlementPayload)
+                s = self._intersection_value(state, p.intersection_id)
+                if s > best_score:
+                    best_score = s
+                    best = (a, p)
+            return best
+
+        # Place road: pick the road that best improves future settlement options.
+        road_actions = [(a, p) for a, p in legal_actions_list if a == Action.SETUP_PLACE_ROAD and p is not None]
+        if road_actions:
+            best = None
+            best_score = -1e9
+            for a, p in road_actions:
+                assert isinstance(p, BuildRoadPayload)
+                s = self._road_value(state, self.player_id, p.road_edge_id)
+                if s > best_score:
+                    best_score = s
+                    best = (a, p)
+            return best
+
+        # Start game
+        for a, p in legal_actions_list:
+            if a == Action.START_GAME:
+                return (a, p)
+        return None
     
     def _filter_repeated_trades(
         self,
@@ -374,11 +522,19 @@ class BehaviorTreeAgent(BaseAgent):
         self,
         legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
     ) -> Optional[Tuple[Action, Optional[ActionPayload]]]:
-        """Find action to build a road."""
-        for action, payload in legal_actions_list:
-            if action == Action.BUILD_ROAD:
-                return (action, payload)
-        return None
+        """Find action to build a road (choose best-scoring road deterministically)."""
+        road_actions = [(a, p) for a, p in legal_actions_list if a == Action.BUILD_ROAD and p is not None]
+        if not road_actions:
+            return None
+        best = None
+        best_score = -1e9
+        for a, p in road_actions:
+            assert isinstance(p, BuildRoadPayload)
+            s = self._road_value(self._last_state_for_scoring, self.player_id, p.road_edge_id)
+            if s > best_score:
+                best_score = s
+                best = (a, p)
+        return best
     
     def _find_buy_dev_card_action(
         self,
