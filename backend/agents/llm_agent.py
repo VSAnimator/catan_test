@@ -24,7 +24,7 @@ class LLMAgent(BaseAgent):
     
     Supported models (via LiteLLM):
     - OpenAI: gpt-4o-mini, gpt-4, gpt-3.5-turbo, etc.
-    - Anthropic: claude-3-opus-20240229, claude-3-sonnet-20240229, claude-3-haiku-20240307
+    - Anthropic: claude-3-opus-20240229, claude-3-sonnet-20240229, claude-3-haiku-20240307, claude-sonnet-4-5-20250929
     - Google: gemini/gemini-pro, gemini/gemini-1.5-pro
     - See https://docs.litellm.ai/docs/providers for full list
     """
