@@ -1,8 +1,7 @@
 """API routes for the Catan game."""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
-from typing import List, Dict, Optional, Any
+from typing import Optional, List, Dict, Any, Tuple
 from pydantic import BaseModel
 from datetime import datetime
 import asyncio
@@ -63,6 +62,12 @@ from .database import (
     add_step,
     get_steps,
     get_step_count,
+    save_optimized_prompt,
+    get_optimized_prompt,
+    get_default_optimized_prompt,
+    list_optimized_prompts,
+    set_default_prompt,
+    delete_optimized_prompt,
 )
 
 router = APIRouter()
@@ -451,7 +456,9 @@ from .database import (
 class DrillStepCreate(BaseModel):
     player_id: str
     state: Dict[str, Any]
-    expected_action: Dict[str, Any]
+    expected_action: Dict[str, Any]  # For backward compatibility
+    correct_actions: Optional[List[Dict[str, Any]]] = None
+    incorrect_actions: Optional[List[Dict[str, Any]]] = None
 
 
 class CreateDrillRequest(BaseModel):
@@ -551,6 +558,8 @@ async def get_drill(drill_id: int):
                 "expected_action": json.loads(r["expected_action_json"]),
                 "state_text": r["state_text"],
                 "legal_actions_text": r["legal_actions_text"],
+                "correct_actions": json.loads(r["correct_actions_json"]) if "correct_actions_json" in r.keys() and r["correct_actions_json"] else None,
+                "incorrect_actions": json.loads(r["incorrect_actions_json"]) if "incorrect_actions_json" in r.keys() and r["incorrect_actions_json"] else None,
             }
             for r in step_rows
         ],
@@ -571,6 +580,39 @@ async def create_drill_endpoint(request: CreateDrillRequest):
             raise HTTPException(status_code=400, detail=f"Invalid drill step state at idx={idx}: {str(e)}")
 
         la_list = legal_actions(state, s.player_id)
+        
+        # Validate correct/incorrect actions if provided
+        correct_actions_json = None
+        incorrect_actions_json = None
+        
+        if s.correct_actions is not None or s.incorrect_actions is not None:
+            # Validate that at least one correct action exists
+            if not s.correct_actions or len(s.correct_actions) == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Drill step at idx={idx} must have at least one correct action"
+                )
+            
+            # Validate all correct actions are legal
+            for correct_action in s.correct_actions:
+                if not _action_dict_matches_legal_action(correct_action, la_list):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Drill step at idx={idx} has a correct action that is not legal: {correct_action}"
+                    )
+            
+            # Validate all incorrect actions are legal (if provided)
+            if s.incorrect_actions:
+                for incorrect_action in s.incorrect_actions:
+                    if not _action_dict_matches_legal_action(incorrect_action, la_list):
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Drill step at idx={idx} has an incorrect action that is not legal: {incorrect_action}"
+                        )
+            
+            correct_actions_json = s.correct_actions
+            incorrect_actions_json = s.incorrect_actions
+        
         steps_for_db.append(
             {
                 "idx": idx,
@@ -579,6 +621,8 @@ async def create_drill_endpoint(request: CreateDrillRequest):
                 "expected_action_json": s.expected_action,
                 "state_text": state_to_text(state, s.player_id),
                 "legal_actions_text": legal_actions_to_text(la_list),
+                "correct_actions_json": correct_actions_json,
+                "incorrect_actions_json": incorrect_actions_json,
             }
         )
 
@@ -740,6 +784,40 @@ def _canonical_action_dict(action_dict: Dict[str, Any]) -> Dict[str, Any]:
     return {"type": action_type, "payload": payload}
 
 
+def _action_dict_matches_legal_action(
+    action_dict: Dict[str, Any],
+    legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
+) -> bool:
+    """Check if an action dict matches any legal action."""
+    canonical_action = _canonical_action_dict(action_dict)
+    for legal_action, legal_payload in legal_actions_list:
+        legal_action_dict = {"type": serialize_action(legal_action)}
+        if legal_payload is not None:
+            legal_action_dict["payload"] = serialize_action_payload(legal_payload)
+        canonical_legal = _canonical_action_dict(legal_action_dict)
+        if canonical_action == canonical_legal:
+            return True
+    return False
+
+
+def _filter_legal_actions(
+    legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]],
+    action_dicts: List[Dict[str, Any]]
+) -> List[Tuple[Action, Optional[ActionPayload]]]:
+    """Filter legal actions to only include those matching the given action dicts."""
+    filtered = []
+    for legal_action, legal_payload in legal_actions_list:
+        legal_action_dict = {"type": serialize_action(legal_action)}
+        if legal_payload is not None:
+            legal_action_dict["payload"] = serialize_action_payload(legal_payload)
+        canonical_legal = _canonical_action_dict(legal_action_dict)
+        for action_dict in action_dicts:
+            if _canonical_action_dict(action_dict) == canonical_legal:
+                filtered.append((legal_action, legal_payload))
+                break
+    return filtered
+
+
 class EvaluateDrillRequest(BaseModel):
     agent_type: str = "random"
     include_guidelines: bool = False
@@ -765,6 +843,36 @@ async def evaluate_drill(drill_id: int, request: EvaluateDrillRequest):
         expected_action = json.loads(r["expected_action_json"])
         state = deserialize_game_state(state_json)
         la_list = legal_actions(state, player_id)
+        
+        # Check if drill step uses enhanced format (correct/incorrect actions)
+        correct_actions = None
+        incorrect_actions = None
+        if "correct_actions_json" in r.keys() and r["correct_actions_json"]:
+            correct_actions = json.loads(r["correct_actions_json"])
+        if "incorrect_actions_json" in r.keys() and r["incorrect_actions_json"]:
+            incorrect_actions = json.loads(r["incorrect_actions_json"])
+        
+        # Filter legal actions if correct/incorrect actions are specified
+        if correct_actions is not None:
+            # Filter to only include correct + incorrect actions
+            action_dicts_to_include = correct_actions.copy()
+            if incorrect_actions:
+                action_dicts_to_include.extend(incorrect_actions)
+            la_list = _filter_legal_actions(la_list, action_dicts_to_include)
+            
+            if not la_list:
+                passed_all = False
+                results.append(
+                    {
+                        "idx": r["idx"],
+                        "player_id": player_id,
+                        "match": False,
+                        "error": "No legal actions match the specified correct/incorrect actions",
+                        "expected_action": expected_action,
+                        "actual_action": None,
+                    }
+                )
+                continue
 
         agent = _make_agent(
             request.agent_type,
@@ -806,7 +914,18 @@ async def evaluate_drill(drill_id: int, request: EvaluateDrillRequest):
         if raw_llm_response is not None:
             actual_action_dict["raw_llm_response"] = raw_llm_response
 
-        match = _canonical_action_dict(actual_action_dict) == _canonical_action_dict(expected_action)
+        # Check match: if using enhanced format, check against correct_actions set
+        if correct_actions is not None:
+            # Check if actual action matches any correct action
+            match = False
+            for correct_action in correct_actions:
+                if _canonical_action_dict(actual_action_dict) == _canonical_action_dict(correct_action):
+                    match = True
+                    break
+        else:
+            # Backward compatibility: check against single expected_action
+            match = _canonical_action_dict(actual_action_dict) == _canonical_action_dict(expected_action)
+        
         if not match:
             passed_all = False
 
@@ -817,6 +936,8 @@ async def evaluate_drill(drill_id: int, request: EvaluateDrillRequest):
                 "match": match,
                 "expected_action": expected_action,
                 "actual_action": actual_action_dict,
+                "correct_actions": correct_actions,
+                "incorrect_actions": incorrect_actions,
             }
         )
 
@@ -893,6 +1014,8 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
                     "player_id": r["player_id"],
                     "state_json": json.loads(r["state_json"]),
                     "expected_action": json.loads(r["expected_action_json"]),
+                    "correct_actions": json.loads(r["correct_actions_json"]) if "correct_actions_json" in r.keys() and r["correct_actions_json"] else None,
+                    "incorrect_actions": json.loads(r["incorrect_actions_json"]) if "incorrect_actions_json" in r.keys() and r["incorrect_actions_json"] else None,
                 }
             )
         prepared.append(
@@ -947,8 +1070,37 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
             player_id = s["player_id"]
             state_json = s["state_json"]
             expected_action = s["expected_action"]
+            correct_actions = s.get("correct_actions")
+            incorrect_actions = s.get("incorrect_actions")
             state = deserialize_game_state(state_json)
             la_list = legal_actions(state, player_id)
+            
+            # Filter legal actions if correct/incorrect actions are specified
+            if correct_actions is not None:
+                action_dicts_to_include = correct_actions.copy()
+                if incorrect_actions:
+                    action_dicts_to_include.extend(incorrect_actions)
+                la_list = _filter_legal_actions(la_list, action_dicts_to_include)
+                
+                if not la_list:
+                    passed = False
+                    first_mismatch = {
+                        "idx": s["idx"],
+                        "error": "No legal actions match the specified correct/incorrect actions"
+                    }
+                    if request.include_step_results:
+                        step_results.append(
+                            {
+                                "idx": s["idx"],
+                                "player_id": player_id,
+                                "match": False,
+                                "expected_action": expected_action,
+                                "actual_action": None,
+                                "error": "No legal actions match the specified correct/incorrect actions",
+                            }
+                        )
+                    break
+            
             agent = _make_agent(
                 request.agent_type, 
                 player_id, 
@@ -992,7 +1144,16 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
             if raw_llm_response is not None:
                 actual_action_dict["raw_llm_response"] = raw_llm_response
 
-            match = _canonical_action_dict(actual_action_dict) == _canonical_action_dict(expected_action)
+            # Check match: if using enhanced format, check against correct_actions set
+            if correct_actions is not None:
+                match = False
+                for correct_action in correct_actions:
+                    if _canonical_action_dict(actual_action_dict) == _canonical_action_dict(correct_action):
+                        match = True
+                        break
+            else:
+                # Backward compatibility: check against single expected_action
+                match = _canonical_action_dict(actual_action_dict) == _canonical_action_dict(expected_action)
             if request.include_step_results:
                 step_results.append(
                     {
@@ -1699,3 +1860,83 @@ async def get_feedback_endpoint(
         limit=limit
     )
     return {"feedback": feedback}
+
+
+# =============================================================================
+# Optimized Prompts API Endpoints
+# =============================================================================
+
+@router.get("/prompts")
+async def list_prompts():
+    """List all optimized prompts."""
+    prompts = list_optimized_prompts()
+    return {
+        "prompts": [
+            {
+                "id": r["id"],
+                "name": r["name"],
+                "created_at": r["created_at"],
+                "is_default": bool(r["is_default"]),
+                "metadata": json.loads(r["metadata"]) if "metadata" in r.keys() and r["metadata"] else None,
+            }
+            for r in prompts
+        ]
+    }
+
+
+@router.get("/prompts/{name}")
+async def get_prompt(name: str):
+    """Get a specific optimized prompt."""
+    prompt_row = get_optimized_prompt(name)
+    if not prompt_row:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    
+    return {
+        "id": prompt_row["id"],
+        "name": prompt_row["name"],
+        "system_prompt": prompt_row["system_prompt"],
+        "created_at": prompt_row["created_at"],
+        "is_default": bool(prompt_row["is_default"]),
+            "metadata": json.loads(prompt_row["metadata"]) if "metadata" in prompt_row.keys() and prompt_row["metadata"] else None,
+    }
+
+
+class CreatePromptRequest(BaseModel):
+    name: str
+    system_prompt: str
+    metadata: Optional[Dict[str, Any]] = None
+    is_default: bool = False
+
+
+@router.post("/prompts")
+async def create_prompt(request: CreatePromptRequest):
+    """Create or update an optimized prompt."""
+    prompt_id = save_optimized_prompt(
+        name=request.name,
+        system_prompt=request.system_prompt,
+        metadata=request.metadata,
+        is_default=request.is_default
+    )
+    return {
+        "id": prompt_id,
+        "name": request.name,
+        "message": "Prompt saved"
+    }
+
+
+@router.put("/prompts/{name}/set_default")
+async def set_default_prompt_endpoint(name: str):
+    """Set a prompt as the default."""
+    success = set_default_prompt(name)
+    if not success:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    return {"message": f"Prompt '{name}' set as default"}
+
+
+@router.delete("/prompts/{name}")
+async def delete_prompt(name: str):
+    """Delete an optimized prompt."""
+    success = delete_optimized_prompt(name)
+    if not success:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    return {"message": f"Prompt '{name}' deleted"}

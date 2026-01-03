@@ -10,6 +10,7 @@ from engine.serialization import legal_actions, state_to_text, legal_actions_to_
 from .base_agent import BaseAgent
 from .llm_retrieval import StateRetriever, RetrievedExample
 from api.guidelines_db import get_guidelines, get_feedback
+from api.database import get_optimized_prompt, get_default_optimized_prompt
 
 
 class LLMAgent(BaseAgent):
@@ -42,6 +43,7 @@ class LLMAgent(BaseAgent):
         drill_guideline_text: Optional[str] = None,
         exclude_strategic_advice: bool = False,
         exclude_higher_level_features: bool = False,
+        prompt_name: Optional[str] = None,
     ):
         # Token usage tracking
         self.token_usage_history: List[Dict[str, int]] = []
@@ -72,6 +74,7 @@ class LLMAgent(BaseAgent):
         self.drill_guideline_text = (drill_guideline_text or "").strip() or None
         self.exclude_strategic_advice = exclude_strategic_advice
         self.exclude_higher_level_features = exclude_higher_level_features
+        self.prompt_name = prompt_name
 
         # --- GPT-5 "thinking mode" / reasoning effort ---
         # Docs: https://platform.openai.com/docs/guides/reasoning
@@ -776,139 +779,32 @@ class LLMAgent(BaseAgent):
         
         return "\n".join(context_parts) if context_parts else "No additional context available."
     
-    def _format_state_and_actions(
-        self,
-        state: GameState,
-        legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
-    ) -> str:
+    def _get_system_prompt(self) -> str:
         """
-        Format the game state and legal actions for the LLM.
+        Get the system prompt, either from database or default.
         
-        Args:
-            state: Current game state
-            legal_actions_list: List of legal actions
-            
         Returns:
-            Formatted string
+            System prompt string
         """
-        state_text = state_to_text(
-            state, 
-            self.player_id, 
-            exclude_higher_level_features=self.exclude_higher_level_features
-        )
-        actions_text = legal_actions_to_text(legal_actions_list, state=state, player_id=self.player_id)
-        
-        return f"""## Current Game State:
-{state_text}
-
-## Available Legal Actions:
-{actions_text}"""
-    
-    def choose_action(
-        self,
-        state: GameState,
-        legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
-    ) -> Tuple[Action, Optional[ActionPayload], Optional[str], Optional[str]]:
-        """
-        Choose an action using ReAct pattern with RAG.
-        
-        ReAct pattern:
-        1. Observe: Format current state
-        2. Think: Retrieve context, reason about best action
-        3. Act: Parse LLM response and return action
-        
-        Args:
-            state: Current game state
-            legal_actions_list: List of legal actions
-            
-        Returns:
-            Chosen action tuple
-        """
-        if not legal_actions_list:
-            raise ValueError("No legal actions available")
-        
-        # Handle pending trade responses FIRST (must be done before other actions)
-        if state.pending_trade_offer is not None:
-            offer = state.pending_trade_offer
-            current_player = state.players[state.current_player_index]
-            
-            # Check if this player is a target of the trade and needs to respond
-            if current_player.id in offer['target_player_ids']:
-                if current_player.id not in state.pending_trade_responses:
-                    # Player needs to respond - prioritize this
-                    accept_actions = [(a, p) for a, p in legal_actions_list if a == Action.ACCEPT_TRADE]
-                    reject_actions = [(a, p) for a, p in legal_actions_list if a == Action.REJECT_TRADE]
-                    
-                    if accept_actions or reject_actions:
-                        # If only one option, use it immediately
-                        if accept_actions and not reject_actions:
-                            return (accept_actions[0][0], accept_actions[0][1], "Accepting trade (only option available)")
-                        elif reject_actions and not accept_actions:
-                            return (reject_actions[0][0], reject_actions[0][1], "Rejecting trade (cannot afford)")
-                        # If both available, let LLM decide but add urgent note to prompt
-                        # Continue to LLM call below, but we'll add a note in the prompt
-            
-            # Check if this player is the proposer and needs to select a partner
-            elif current_player.id == offer['proposer_id']:
-                accepting_players = [pid for pid, accepted in state.pending_trade_responses.items() if accepted]
-                if len(accepting_players) > 1:
-                    # Multiple accepted - must select partner
-                    select_actions = [(a, p) for a, p in legal_actions_list if a == Action.SELECT_TRADE_PARTNER]
-                    if select_actions:
-                        # Pick first accepting player (or could let LLM decide)
-                        from engine import SelectTradePartnerPayload
-                        return (Action.SELECT_TRADE_PARTNER, SelectTradePartnerPayload(selected_player_id=accepting_players[0]), 
-                                f"Selecting trade partner: {accepting_players[0]}")
-                elif len(accepting_players) == 1:
-                    # Only one accepted - trade will execute automatically, just need to wait
-                    # But we should still be able to continue, so let it fall through
-                    pass
-        
-        # Filter out propose_trade actions that were already taken this turn
-        # to avoid repeated trade proposals
-        filtered_actions = []
-        current_player = state.players[state.current_player_index]
-        player_actions_this_turn = [
-            a for a in state.actions_taken_this_turn 
-            if a["player_id"] == current_player.id and a["action"] == "propose_trade"
-        ]
-        
-        for action, payload in legal_actions_list:
-            if action == Action.PROPOSE_TRADE:
-                # Check if this exact trade was already proposed this turn
-                already_proposed = False
-                if payload and hasattr(payload, 'give_resources') and hasattr(payload, 'receive_resources'):
-                    # Normalize current payload to string keys (matching stored format)
-                    current_give = {rt.value: count for rt, count in payload.give_resources.items()}
-                    current_receive = {rt.value: count for rt, count in payload.receive_resources.items()}
-                    
-                    for prev_action in player_actions_this_turn:
-                        prev_payload = prev_action.get("payload", {})
-                        prev_give = prev_payload.get("give_resources", {})
-                        prev_receive = prev_payload.get("receive_resources", {})
-                        prev_targets = set(prev_payload.get("target_player_ids", []))
-                        
-                        if (prev_give == current_give and
-                            prev_receive == current_receive and
-                            prev_targets == set(payload.target_player_ids)):
-                            already_proposed = True
-                            break
-                if not already_proposed:
-                    filtered_actions.append((action, payload))
+        # Try to load from database if prompt_name is specified
+        if self.prompt_name:
+            prompt_row = get_optimized_prompt(self.prompt_name)
+            if prompt_row:
+                return prompt_row["system_prompt"]
             else:
-                filtered_actions.append((action, payload))
+                print(f"Warning: Prompt '{self.prompt_name}' not found, using default", flush=True)
         
-        # Use filtered actions
-        legal_actions_list = filtered_actions if filtered_actions else legal_actions_list
+        # Try default prompt
+        default_prompt_row = get_default_optimized_prompt()
+        if default_prompt_row:
+            return default_prompt_row["system_prompt"]
         
-        # Step 1: Observe - Format current state
-        state_and_actions = self._format_state_and_actions(state, legal_actions_list)
-        
-        # Step 2: Think - Retrieve context
-        context = self._retrieve_context(state, legal_actions_list)
-        
-        # Step 3: Act - Build prompt and call LLM
-        system_prompt = """You are an expert Catan player agent. Your goal is to win the game by reaching 10 victory points.
+        # Return hardcoded default
+        return self._get_default_system_prompt()
+    
+    def _get_default_system_prompt(self) -> str:
+        """Get the default hardcoded system prompt."""
+        return """You are an expert Catan player agent. Your goal is to win the game by reaching 10 victory points.
 
 ## CRITICAL CATAN RULES:
 
@@ -1095,6 +991,140 @@ Be strategic and consider:
 - The legal actions list updates after each action you take
 
 **IMPORTANT**: Always check the "Actions Taken This Turn" section to see what you've already done. Do not repeat trade proposals you've already made this turn."""
+
+    def _format_state_and_actions(
+        self,
+        state: GameState,
+        legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
+    ) -> str:
+        """
+        Format the game state and legal actions for the LLM.
+        
+        Args:
+            state: Current game state
+            legal_actions_list: List of legal actions
+            
+        Returns:
+            Formatted string
+        """
+        state_text = state_to_text(
+            state, 
+            self.player_id, 
+            exclude_higher_level_features=self.exclude_higher_level_features
+        )
+        actions_text = legal_actions_to_text(legal_actions_list, state=state, player_id=self.player_id)
+        
+        return f"""## Current Game State:
+{state_text}
+
+## Available Legal Actions:
+{actions_text}"""
+    
+    def choose_action(
+        self,
+        state: GameState,
+        legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
+    ) -> Tuple[Action, Optional[ActionPayload], Optional[str], Optional[str]]:
+        """
+        Choose an action using ReAct pattern with RAG.
+        
+        ReAct pattern:
+        1. Observe: Format current state
+        2. Think: Retrieve context, reason about best action
+        3. Act: Parse LLM response and return action
+        
+        Args:
+            state: Current game state
+            legal_actions_list: List of legal actions
+            
+        Returns:
+            Chosen action tuple
+        """
+        if not legal_actions_list:
+            raise ValueError("No legal actions available")
+        
+        # Handle pending trade responses FIRST (must be done before other actions)
+        if state.pending_trade_offer is not None:
+            offer = state.pending_trade_offer
+            current_player = state.players[state.current_player_index]
+            
+            # Check if this player is a target of the trade and needs to respond
+            if current_player.id in offer['target_player_ids']:
+                if current_player.id not in state.pending_trade_responses:
+                    # Player needs to respond - prioritize this
+                    accept_actions = [(a, p) for a, p in legal_actions_list if a == Action.ACCEPT_TRADE]
+                    reject_actions = [(a, p) for a, p in legal_actions_list if a == Action.REJECT_TRADE]
+                    
+                    if accept_actions or reject_actions:
+                        # If only one option, use it immediately
+                        if accept_actions and not reject_actions:
+                            return (accept_actions[0][0], accept_actions[0][1], "Accepting trade (only option available)")
+                        elif reject_actions and not accept_actions:
+                            return (reject_actions[0][0], reject_actions[0][1], "Rejecting trade (cannot afford)")
+                        # If both available, let LLM decide but add urgent note to prompt
+                        # Continue to LLM call below, but we'll add a note in the prompt
+            
+            # Check if this player is the proposer and needs to select a partner
+            elif current_player.id == offer['proposer_id']:
+                accepting_players = [pid for pid, accepted in state.pending_trade_responses.items() if accepted]
+                if len(accepting_players) > 1:
+                    # Multiple accepted - must select partner
+                    select_actions = [(a, p) for a, p in legal_actions_list if a == Action.SELECT_TRADE_PARTNER]
+                    if select_actions:
+                        # Pick first accepting player (or could let LLM decide)
+                        from engine import SelectTradePartnerPayload
+                        return (Action.SELECT_TRADE_PARTNER, SelectTradePartnerPayload(selected_player_id=accepting_players[0]), 
+                                f"Selecting trade partner: {accepting_players[0]}")
+                elif len(accepting_players) == 1:
+                    # Only one accepted - trade will execute automatically, just need to wait
+                    # But we should still be able to continue, so let it fall through
+                    pass
+        
+        # Filter out propose_trade actions that were already taken this turn
+        # to avoid repeated trade proposals
+        filtered_actions = []
+        current_player = state.players[state.current_player_index]
+        player_actions_this_turn = [
+            a for a in state.actions_taken_this_turn 
+            if a["player_id"] == current_player.id and a["action"] == "propose_trade"
+        ]
+        
+        for action, payload in legal_actions_list:
+            if action == Action.PROPOSE_TRADE:
+                # Check if this exact trade was already proposed this turn
+                already_proposed = False
+                if payload and hasattr(payload, 'give_resources') and hasattr(payload, 'receive_resources'):
+                    # Normalize current payload to string keys (matching stored format)
+                    current_give = {rt.value: count for rt, count in payload.give_resources.items()}
+                    current_receive = {rt.value: count for rt, count in payload.receive_resources.items()}
+                    
+                    for prev_action in player_actions_this_turn:
+                        prev_payload = prev_action.get("payload", {})
+                        prev_give = prev_payload.get("give_resources", {})
+                        prev_receive = prev_payload.get("receive_resources", {})
+                        prev_targets = set(prev_payload.get("target_player_ids", []))
+                        
+                        if (prev_give == current_give and
+                            prev_receive == current_receive and
+                            prev_targets == set(payload.target_player_ids)):
+                            already_proposed = True
+                            break
+                if not already_proposed:
+                    filtered_actions.append((action, payload))
+            else:
+                filtered_actions.append((action, payload))
+        
+        # Use filtered actions
+        legal_actions_list = filtered_actions if filtered_actions else legal_actions_list
+        
+        # Step 1: Observe - Format current state
+        state_and_actions = self._format_state_and_actions(state, legal_actions_list)
+        
+        # Step 2: Think - Retrieve context
+        context = self._retrieve_context(state, legal_actions_list)
+        
+        # Step 3: Act - Build prompt and call LLM
+        system_prompt = self._get_system_prompt()
         
         # Add urgent note if trade response is needed
         trade_urgency_note = ""

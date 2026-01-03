@@ -83,7 +83,13 @@ function App() {
     source_step_idx: number
     drill_player_id: string
     forked_game_id: string
-    steps: Array<{ player_id: string; state: GameState; expected_action: LegalAction }>
+    steps: Array<{ 
+      player_id: string
+      state: GameState
+      expected_action: LegalAction
+      correct_actions?: LegalAction[]
+      incorrect_actions?: LegalAction[]
+    }>
   }>(null)
 
   // Drills page state
@@ -2897,7 +2903,9 @@ function App() {
                       steps: drillRecording.steps.map(s => ({
                         player_id: s.player_id,
                         state: s.state,
-                        expected_action: s.expected_action
+                        expected_action: s.expected_action,
+                        correct_actions: s.correct_actions,
+                        incorrect_actions: s.incorrect_actions
                       })),
                       metadata: { forked_game_id: drillRecording.forked_game_id }
                     })
@@ -2929,6 +2937,39 @@ function App() {
                 Cancel
               </button>
             </div>
+            {/* Recorded Steps Editor */}
+            {drillRecording.steps.length > 0 && (
+              <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: '#fff', borderRadius: '4px', border: '1px solid #ddd' }}>
+                <h3 style={{ marginTop: 0, marginBottom: '0.5rem' }}>Recorded Steps ({drillRecording.steps.length})</h3>
+                <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '1rem' }}>
+                  Each step uses the recorded action as the expected action. To use multiple correct/incorrect actions, edit the step below.
+                </div>
+                {drillRecording.steps.map((step, idx) => (
+                  <div key={idx} style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#f9f9f9', borderRadius: '4px', border: '1px solid #e0e0e0' }}>
+                    <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>Step {idx + 1}</div>
+                    <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.5rem' }}>
+                      Action: <code>{step.expected_action.type}</code>
+                      {step.expected_action.payload && (
+                        <span> ({JSON.stringify(step.expected_action.payload).substring(0, 50)}...)</span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: '0.85rem', color: '#666' }}>
+                      {step.correct_actions && step.correct_actions.length > 0 && (
+                        <div>✓ Correct actions: {step.correct_actions.length}</div>
+                      )}
+                      {step.incorrect_actions && step.incorrect_actions.length > 0 && (
+                        <div>✗ Incorrect actions: {step.incorrect_actions.length}</div>
+                      )}
+                      {(!step.correct_actions || step.correct_actions.length === 0) && (
+                        <div style={{ fontStyle: 'italic', color: '#999' }}>
+                          Using single expected action (backward compatible)
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
         

@@ -12,7 +12,12 @@ from collections import deque
 import time
 
 # Database file path
-DB_PATH = Path(__file__).parent.parent / "catan.db"
+# Use test database if TEST_DB environment variable is set, otherwise use production
+import os
+if os.getenv("TEST_DB") == "1" or os.getenv("USE_TEST_DB") == "1":
+    DB_PATH = Path(__file__).parent.parent / "catan_test.db"
+else:
+    DB_PATH = Path(__file__).parent.parent / "catan.db"
 
 # Process-local storage for database connections (works in both threading and multiprocessing)
 # Use a simple dict keyed by process/thread ID
@@ -159,10 +164,23 @@ def init_db():
             expected_action_json TEXT NOT NULL,
             state_text TEXT,
             legal_actions_text TEXT,
+            correct_actions_json TEXT,
+            incorrect_actions_json TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (drill_id) REFERENCES drills(id)
         )
     """)
+    
+    # Add new columns for enhanced drill format (backward compatible)
+    try:
+        cursor.execute("ALTER TABLE drill_steps ADD COLUMN correct_actions_json TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    
+    try:
+        cursor.execute("ALTER TABLE drill_steps ADD COLUMN incorrect_actions_json TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
 
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_drills_created_at ON drills(created_at)
@@ -170,6 +188,28 @@ def init_db():
 
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_drill_steps_drill_idx ON drill_steps(drill_id, idx)
+    """)
+    
+    # ---------------------------------------------------------------------
+    # Optimized prompts table (for DSPy-optimized system prompts)
+    # ---------------------------------------------------------------------
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS optimized_prompts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            system_prompt TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            metadata TEXT,
+            is_default BOOLEAN DEFAULT FALSE
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_optimized_prompts_name ON optimized_prompts(name)
+    """)
+    
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_optimized_prompts_default ON optimized_prompts(is_default)
     """)
     
     # Enable WAL mode for better concurrency
@@ -209,6 +249,8 @@ def create_drill(
         "expected_action_json": dict,
         "state_text": Optional[str],
         "legal_actions_text": Optional[str],
+        "correct_actions_json": Optional[List[dict]],
+        "incorrect_actions_json": Optional[List[dict]],
       }
     """
     conn = get_db_connection()
@@ -235,9 +277,10 @@ def create_drill(
         INSERT INTO drill_steps (
             drill_id, idx, player_id,
             state_json, expected_action_json,
-            state_text, legal_actions_text
+            state_text, legal_actions_text,
+            correct_actions_json, incorrect_actions_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
@@ -248,6 +291,8 @@ def create_drill(
                 json.dumps(step["expected_action_json"]),
                 step.get("state_text"),
                 step.get("legal_actions_text"),
+                json.dumps(step.get("correct_actions_json")) if step.get("correct_actions_json") else None,
+                json.dumps(step.get("incorrect_actions_json")) if step.get("incorrect_actions_json") else None,
             )
             for step in steps
         ],
@@ -627,4 +672,113 @@ def get_state_at_step(game_id: str, step_idx: int, use_state_before: bool = True
     if row and row[0]:
         return json.loads(row[0])
     return None
+
+
+# =============================================================================
+# Optimized prompts persistence helpers
+# =============================================================================
+
+def save_optimized_prompt(
+    name: str,
+    system_prompt: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    is_default: bool = False
+) -> int:
+    """
+    Save an optimized prompt to the database.
+    
+    Args:
+        name: Unique name for the prompt
+        system_prompt: The optimized system prompt text
+        metadata: Optional metadata (optimization params, performance metrics, etc.)
+        is_default: Whether this should be the default prompt
+        
+    Returns:
+        The ID of the saved prompt
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # If setting as default, unset other defaults
+    if is_default:
+        cursor.execute("UPDATE optimized_prompts SET is_default = FALSE WHERE is_default = TRUE")
+    
+    cursor.execute(
+        """
+        INSERT OR REPLACE INTO optimized_prompts (name, system_prompt, metadata, is_default)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            name,
+            system_prompt,
+            json.dumps(metadata) if metadata else None,
+            is_default,
+        ),
+    )
+    conn.commit()
+    return int(cursor.lastrowid)
+
+
+def get_optimized_prompt(name: str) -> Optional[sqlite3.Row]:
+    """Get an optimized prompt by name."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM optimized_prompts WHERE name = ?", (name,))
+    return cursor.fetchone()
+
+
+def get_default_optimized_prompt() -> Optional[sqlite3.Row]:
+    """Get the default optimized prompt."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM optimized_prompts WHERE is_default = TRUE LIMIT 1")
+    return cursor.fetchone()
+
+
+def list_optimized_prompts() -> List[sqlite3.Row]:
+    """List all optimized prompts, newest first."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM optimized_prompts ORDER BY created_at DESC"
+    )
+    return cursor.fetchall()
+
+
+def set_default_prompt(name: str) -> bool:
+    """
+    Set a prompt as the default.
+    
+    Returns:
+        True if successful, False if prompt not found
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # First check if prompt exists
+    cursor.execute("SELECT id FROM optimized_prompts WHERE name = ?", (name,))
+    if not cursor.fetchone():
+        return False
+    
+    # Unset other defaults
+    cursor.execute("UPDATE optimized_prompts SET is_default = FALSE WHERE is_default = TRUE")
+    
+    # Set this one as default
+    cursor.execute("UPDATE optimized_prompts SET is_default = TRUE WHERE name = ?", (name,))
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def delete_optimized_prompt(name: str) -> bool:
+    """
+    Delete an optimized prompt.
+    
+    Returns:
+        True if deleted, False if not found
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM optimized_prompts WHERE name = ?", (name,))
+    conn.commit()
+    return cursor.rowcount > 0
 

@@ -214,7 +214,9 @@ export interface DrillListItem {
 export interface DrillStepCreate {
   player_id: string
   state: GameState
-  expected_action: LegalAction
+  expected_action: LegalAction  // For backward compatibility
+  correct_actions?: LegalAction[]
+  incorrect_actions?: LegalAction[]
 }
 
 export interface CreateDrillRequest {
