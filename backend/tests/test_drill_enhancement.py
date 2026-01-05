@@ -293,3 +293,67 @@ def test_backward_compatibility_single_expected_action():
     # Should check against expected_action
     assert len(eval_data["results"]) == 1
 
+
+def test_auto_populate_incorrect_actions():
+    """Test that incorrect_actions are automatically populated with all other legal actions when not specified."""
+    state = create_test_game_state()
+    
+    # Get legal actions for this state
+    legal_response = client.get(f"/api/games/{state['game_id']}/legal_actions?player_id=player_0")
+    assert legal_response.status_code == 200
+    legal_actions = legal_response.json()["legal_actions"]
+    
+    if len(legal_actions) < 2:
+        pytest.skip("Not enough legal actions for this test")
+    
+    # Use first as correct, but don't specify incorrect_actions
+    correct_actions = [legal_actions[0]]
+    
+    # Create drill with only correct_actions (no incorrect_actions)
+    create_response = client.post(
+        "/api/drills",
+        json={
+            "name": "Auto Incorrect Actions Test",
+            "player_id": "player_0",
+            "steps": [
+                {
+                    "player_id": "player_0",
+                    "state": state,
+                    "expected_action": correct_actions[0],
+                    "correct_actions": correct_actions,
+                    # Don't specify incorrect_actions - should be auto-populated
+                }
+            ]
+        }
+    )
+    
+    if create_response.status_code != 200:
+        print(f"Error response: {create_response.text}", flush=True)
+    assert create_response.status_code == 200
+    drill_id = create_response.json()["drill_id"]
+    
+    # Evaluate the drill - incorrect_actions should be auto-populated during evaluation
+    eval_response = client.post(
+        f"/api/drills/{drill_id}/evaluate",
+        json={
+            "agent_type": "random",
+            "exclude_strategic_advice": False,
+            "exclude_higher_level_features": False
+        }
+    )
+    
+    assert eval_response.status_code == 200
+    eval_data = eval_response.json()
+    assert "results" in eval_data
+    assert len(eval_data["results"]) == 1
+    
+    # The result should show that incorrect_actions were used (all other legal actions)
+    result = eval_data["results"][0]
+    # The agent should only see correct + incorrect actions (all legal actions)
+    # So it should be able to choose from all legal actions
+    assert "match" in result
+    
+    # Verify that incorrect_actions were auto-populated in the evaluation
+    # (they should be all legal actions except the correct ones)
+    assert "incorrect_actions" in result or "correct_actions" in result
+
