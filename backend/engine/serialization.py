@@ -1647,7 +1647,8 @@ def _can_build_road(state: GameState, road: 'RoadEdge', player_id: str) -> bool:
             elif road.intersection2_id in [player_road.intersection1_id, player_road.intersection2_id]:
                 connection_point = road.intersection2_id
             
-            if connection_point:
+            # Check if connection_point was set (use 'is not None' because intersection IDs can be 0)
+            if connection_point is not None:
                 conn_inter = next((i for i in state.intersections if i.id == connection_point), None)
                 # Can build if connection point is empty or owned by player
                 if not conn_inter or not conn_inter.owner or conn_inter.owner == player_id:

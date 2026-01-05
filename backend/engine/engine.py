@@ -387,7 +387,8 @@ class GameState:
                     elif road_edge.intersection2_id in [player_road.intersection1_id, player_road.intersection2_id]:
                         connection_point = road_edge.intersection2_id
                     
-                    if connection_point:
+                    # Check if connection_point was set (use 'is not None' because intersection IDs can be 0)
+                    if connection_point is not None:
                         conn_inter = next((i for i in new_state.intersections if i.id == connection_point), None)
                         if not conn_inter or not conn_inter.owner or conn_inter.owner == current_player.id:
                             has_connection = True
