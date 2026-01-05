@@ -504,9 +504,9 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
                             road_edge.intersection2_id == state.setup_last_settlement_id):
                             legal.append((Action.SETUP_PLACE_ROAD, BuildRoadPayload(road_edge.id)))
         
-        # Can start game if setup is complete (simplified - in real game, this is automatic)
-        if state.setup_round == 1 and state.setup_phase_player_index == len(state.players) - 1:
-            legal.append((Action.START_GAME, None))
+        # Note: START_GAME is not a legal action - the engine automatically transitions
+        # to playing phase after player_0 places their second road in round 1.
+        # This happens in _handle_setup_place_road when setup_phase_player_index wraps around.
     
     elif state.phase == "playing":
         # Playing phase actions
