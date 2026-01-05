@@ -801,11 +801,25 @@ def _action_dict_matches_legal_action(
 ) -> bool:
     """Check if an action dict matches any legal action."""
     canonical_action = _canonical_action_dict(action_dict)
+    action_type = action_dict.get("type")
+    
     for legal_action, legal_payload in legal_actions_list:
         legal_action_dict = {"type": serialize_action(legal_action)}
         if legal_payload is not None:
             legal_action_dict["payload"] = serialize_action_payload(legal_payload)
         canonical_legal = _canonical_action_dict(legal_action_dict)
+        
+        # Special case: PROPOSE_TRADE actions are legal even if they have a payload
+        # because legal_actions returns (PROPOSE_TRADE, None) but agents construct the payload
+        if action_type == "propose_trade" and legal_action == Action.PROPOSE_TRADE:
+            # If PROPOSE_TRADE is legal, any propose_trade action with a valid payload is acceptable
+            if canonical_action.get("type") == "propose_trade" and canonical_action.get("payload"):
+                # Validate that the payload has required fields
+                payload = canonical_action.get("payload", {})
+                if isinstance(payload, dict):
+                    if "target_player_ids" in payload and "give_resources" in payload and "receive_resources" in payload:
+                        return True
+        
         if canonical_action == canonical_legal:
             return True
     return False
@@ -877,9 +891,23 @@ async def evaluate_drill(drill_id: int, request: EvaluateDrillRequest):
                 
                     # Filter out correct actions to get incorrect actions
                     # Convert canonical dicts to tuples for hashing
+                    def dict_to_hashable(obj):
+                        """Recursively convert dict to hashable tuple."""
+                        if isinstance(obj, dict):
+                            return tuple(sorted((k, dict_to_hashable(v)) for k, v in obj.items()))
+                        elif isinstance(obj, list):
+                            return tuple(dict_to_hashable(item) for item in obj)
+                        else:
+                            return obj
+                    
                     def canonical_to_tuple(ca):
                         canonical = _canonical_action_dict(ca)
-                        return (canonical.get("type"), tuple(sorted(canonical.get("payload", {}).items())) if canonical.get("payload") else None)
+                        payload = canonical.get("payload")
+                        if payload:
+                            payload_tuple = dict_to_hashable(payload)
+                        else:
+                            payload_tuple = None
+                        return (canonical.get("type"), payload_tuple)
                     
                     correct_action_set = {canonical_to_tuple(ca) for ca in correct_actions}
                     incorrect_actions = [
@@ -1127,9 +1155,23 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
                     
                     # Filter out correct actions to get incorrect actions
                     # Convert canonical dicts to tuples for hashing
+                    def dict_to_hashable(obj):
+                        """Recursively convert dict to hashable tuple."""
+                        if isinstance(obj, dict):
+                            return tuple(sorted((k, dict_to_hashable(v)) for k, v in obj.items()))
+                        elif isinstance(obj, list):
+                            return tuple(dict_to_hashable(item) for item in obj)
+                        else:
+                            return obj
+                    
                     def canonical_to_tuple(ca):
                         canonical = _canonical_action_dict(ca)
-                        return (canonical.get("type"), tuple(sorted(canonical.get("payload", {}).items())) if canonical.get("payload") else None)
+                        payload = canonical.get("payload")
+                        if payload:
+                            payload_tuple = dict_to_hashable(payload)
+                        else:
+                            payload_tuple = None
+                        return (canonical.get("type"), payload_tuple)
                     
                     correct_action_set = {canonical_to_tuple(ca) for ca in correct_actions}
                     incorrect_actions = [
