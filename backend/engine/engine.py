@@ -193,7 +193,15 @@ class GameState:
         
         # Track action taken this turn (only for playing phase, and only for current player's actions)
         # Use current_player_before because handlers may change current_player_index (e.g., propose_trade)
-        if result.phase == "playing" and player_id is None and current_player_before:
+        # Track when:
+        # 1. player_id is None (backward compatibility / manual calls)
+        # 2. player_id matches current_player_before.id (agent calls with explicit player_id)
+        should_track = (
+            result.phase == "playing" and 
+            current_player_before and
+            (player_id is None or player_id == current_player_before.id)
+        )
+        if should_track:
             # Convert payload to dict for storage
             payload_dict = None
             if payload:

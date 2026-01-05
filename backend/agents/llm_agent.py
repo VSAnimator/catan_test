@@ -1082,11 +1082,14 @@ Be strategic and consider:
         
         # Filter out propose_trade actions that were already taken this turn
         # to avoid repeated trade proposals
+        # Use self.player_id (the agent's ID) instead of current_player.id because:
+        # 1. After proposing a trade, current_player_index changes to the target player
+        # 2. After rejection, it's restored, but we should always filter by the agent's own actions
+        # 3. This ensures the agent sees its own trade history regardless of current_player_index
         filtered_actions = []
-        current_player = state.players[state.current_player_index]
         player_actions_this_turn = [
             a for a in state.actions_taken_this_turn 
-            if a["player_id"] == current_player.id and a["action"] == "propose_trade"
+            if a["player_id"] == self.player_id and a["action"] == "propose_trade"
         ]
         
         for action, payload in legal_actions_list:

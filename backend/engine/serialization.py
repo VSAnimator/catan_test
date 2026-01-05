@@ -897,14 +897,17 @@ def legal_actions(state: GameState, player_id: str) -> List[Tuple[Action, Option
             # Can propose trades to other players (only if no trade is pending and trading is allowed)
             # Instead of enumerating all possible trades, just indicate that trading is available
             # The agent can propose any trade it wants with any combination of resources
+            # BUT: Don't allow propose_trade if player has 3+ consecutive rejected trades (will auto-end turn)
             if can_trade and state.pending_trade_offer is None:
-                other_players = [p.id for p in state.players if p.id != player_id]
-                
-                if other_players:
-                    # Add a single PROPOSE_TRADE action to indicate trading is available
-                    # The agent will construct the payload with the desired trade
-                    # Use a placeholder payload - the actual payload will be constructed by the agent
-                    legal.append((Action.PROPOSE_TRADE, None))
+                consecutive_rejections = state.consecutive_rejected_trades.get(player_id, 0)
+                if consecutive_rejections < 3:
+                    other_players = [p.id for p in state.players if p.id != player_id]
+                    
+                    if other_players:
+                        # Add a single PROPOSE_TRADE action to indicate trading is available
+                        # The agent will construct the payload with the desired trade
+                        # Use a placeholder payload - the actual payload will be constructed by the agent
+                        legal.append((Action.PROPOSE_TRADE, None))
             
             # Can end turn (but not if waiting for robber actions, or if 7 was rolled and anyone needs to discard)
             # Never allow END_TURN if waiting_for_robber_move or waiting_for_robber_steal is True
