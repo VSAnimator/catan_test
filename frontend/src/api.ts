@@ -248,6 +248,13 @@ export async function createDrill(request: CreateDrillRequest): Promise<CreateDr
   return handleResponse<CreateDrillResponse>(response)
 }
 
+export async function deleteDrill(drillId: number): Promise<{ message: string }> {
+  const response = await fetch(`${getApiBase()}/drills/${drillId}`, {
+    method: 'DELETE'
+  })
+  return handleResponse<{ message: string }>(response)
+}
+
 export interface EvaluateDrillRequest {
   agent_type: string
   include_guidelines?: boolean

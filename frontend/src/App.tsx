@@ -14,10 +14,10 @@ import {
   addFeedback,
   listDrills,
   createDrill,
-  evaluateDrill,
   evaluateAllDrills,
   getDrill,
   updateDrill,
+  deleteDrill,
   type GameState,
   type LegalAction,
   type Player,
@@ -91,6 +91,12 @@ function App() {
       incorrect_actions?: LegalAction[]
     }>
   }>(null)
+  
+  // State for editing drill steps
+  const [editingStepIdx, setEditingStepIdx] = useState<number | null>(null)
+  const [stepLegalActionsMap, setStepLegalActionsMap] = useState<Record<number, LegalAction[]>>({})
+  const [loadingStepActionsMap, setLoadingStepActionsMap] = useState<Record<number, boolean>>({})
+  const [originalGameStateBeforeEdit, setOriginalGameStateBeforeEdit] = useState<GameState | null>(null)
 
   // Drills page state
   const [drillsList, setDrillsList] = useState<DrillListItem[]>([])
@@ -543,7 +549,44 @@ function App() {
   }
 
   const handleExecuteAction = async (action: LegalAction): Promise<GameState | null> => {
-    if (!gameState || !playerId) return
+    if (!gameState || !playerId) return null
+    
+    // If we're editing a drill step, add the action to the step's correct_actions instead of executing it
+    if (editingStepIdx !== null && drillRecording) {
+      const step = drillRecording.steps[editingStepIdx]
+      if (step) {
+        // Add this action to the step's correct_actions
+        setDrillRecording(prev => {
+          if (!prev) return prev
+          const newSteps = [...prev.steps]
+          const stepCopy = { ...newSteps[editingStepIdx] }
+          
+          // Initialize arrays if needed
+          if (!stepCopy.correct_actions) stepCopy.correct_actions = []
+          if (!stepCopy.incorrect_actions) stepCopy.incorrect_actions = []
+          
+          // Remove from incorrect if present
+          stepCopy.incorrect_actions = stepCopy.incorrect_actions.filter(ia =>
+            !(ia.type === action.type && JSON.stringify(ia.payload || {}) === JSON.stringify(action.payload || {}))
+          )
+          
+          // Add to correct if not already present
+          const existingIdx = stepCopy.correct_actions.findIndex(ca =>
+            ca.type === action.type && JSON.stringify(ca.payload || {}) === JSON.stringify(action.payload || {})
+          )
+          
+          if (existingIdx < 0) {
+            stepCopy.correct_actions.push(action)
+            console.log(`[Drill Editor] Added action to step ${editingStepIdx + 1} correct_actions:`, action.type)
+          }
+          
+          newSteps[editingStepIdx] = stepCopy
+          return { ...prev, steps: newSteps }
+        })
+        // Don't execute the action, just mark it
+        return null
+      }
+    }
     
     setLoading(true)
     setError(null)
@@ -565,8 +608,20 @@ function App() {
       }
 
       // If we are recording a drill, capture the decision point (state-before + chosen action)
-      if (drillRecording && playerId === drillRecording.drill_player_id) {
+      // But don't record if we're currently editing a step (actions should only be marked in the editor)
+      if (drillRecording && playerId === drillRecording.drill_player_id && editingStepIdx === null) {
         const stateSnapshot = JSON.parse(JSON.stringify(gameState)) as GameState
+        // Only the recorded action is correct
+        // For road builds: restrict available actions to only road builds by adding all other road builds to incorrect_actions
+        let incorrectActions: LegalAction[] | undefined = undefined
+        if (actionToSend.type === 'build_road') {
+          // Get all road build actions except the one we're recording
+          const allRoadBuilds = legalActions.filter(a => a.type === 'build_road')
+          incorrectActions = allRoadBuilds.filter(a => 
+            !(a.type === actionToSend.type && 
+              JSON.stringify(a.payload || {}) === JSON.stringify(actionToSend.payload || {}))
+          )
+        }
         setDrillRecording(prev => {
           if (!prev) return prev
           if (playerId !== prev.drill_player_id) return prev
@@ -574,7 +629,15 @@ function App() {
             ...prev,
             steps: [
               ...prev.steps,
-              { player_id: playerId, state: stateSnapshot, expected_action: actionToSend }
+              { 
+                player_id: playerId, 
+                state: stateSnapshot, 
+                expected_action: actionToSend,
+                // Only the recorded action is correct
+                correct_actions: [actionToSend],
+                // For road builds, include all other road builds as incorrect (restricts action space to roads only)
+                incorrect_actions: incorrectActions
+              }
             ]
           }
         })
@@ -2398,6 +2461,40 @@ function App() {
                           >
                             {details?.loading ? 'Loading…' : details?.open ? 'Hide details' : 'View details'}
                           </button>
+                          <button
+                            className="secondary"
+                            style={{ color: '#b71c1c', borderColor: '#b71c1c' }}
+                            onClick={async () => {
+                              if (!confirm(`Are you sure you want to delete drill #${d.id}? This cannot be undone.`)) {
+                                return
+                              }
+                              try {
+                                setDrillsLoading(true)
+                                await deleteDrill(d.id)
+                                // Remove from list immediately
+                                setDrillsList(prev => prev.filter(drill => drill.id !== d.id))
+                                // Also remove from selected set if it was selected
+                                setSelectedDrillIds(prev => {
+                                  const next = new Set(prev)
+                                  next.delete(d.id)
+                                  return next
+                                })
+                                // Remove from details cache
+                                setDrillDetailsById(prev => {
+                                  const next = { ...prev }
+                                  delete next[d.id]
+                                  return next
+                                })
+                              } catch (err) {
+                                setError(err instanceof Error ? err.message : 'Failed to delete drill')
+                              } finally {
+                                setDrillsLoading(false)
+                              }
+                            }}
+                            disabled={drillsLoading}
+                          >
+                            Delete
+                          </button>
                         </div>
 
                         {details?.open && (
@@ -2624,6 +2721,9 @@ function App() {
                             forked_game_id: forkedGame.game_id,
                             steps: []
                           })
+                          // Reset editing state when starting a new drill
+                          setEditingStepIdx(null)
+                          setOriginalGameStateBeforeEdit(null)
                           setView('game')
                           alert('Drill recording started. Take your actions, then use “Save Drill” in the game view.')
                         } catch (err) {
@@ -2942,32 +3042,246 @@ function App() {
               <div style={{ marginTop: '1rem', padding: '1rem', backgroundColor: '#fff', borderRadius: '4px', border: '1px solid #ddd' }}>
                 <h3 style={{ marginTop: 0, marginBottom: '0.5rem' }}>Recorded Steps ({drillRecording.steps.length})</h3>
                 <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '1rem' }}>
-                  Each step uses the recorded action as the expected action. To use multiple correct/incorrect actions, edit the step below.
+                  Each step records only the action you took as correct. For road builds, all other road build options are automatically added to restrict the action space.
+                  <br />
+                  <strong>Note:</strong> During evaluation, the agent will only see the actions you mark as correct or incorrect (not all legal actions).
                 </div>
-                {drillRecording.steps.map((step, idx) => (
-                  <div key={idx} style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#f9f9f9', borderRadius: '4px', border: '1px solid #e0e0e0' }}>
-                    <div style={{ fontWeight: 'bold', marginBottom: '0.5rem' }}>Step {idx + 1}</div>
-                    <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.5rem' }}>
-                      Action: <code>{step.expected_action.type}</code>
-                      {step.expected_action.payload && (
-                        <span> ({JSON.stringify(step.expected_action.payload).substring(0, 50)}...)</span>
-                      )}
-                    </div>
-                    <div style={{ fontSize: '0.85rem', color: '#666' }}>
-                      {step.correct_actions && step.correct_actions.length > 0 && (
-                        <div>✓ Correct actions: {step.correct_actions.length}</div>
-                      )}
-                      {step.incorrect_actions && step.incorrect_actions.length > 0 && (
-                        <div>✗ Incorrect actions: {step.incorrect_actions.length}</div>
-                      )}
-                      {(!step.correct_actions || step.correct_actions.length === 0) && (
-                        <div style={{ fontStyle: 'italic', color: '#999' }}>
-                          Using single expected action (backward compatible)
+                {drillRecording.steps.map((step, idx) => {
+                  const loadStepActions = async () => {
+                    setLoadingStepActionsMap(prev => ({ ...prev, [idx]: true }))
+                    try {
+                      // Save current state before editing (only once when starting to edit)
+                      if (originalGameStateBeforeEdit === null && gameState) {
+                        setOriginalGameStateBeforeEdit(gameState)
+                      }
+                      // Restore game state to this step's state to get accurate legal actions
+                      console.log(`[Drill Editor] Restoring game ${drillRecording.forked_game_id} to step ${idx} state`)
+                      console.log(`[Drill Editor] Step ${idx} state turn_number: ${step.state.turn_number}, current_player_index: ${step.state.current_player_index}`)
+                      await restoreGameState(drillRecording.forked_game_id, step.state)
+                      // Wait a bit to ensure state is committed to database
+                      await new Promise(resolve => setTimeout(resolve, 200))
+                      // Refresh game state to show the restored state
+                      const restoredState = await getGameState(drillRecording.forked_game_id)
+                      console.log(`[Drill Editor] Restored state turn_number: ${restoredState.turn_number}, current_player_index: ${restoredState.current_player_index}`)
+                      // Verify the state matches
+                      if (restoredState.turn_number !== step.state.turn_number) {
+                        console.warn(`[Drill Editor] WARNING: Restored state turn_number (${restoredState.turn_number}) doesn't match step state (${step.state.turn_number})`)
+                      }
+                      setGameState(restoredState)
+                      // Set player ID to the step's player
+                      setPlayerId(step.player_id)
+                      // Get legal actions for this step's state - use the restored state
+                      const actions = await getLegalActions(drillRecording.forked_game_id, step.player_id)
+                      console.log(`[Drill Editor] Loaded ${actions.length} legal actions for step ${idx}:`, actions.map(a => `${a.type}${a.payload ? ` (${JSON.stringify(a.payload).substring(0, 30)})` : ''}`))
+                      setStepLegalActionsMap(prev => ({ ...prev, [idx]: actions }))
+                    } catch (err) {
+                      console.error(`[Drill Editor] Failed to load legal actions for step ${idx}:`, err)
+                      setStepLegalActionsMap(prev => ({ ...prev, [idx]: [] }))
+                    } finally {
+                      setLoadingStepActionsMap(prev => ({ ...prev, [idx]: false }))
+                    }
+                  }
+                  
+                  const stopEditing = async () => {
+                    setEditingStepIdx(null)
+                    // Restore back to original state if we saved one
+                    if (originalGameStateBeforeEdit) {
+                      try {
+                        await restoreGameState(drillRecording.forked_game_id, originalGameStateBeforeEdit)
+                        const restoredState = await getGameState(drillRecording.forked_game_id)
+                        setGameState(restoredState)
+                        setOriginalGameStateBeforeEdit(null)
+                      } catch (err) {
+                        console.error('Failed to restore original game state:', err)
+                      }
+                    }
+                  }
+                  
+                  const isCorrect = (action: LegalAction) => {
+                    return step.correct_actions?.some(ca => 
+                      ca.type === action.type && 
+                      JSON.stringify(ca.payload || {}) === JSON.stringify(action.payload || {})
+                    ) || false
+                  }
+                  
+                  const isIncorrect = (action: LegalAction) => {
+                    return step.incorrect_actions?.some(ia => 
+                      ia.type === action.type && 
+                      JSON.stringify(ia.payload || {}) === JSON.stringify(action.payload || {})
+                    ) || false
+                  }
+                  
+                  const toggleCorrect = (action: LegalAction) => {
+                    setDrillRecording(prev => {
+                      if (!prev) return prev
+                      const newSteps = [...prev.steps]
+                      const stepCopy = { ...newSteps[idx] }
+                      
+                      // Initialize arrays if needed
+                      if (!stepCopy.correct_actions) stepCopy.correct_actions = []
+                      if (!stepCopy.incorrect_actions) stepCopy.incorrect_actions = []
+                      
+                      // Remove from incorrect if present
+                      stepCopy.incorrect_actions = stepCopy.incorrect_actions.filter(ia =>
+                        !(ia.type === action.type && JSON.stringify(ia.payload || {}) === JSON.stringify(action.payload || {}))
+                      )
+                      
+                      // Toggle in correct
+                      const existingIdx = stepCopy.correct_actions.findIndex(ca =>
+                        ca.type === action.type && JSON.stringify(ca.payload || {}) === JSON.stringify(action.payload || {})
+                      )
+                      
+                      if (existingIdx >= 0) {
+                        stepCopy.correct_actions.splice(existingIdx, 1)
+                      } else {
+                        stepCopy.correct_actions.push(action)
+                      }
+                      
+                      newSteps[idx] = stepCopy
+                      return { ...prev, steps: newSteps }
+                    })
+                  }
+                  
+                  const toggleIncorrect = (action: LegalAction) => {
+                    setDrillRecording(prev => {
+                      if (!prev) return prev
+                      const newSteps = [...prev.steps]
+                      const stepCopy = { ...newSteps[idx] }
+                      
+                      // Initialize arrays if needed
+                      if (!stepCopy.correct_actions) stepCopy.correct_actions = []
+                      if (!stepCopy.incorrect_actions) stepCopy.incorrect_actions = []
+                      
+                      // Remove from correct if present
+                      stepCopy.correct_actions = stepCopy.correct_actions.filter(ca =>
+                        !(ca.type === action.type && JSON.stringify(ca.payload || {}) === JSON.stringify(action.payload || {}))
+                      )
+                      
+                      // Toggle in incorrect
+                      const existingIdx = stepCopy.incorrect_actions.findIndex(ia =>
+                        ia.type === action.type && JSON.stringify(ia.payload || {}) === JSON.stringify(action.payload || {})
+                      )
+                      
+                      if (existingIdx >= 0) {
+                        stepCopy.incorrect_actions.splice(existingIdx, 1)
+                      } else {
+                        stepCopy.incorrect_actions.push(action)
+                      }
+                      
+                      newSteps[idx] = stepCopy
+                      return { ...prev, steps: newSteps }
+                    })
+                  }
+                  
+                  const stepLegalActions = stepLegalActionsMap[idx] || []
+                  const loadingStepActions = loadingStepActionsMap[idx] || false
+                  
+                  return (
+                    <div key={idx} style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#f9f9f9', borderRadius: '4px', border: '1px solid #e0e0e0' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                        <div style={{ fontWeight: 'bold' }}>Step {idx + 1}</div>
+                        <button
+                          onClick={() => {
+                            if (editingStepIdx === idx) {
+                              stopEditing()
+                            } else {
+                              setEditingStepIdx(idx)
+                              loadStepActions()
+                            }
+                          }}
+                          style={{ 
+                            padding: '0.25rem 0.5rem', 
+                            fontSize: '0.8rem',
+                            backgroundColor: editingStepIdx === idx ? '#673ab7' : '#9e9e9e',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          {editingStepIdx === idx ? 'Done Editing' : 'Edit Actions'}
+                        </button>
+                      </div>
+                      <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.5rem' }}>
+                        Action type: <code>{step.expected_action.type}</code>
+                      </div>
+                      <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.5rem' }}>
+                        {step.correct_actions && step.correct_actions.length > 0 && (
+                          <div>✓ Correct actions: <strong>{step.correct_actions.length}</strong></div>
+                        )}
+                        {step.incorrect_actions && step.incorrect_actions.length > 0 && (
+                          <div>✗ Incorrect actions: <strong>{step.incorrect_actions.length}</strong></div>
+                        )}
+                        {(!step.correct_actions || step.correct_actions.length === 0) && (
+                          <div style={{ fontStyle: 'italic', color: '#999' }}>
+                            No correct actions specified (will use expected_action only)
+                          </div>
+                        )}
+                      </div>
+                      
+                      {editingStepIdx === idx && (
+                        <div style={{ marginTop: '1rem', padding: '0.75rem', backgroundColor: '#fff', borderRadius: '4px', border: '1px solid #ccc', maxHeight: '400px', overflowY: 'auto' }}>
+                          <div style={{ fontSize: '0.85rem', color: '#4caf50', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                            ⚠️ Editing actions for Step {idx + 1} (game state restored to this step's state)
+                          </div>
+                          {loadingStepActions ? (
+                            <div>Loading legal actions for step {idx + 1}...</div>
+                          ) : stepLegalActions.length === 0 ? (
+                            <div style={{ color: '#999', fontStyle: 'italic' }}>No legal actions available for this state</div>
+                          ) : (
+                            <>
+                              <div style={{ fontSize: '0.85rem', color: '#666', marginBottom: '0.5rem' }}>
+                                Click actions to mark as correct (✓) or right-click to mark as incorrect (✗). The agent will only see the actions you mark.
+                                <br />
+                                <strong>Showing {stepLegalActions.length} legal actions from step {idx + 1}'s game state.</strong>
+                              </div>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                {stepLegalActions.map((action, actionIdx) => {
+                                  const correct = isCorrect(action)
+                                  const incorrect = isIncorrect(action)
+                                  const actionStr = `${action.type}${action.payload ? ` ${JSON.stringify(action.payload).substring(0, 60)}` : ''}`
+                                  return (
+                                    <div
+                                      key={actionIdx}
+                                      style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '0.5rem',
+                                        padding: '0.5rem',
+                                        backgroundColor: correct ? '#e8f5e9' : incorrect ? '#ffebee' : '#f5f5f5',
+                                        borderRadius: '4px',
+                                        cursor: 'pointer',
+                                        border: correct ? '2px solid #4caf50' : incorrect ? '2px solid #f44336' : '1px solid #ddd'
+                                      }}
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        toggleCorrect(action)
+                                      }}
+                                      onContextMenu={(e) => {
+                                        e.preventDefault()
+                                        e.stopPropagation()
+                                        toggleIncorrect(action)
+                                      }}
+                                    >
+                                      <div style={{ minWidth: '20px', textAlign: 'center' }}>
+                                        {correct && <span style={{ color: '#4caf50', fontWeight: 'bold' }}>✓</span>}
+                                        {incorrect && <span style={{ color: '#f44336', fontWeight: 'bold' }}>✗</span>}
+                                      </div>
+                                      <code style={{ fontSize: '0.8rem', flex: 1 }}>{actionStr}</code>
+                                      <div style={{ fontSize: '0.7rem', color: '#999' }}>
+                                        {correct ? 'Correct' : incorrect ? 'Incorrect' : 'Click: correct, Right-click: incorrect'}
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
@@ -3542,6 +3856,8 @@ function App() {
                                     // Drill recording: capture decision point
                                     if (drillRecording && playerId === drillRecording.drill_player_id) {
                                       const stateSnapshot = JSON.parse(JSON.stringify(gameState)) as GameState
+                                      // Automatically populate correct_actions with all actions of the same type
+                                      const actionsOfSameType = legalActions.filter(a => a.type === discardAction.type)
                                       setDrillRecording(prev => {
                                         if (!prev) return prev
                                         if (playerId !== prev.drill_player_id) return prev
@@ -3549,7 +3865,13 @@ function App() {
                                           ...prev,
                                           steps: [
                                             ...prev.steps,
-                                            { player_id: playerId, state: stateSnapshot, expected_action: discardAction }
+                                            { 
+                                              player_id: playerId, 
+                                              state: stateSnapshot, 
+                                              expected_action: discardAction,
+                                              correct_actions: actionsOfSameType.length > 0 ? actionsOfSameType : [discardAction],
+                                              incorrect_actions: []
+                                            }
                                           ]
                                         }
                                       })
@@ -3967,7 +4289,13 @@ function App() {
                                           ...prev,
                                           steps: [
                                             ...prev.steps,
-                                            { player_id: playerId, state: stateSnapshot, expected_action: tradeAction }
+                                            { 
+                                              player_id: playerId, 
+                                              state: stateSnapshot, 
+                                              expected_action: tradeAction,
+                                              correct_actions: [tradeAction],
+                                              incorrect_actions: undefined
+                                            }
                                           ]
                                         }
                                       })

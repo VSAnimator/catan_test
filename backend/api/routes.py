@@ -68,6 +68,7 @@ from .database import (
     list_optimized_prompts,
     set_default_prompt,
     delete_optimized_prompt,
+    delete_drill,
 )
 
 router = APIRouter()
@@ -450,6 +451,7 @@ from .database import (
     get_drill as get_drill_from_db,
     get_drill_steps as get_drill_steps_from_db,
     update_drill as update_drill_in_db,
+    delete_drill,
 )
 
 
@@ -651,6 +653,15 @@ async def update_drill_endpoint(drill_id: int, request: UpdateDrillRequest):
     return {"message": "Drill updated"}
 
 
+@router.delete("/drills/{drill_id}")
+async def delete_drill_endpoint(drill_id: int):
+    """Delete a drill and all its steps."""
+    deleted = delete_drill(drill_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Drill not found")
+    return {"message": "Drill deleted"}
+
+
 def _parse_llm_agent_spec(agent_type_str: str) -> Optional[Dict[str, Any]]:
     """
     Parse frontend agent_type strings for LLM variants.
@@ -847,13 +858,35 @@ async def evaluate_drill(drill_id: int, request: EvaluateDrillRequest):
         # Check if drill step uses enhanced format (correct/incorrect actions)
         correct_actions = None
         incorrect_actions = None
-        if "correct_actions_json" in r.keys() and r["correct_actions_json"]:
+        if "correct_actions_json" in r.keys() and r["correct_actions_json"] is not None:
             correct_actions = json.loads(r["correct_actions_json"])
-        if "incorrect_actions_json" in r.keys() and r["incorrect_actions_json"]:
+        if "incorrect_actions_json" in r.keys() and r["incorrect_actions_json"] is not None:
             incorrect_actions = json.loads(r["incorrect_actions_json"])
         
         # Filter legal actions if correct/incorrect actions are specified
         if correct_actions is not None:
+            # If incorrect_actions is not specified or empty, automatically set it to all other legal actions
+            if not incorrect_actions:
+                # Convert all legal actions to action dicts
+                all_legal_action_dicts = []
+                for legal_action, legal_payload in la_list:
+                    action_dict = {"type": serialize_action(legal_action)}
+                    if legal_payload is not None:
+                        action_dict["payload"] = serialize_action_payload(legal_payload)
+                    all_legal_action_dicts.append(action_dict)
+                
+                    # Filter out correct actions to get incorrect actions
+                    # Convert canonical dicts to tuples for hashing
+                    def canonical_to_tuple(ca):
+                        canonical = _canonical_action_dict(ca)
+                        return (canonical.get("type"), tuple(sorted(canonical.get("payload", {}).items())) if canonical.get("payload") else None)
+                    
+                    correct_action_set = {canonical_to_tuple(ca) for ca in correct_actions}
+                    incorrect_actions = [
+                        action_dict for action_dict in all_legal_action_dicts
+                        if canonical_to_tuple(action_dict) not in correct_action_set
+                    ]
+            
             # Filter to only include correct + incorrect actions
             action_dicts_to_include = correct_actions.copy()
             if incorrect_actions:
@@ -1014,8 +1047,8 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
                     "player_id": r["player_id"],
                     "state_json": json.loads(r["state_json"]),
                     "expected_action": json.loads(r["expected_action_json"]),
-                    "correct_actions": json.loads(r["correct_actions_json"]) if "correct_actions_json" in r.keys() and r["correct_actions_json"] else None,
-                    "incorrect_actions": json.loads(r["incorrect_actions_json"]) if "incorrect_actions_json" in r.keys() and r["incorrect_actions_json"] else None,
+                    "correct_actions": json.loads(r["correct_actions_json"]) if "correct_actions_json" in r.keys() and r["correct_actions_json"] is not None else None,
+                    "incorrect_actions": json.loads(r["incorrect_actions_json"]) if "incorrect_actions_json" in r.keys() and r["incorrect_actions_json"] is not None else None,
                 }
             )
         prepared.append(
@@ -1072,11 +1105,38 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
             expected_action = s["expected_action"]
             correct_actions = s.get("correct_actions")
             incorrect_actions = s.get("incorrect_actions")
+            # Handle case where correct_actions/incorrect_actions come from JSON strings
+            if isinstance(correct_actions, str):
+                correct_actions = json.loads(correct_actions) if correct_actions else None
+            if isinstance(incorrect_actions, str):
+                incorrect_actions = json.loads(incorrect_actions) if incorrect_actions else None
             state = deserialize_game_state(state_json)
             la_list = legal_actions(state, player_id)
             
             # Filter legal actions if correct/incorrect actions are specified
             if correct_actions is not None:
+                # If incorrect_actions is not specified or empty, automatically set it to all other legal actions
+                if not incorrect_actions:
+                    # Convert all legal actions to action dicts
+                    all_legal_action_dicts = []
+                    for legal_action, legal_payload in la_list:
+                        action_dict = {"type": serialize_action(legal_action)}
+                        if legal_payload is not None:
+                            action_dict["payload"] = serialize_action_payload(legal_payload)
+                        all_legal_action_dicts.append(action_dict)
+                    
+                    # Filter out correct actions to get incorrect actions
+                    # Convert canonical dicts to tuples for hashing
+                    def canonical_to_tuple(ca):
+                        canonical = _canonical_action_dict(ca)
+                        return (canonical.get("type"), tuple(sorted(canonical.get("payload", {}).items())) if canonical.get("payload") else None)
+                    
+                    correct_action_set = {canonical_to_tuple(ca) for ca in correct_actions}
+                    incorrect_actions = [
+                        action_dict for action_dict in all_legal_action_dicts
+                        if canonical_to_tuple(action_dict) not in correct_action_set
+                    ]
+                
                 action_dicts_to_include = correct_actions.copy()
                 if incorrect_actions:
                     action_dicts_to_include.extend(incorrect_actions)

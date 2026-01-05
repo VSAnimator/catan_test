@@ -291,8 +291,8 @@ def create_drill(
                 json.dumps(step["expected_action_json"]),
                 step.get("state_text"),
                 step.get("legal_actions_text"),
-                json.dumps(step.get("correct_actions_json")) if step.get("correct_actions_json") else None,
-                json.dumps(step.get("incorrect_actions_json")) if step.get("incorrect_actions_json") else None,
+                json.dumps(step.get("correct_actions_json")) if step.get("correct_actions_json") is not None else None,
+                json.dumps(step.get("incorrect_actions_json")) if step.get("incorrect_actions_json") is not None else None,
             )
             for step in steps
         ],
@@ -374,6 +374,26 @@ def update_drill(
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(f"UPDATE drills SET {', '.join(fields)} WHERE id = ?", params)
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def delete_drill(drill_id: int) -> bool:
+    """Delete a drill and all its steps. Returns True if deleted, False if drill not found."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Check if drill exists
+    cursor.execute("SELECT id FROM drills WHERE id = ?", (drill_id,))
+    if not cursor.fetchone():
+        return False
+    
+    # Delete drill steps first (foreign key constraint)
+    cursor.execute("DELETE FROM drill_steps WHERE drill_id = ?", (drill_id,))
+    
+    # Delete the drill
+    cursor.execute("DELETE FROM drills WHERE id = ?", (drill_id,))
+    
     conn.commit()
     return cursor.rowcount > 0
 
@@ -584,8 +604,9 @@ def get_steps(game_id: str) -> List[sqlite3.Row]:
 def get_latest_state(game_id: str) -> Optional[Dict[str, Any]]:
     """Get the latest game state.
     
-    First tries to get from the most recent step, then falls back to
-    current_state_json in games table.
+    First checks current_state_json in games table (which is updated on restore),
+    then falls back to the most recent step's state.
+    This ensures restored states take precedence over step history.
     """
     # Flush any pending writes for this game first
     _flush_write_queue(game_id)
@@ -593,7 +614,20 @@ def get_latest_state(game_id: str) -> Optional[Dict[str, Any]]:
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Try to get from most recent step
+    # First check current_state_json in games table (updated on restore)
+    # This takes precedence so restored states are used
+    cursor.execute("""
+        SELECT current_state_json
+        FROM games
+        WHERE id = ?
+    """, (game_id,))
+    
+    row = cursor.fetchone()
+    if row and row[0]:
+        # Don't close - keep connection for thread
+        return json.loads(row[0])
+    
+    # Fall back to most recent step's state
     cursor.execute("""
         SELECT state_after_json
         FROM steps
@@ -603,22 +637,10 @@ def get_latest_state(game_id: str) -> Optional[Dict[str, Any]]:
     """, (game_id,))
     
     row = cursor.fetchone()
-    if row:
+    if row and row[0]:
         # Don't close - keep connection for thread
         return json.loads(row[0])
     
-    # Fall back to current_state_json in games table
-    cursor.execute("""
-        SELECT current_state_json
-        FROM games
-        WHERE id = ?
-    """, (game_id,))
-    
-    row = cursor.fetchone()
-    # Don't close - keep connection for thread
-    
-    if row and row[0]:
-        return json.loads(row[0])
     return None
 
 
