@@ -21,7 +21,7 @@ class CatanDrillSignature(dspy.Signature):
     game_rules: str = dspy.InputField(desc="Catan game rules and mechanics (without strategic advice)")
     observation: str = dspy.InputField(desc="Current game state observation with higher-level features")
     viable_actions: str = dspy.InputField(desc="Available viable actions (filtered legal actions)")
-    guideline: str = dspy.InputField(desc="Strategic guideline for this specific situation (may be empty if no specific guidance)")
+    guideline: str = dspy.InputField(desc="IMPORTANT strategic guideline you should follow for this situation. If provided, this guidance is critical for making the correct decision. (May be empty if no specific guidance available)")
     
     reasoning: str = dspy.OutputField(desc="Reasoning about which action to choose")
     chosen_action: str = dspy.OutputField(desc='JSON string of chosen action with keys "type" and "payload": {"type": "build_road", "payload": {"road_edge_id": 14}} or null')

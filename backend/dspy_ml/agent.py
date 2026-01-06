@@ -47,11 +47,16 @@ class DSPyDrillAgent:
             (reasoning, chosen_action_dict) tuple
         """
         # Call DSPy module
+        # Format guideline to match frontend presentation
+        guideline_text = ""
+        if example.guideline:
+            guideline_text = f"Here's a useful guideline you should follow in situations like this: {example.guideline}"
+        
         result = self.module(
             game_rules=example.game_rules,
             observation=example.observation,
             viable_actions=example.viable_actions,
-            guideline=example.guideline or ""  # Pass guideline (empty string if None)
+            guideline=guideline_text
         )
         
         reasoning = result.reasoning if hasattr(result, 'reasoning') else ""
@@ -63,8 +68,23 @@ class DSPyDrillAgent:
         if chosen_action_str and chosen_action_str.lower() != "null":
             try:
                 chosen_action_dict = json.loads(chosen_action_str)
-            except (json.JSONDecodeError, TypeError):
-                chosen_action_dict = None
+            except (json.JSONDecodeError, TypeError) as e:
+                # Try to fix common JSON errors (extra braces, etc.)
+                try:
+                    # Remove trailing extra braces
+                    cleaned = chosen_action_str.rstrip('}').rstrip() + '}'
+                    chosen_action_dict = json.loads(cleaned)
+                except:
+                    # If that doesn't work, try finding the first valid JSON object
+                    import re
+                    match = re.search(r'\{[^{}]*\{[^{}]*\}[^{}]*\}', chosen_action_str)
+                    if match:
+                        try:
+                            chosen_action_dict = json.loads(match.group(0))
+                        except:
+                            chosen_action_dict = None
+                    else:
+                        chosen_action_dict = None
         
         return reasoning, chosen_action_dict
     

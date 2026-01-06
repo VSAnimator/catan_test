@@ -73,8 +73,23 @@ def create_drill_metric(examples: List[DrillExample]) -> callable:
             
             try:
                 chosen_action = json.loads(chosen_action_str)
-            except (json.JSONDecodeError, TypeError):
-                return 0.0
+            except (json.JSONDecodeError, TypeError) as e:
+                # Try to fix common JSON errors (extra braces, etc.)
+                try:
+                    # Remove trailing extra braces
+                    cleaned = chosen_action_str.rstrip('}').rstrip() + '}'
+                    chosen_action = json.loads(cleaned)
+                except:
+                    # If that doesn't work, try finding the first valid JSON object
+                    import re
+                    match = re.search(r'\{[^{}]*\{[^{}]*\}[^{}]*\}', chosen_action_str)
+                    if match:
+                        try:
+                            chosen_action = json.loads(match.group(0))
+                        except:
+                            return 0.0
+                    else:
+                        return 0.0
             
             # Check if it matches any correct action
             # Get state from the example if available
