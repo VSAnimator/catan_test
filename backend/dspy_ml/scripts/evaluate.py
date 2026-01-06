@@ -6,22 +6,37 @@ import sys
 import argparse
 from pathlib import Path
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Add parent directories to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+import dspy
 from dspy_ml.dataset import DrillDataset
 from dspy_ml.optimizer import DrillOptimizer
 from dspy_ml.agent import DSPyDrillAgent
+
+
+def evaluate_example(agent, example, index):
+    """Evaluate a single example (for parallel execution)."""
+    accuracy, _, _ = agent.evaluate_step(example)
+    return index, accuracy, example.expected_action.get("type", "unknown")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate optimized DSPy module")
     parser.add_argument("--module", required=True, help="Optimized module file path (.pkl)")
     parser.add_argument("--dataset", required=True, help="Dataset JSON file path")
-    parser.add_argument("--split", choices=["train", "val", "test", "all"], default="test", help="Which split to evaluate")
+    parser.add_argument("--split", choices=["train", "val", "test", "all"], default="all", help="Which split to evaluate")
+    parser.add_argument("--model", default="gpt-5.2", help="LLM model to use")
+    parser.add_argument("--parallel", type=int, default=10, help="Number of parallel workers")
     
     args = parser.parse_args()
+    
+    # Initialize DSPy with the model
+    print(f"Initializing DSPy with model: {args.model}", flush=True)
+    lm = dspy.LM(model=args.model)
+    dspy.configure(lm=lm)
     
     # Load dataset
     print(f"Loading dataset from {args.dataset}...", flush=True)
@@ -53,24 +68,36 @@ def main():
     # Create agent
     agent = DSPyDrillAgent(module)
     
-    # Evaluate
-    print("Running evaluation...", flush=True)
-    correct = 0
-    total = 0
+    # Evaluate (in parallel)
+    print(f"Running evaluation (parallel={args.parallel})...", flush=True)
+    total = len(examples)
+    results = {}
     action_type_stats = defaultdict(lambda: {"correct": 0, "total": 0})
     
-    for example in examples:
-        total += 1
-        accuracy, reasoning, chosen_action = agent.evaluate_step(example)
+    with ThreadPoolExecutor(max_workers=args.parallel) as executor:
+        # Submit all tasks
+        futures = {
+            executor.submit(evaluate_example, agent, example, i): i
+            for i, example in enumerate(examples)
+        }
         
-        if accuracy > 0:
-            correct += 1
-        
-        # Track by action type
-        expected_action_type = example.expected_action.get("type", "unknown")
-        action_type_stats[expected_action_type]["total"] += 1
-        if accuracy > 0:
-            action_type_stats[expected_action_type]["correct"] += 1
+        # Process results as they complete
+        completed = 0
+        for future in as_completed(futures):
+            index, accuracy, action_type = future.result()
+            results[index] = accuracy
+            completed += 1
+            
+            # Track by action type
+            action_type_stats[action_type]["total"] += 1
+            if accuracy > 0:
+                action_type_stats[action_type]["correct"] += 1
+            
+            if completed % 10 == 0:
+                print(f"  Processed {completed}/{total} examples...", flush=True)
+    
+    # Count correct
+    correct = sum(1 for acc in results.values() if acc > 0)
     
     # Report results
     accuracy = correct / total if total > 0 else 0.0

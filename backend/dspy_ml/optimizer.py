@@ -27,42 +27,43 @@ def create_drill_metric(examples: List[DrillExample]) -> callable:
     """
     Create a metric function that evaluates drill performance.
     
-    In DSPy 3.0+, metrics are callable functions that take (example, prediction, trace=None)
-    and return a score.
+    GEPA requires metrics with signature: (gold, pred, trace, pred_name, pred_trace)
     """
     # Create a mapping from example to correct actions for quick lookup
     example_to_correct_actions = {id(ex): ex.correct_actions for ex in examples}
     
-    def drill_metric(example, prediction, trace=None) -> float:
+    def drill_metric(gold, pred, trace=None, pred_name=None, pred_trace=None) -> float:
         """
         Evaluate if the predicted action matches any correct action.
         
         Args:
-            example: The drill example (DrillExample or dspy.Example)
-            prediction: The predicted action (CatanDrillSignature or dict)
+            gold: The gold/example (DrillExample or dspy.Example)
+            pred: The predicted action (CatanDrillSignature or dict)
             trace: Optional trace (not used)
+            pred_name: Predictor name (not used)
+            pred_trace: Predictor trace (not used)
         
         Returns:
             1.0 if correct, 0.0 if incorrect
         """
         try:
             # Get correct actions - handle both DrillExample and dspy.Example
-            if isinstance(example, DrillExample):
-                correct_actions = example.correct_actions
+            if isinstance(gold, DrillExample):
+                correct_actions = gold.correct_actions
             else:
                 # For dspy.Example, get the attached DrillExample
-                drill_example = getattr(example, '_drill_example', None)
+                drill_example = getattr(gold, '_drill_example', None)
                 if drill_example:
                     correct_actions = drill_example.correct_actions
                 else:
                     # Fallback: try to get correct_actions directly
-                    correct_actions = getattr(example, 'correct_actions', [])
+                    correct_actions = getattr(gold, 'correct_actions', [])
             
             # Get prediction - handle both CatanDrillSignature and dict
-            if hasattr(prediction, 'chosen_action'):
-                chosen_action_str = prediction.chosen_action
-            elif isinstance(prediction, dict):
-                chosen_action_str = prediction.get('chosen_action', 'null')
+            if hasattr(pred, 'chosen_action'):
+                chosen_action_str = pred.chosen_action
+            elif isinstance(pred, dict):
+                chosen_action_str = pred.get('chosen_action', 'null')
             else:
                 return 0.0
             
@@ -98,7 +99,9 @@ class DrillOptimizer:
         self,
         model_name: str = "gpt-4o-mini",
         api_key: Optional[str] = None,
-        gepa_auto: str = "light"
+        gepa_auto: str = "light",
+        reflection_model: Optional[str] = None,
+        reflection_reasoning_effort: Optional[str] = None
     ):
         """
         Initialize the optimizer.
@@ -107,6 +110,8 @@ class DrillOptimizer:
             model_name: LLM model to use for optimization
             api_key: Optional API key (uses env vars if not provided)
             gepa_auto: GEPA auto mode ('light' or 'full')
+            reflection_model: Model to use for GEPA reflection (defaults to model_name)
+            reflection_reasoning_effort: Reasoning effort for reflection model ('low', 'medium', 'high')
         """
         if not DSPY_AVAILABLE:
             raise ImportError(
@@ -115,6 +120,8 @@ class DrillOptimizer:
         
         self.model_name = model_name
         self.gepa_auto = gepa_auto
+        self.reflection_model = reflection_model or model_name
+        self.reflection_reasoning_effort = reflection_reasoning_effort
         
         # Set API key in environment if provided
         if api_key:
@@ -189,10 +196,24 @@ class DrillOptimizer:
             raise ValueError("GEPA not available in this DSPy version.")
         
         # GEPA requires a reflection LM for proposing new instructions
-        print(f"Setting up GEPA with reflection LM ({self.model_name})...", flush=True)
+        print(f"Setting up GEPA with reflection LM ({self.reflection_model})...", flush=True)
+        
         # Adjust max_tokens based on model
-        max_tokens = 16384 if "gpt-4o-mini" in self.model_name.lower() else 32000
-        reflection_lm = dspy.LM(model=self.model_name, temperature=1.0, max_tokens=max_tokens)
+        max_tokens = 16384 if "gpt-4o-mini" in self.reflection_model.lower() else 32000
+        
+        # Configure reflection LM with thinking/reasoning if specified
+        reflection_lm_kwargs = {
+            "model": self.reflection_model,
+            "temperature": 1.0,
+            "max_tokens": max_tokens
+        }
+        
+        # Add reasoning effort if specified (for models that support extended thinking)
+        if self.reflection_reasoning_effort:
+            print(f"  Enabling extended thinking with reasoning_effort={self.reflection_reasoning_effort}", flush=True)
+            reflection_lm_kwargs["reasoning_effort"] = self.reflection_reasoning_effort
+        
+        reflection_lm = dspy.LM(**reflection_lm_kwargs)
         
         print("Compiling with GEPA (this may take a while)...", flush=True)
         optimizer = dspy.GEPA(
@@ -227,9 +248,18 @@ class DrillOptimizer:
             Optimized prompt string if extractable, None otherwise
         """
         try:
-            # GEPA optimizes instructions, which may be in the module's predictors
+            # GEPA optimizes instructions - check various locations
+            # For ChainOfThought, instructions are in predict.signature.instructions
+            if hasattr(module, 'predict'):
+                predictor = module.predict
+                if hasattr(predictor, 'signature') and hasattr(predictor.signature, 'instructions'):
+                    return predictor.signature.instructions
+                if hasattr(predictor, 'instructions'):
+                    return predictor.instructions
+            
+            # Try other predictor locations
             if hasattr(module, 'predictors'):
-                predictors = module.predictors
+                predictors = module.predictors if not callable(module.predictors) else module.predictors()
                 if predictors:
                     predictor = predictors[0]
                     # Check for optimized instructions
@@ -257,9 +287,18 @@ class DrillOptimizer:
             filepath: Path to save module (will also save metadata as .json)
             metadata: Optional metadata to save
         """
-        # Save module
-        with open(filepath, 'wb') as f:
-            pickle.dump(module, f)
+        # Try DSPy's built-in save method first
+        if hasattr(module, 'save'):
+            try:
+                module.save(filepath)
+                print(f"Saved module using DSPy's built-in save method", flush=True)
+            except Exception as e:
+                print(f"Warning: DSPy save failed: {e}", flush=True)
+                # Fall back to custom serialization
+                self._save_fallback(module, filepath)
+        else:
+            # Use fallback method
+            self._save_fallback(module, filepath)
         
         # Save metadata
         metadata_path = filepath.replace('.pkl', '_metadata.json')
@@ -270,11 +309,57 @@ class DrillOptimizer:
             "model_name": self.model_name,
             "optimization_method": "gepa",
             "gepa_auto": self.gepa_auto,
+            "reflection_model": self.reflection_model,
+            "reflection_reasoning_effort": self.reflection_reasoning_effort,
             "saved_at": datetime.now().isoformat(),
         })
         
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
+    
+    def _save_fallback(self, module: Any, filepath: str) -> None:
+        """
+        Fallback save method that extracts serializable state.
+        
+        This handles cases where the module contains non-picklable objects
+        (like DSPy StringSignature instances).
+        """
+        try:
+            # Extract optimized instructions
+            optimized_instructions = self.extract_optimized_prompt(module)
+            
+            print(f"Extracted optimized instructions: {len(optimized_instructions) if optimized_instructions else 0} chars", flush=True)
+            
+            # Build serializable state dict
+            state_dict = {
+                'module_type': type(module).__name__,
+                'optimized_instructions': optimized_instructions,
+                'model_name': self.model_name,
+                'reflection_model': self.reflection_model,
+                'gepa_auto': self.gepa_auto,
+            }
+            
+            # Try to extract signature information
+            if hasattr(module, 'signature'):
+                sig = module.signature
+                state_dict['signature_type'] = type(sig).__name__
+                
+                # Extract field information
+                if hasattr(sig, 'fields'):
+                    state_dict['signature_fields'] = {
+                        'input_fields': [f for f in sig.fields if sig.fields[f].json_schema_extra.get('__dspy_field_type') == 'input'],
+                        'output_fields': [f for f in sig.fields if sig.fields[f].json_schema_extra.get('__dspy_field_type') == 'output']
+                    }
+            
+            # Save as pickle
+            with open(filepath, 'wb') as f:
+                pickle.dump(state_dict, f)
+            
+            print(f"Saved module using fallback method (extracted instructions)", flush=True)
+            
+        except Exception as e:
+            print(f"Error in fallback save: {e}", flush=True)
+            raise
     
     def load(self, filepath: str) -> Tuple[Any, Dict[str, Any]]:
         """
@@ -286,9 +371,31 @@ class DrillOptimizer:
         Returns:
             (module, metadata) tuple
         """
-        # Load module
-        with open(filepath, 'rb') as f:
-            module = pickle.load(f)
+        from .signature import CatanDrillSignature
+        
+        # Try DSPy's load first
+        try:
+            module = dspy.ChainOfThought(CatanDrillSignature)
+            module.load(filepath)
+            print("Loaded module using DSPy's built-in load method", flush=True)
+        except:
+            # Fall back to pickle load
+            with open(filepath, 'rb') as f:
+                loaded = pickle.load(f)
+            
+            # Check if this is a state dict (fallback format) or actual module
+            if isinstance(loaded, dict):
+                if 'optimized_instructions' in loaded:
+                    # This is a fallback-saved module, reconstruct it
+                    print("Loading from fallback format, reconstructing module...", flush=True)
+                    module = self._reconstruct_module(loaded)
+                else:
+                    # This might be DSPy's dict format, try to reconstruct
+                    print("Loading from DSPy dict format, reconstructing module...", flush=True)
+                    module = self._reconstruct_from_dspy_dict(loaded)
+            else:
+                # This is a regular module
+                module = loaded
         
         # Load metadata
         metadata_path = filepath.replace('.pkl', '_metadata.json')
@@ -298,6 +405,58 @@ class DrillOptimizer:
                 metadata = json.load(f)
         
         return module, metadata
+    
+    def _reconstruct_from_dspy_dict(self, dspy_dict: Dict[str, Any]) -> Any:
+        """
+        Reconstruct module from DSPy's save format (which saves as dict).
+        
+        Args:
+            dspy_dict: Dictionary from DSPy's save method
+            
+        Returns:
+            Reconstructed module
+        """
+        from .signature import CatanDrillSignature
+        
+        # Create new module
+        module = dspy.ChainOfThought(CatanDrillSignature)
+        
+        # Try to restore state from the dict
+        # DSPy saves module.__dict__, so we can restore it
+        if hasattr(module, '__dict__'):
+            module.__dict__.update(dspy_dict)
+        
+        return module
+    
+    def _reconstruct_module(self, state_dict: Dict[str, Any]) -> Any:
+        """
+        Reconstruct a DSPy module from saved state dict.
+        
+        Args:
+            state_dict: State dictionary from fallback save
+            
+        Returns:
+            Reconstructed DSPy module
+        """
+        from .signature import CatanDrillSignature
+        
+        # Create a new module with the original signature
+        module = dspy.ChainOfThought(CatanDrillSignature)
+        
+        # Apply the optimized instructions if available
+        if state_dict.get('optimized_instructions'):
+            # Set instructions on the module's predictor
+            # ChainOfThought uses 'predict' attribute
+            if hasattr(module, 'predict') and hasattr(module.predict, 'signature'):
+                module.predict.signature.instructions = state_dict['optimized_instructions']
+            elif hasattr(module, '__dict__'):
+                # Try to find predictor in module's attributes
+                for attr_name, attr_value in module.__dict__.items():
+                    if hasattr(attr_value, 'signature'):
+                        attr_value.signature.instructions = state_dict['optimized_instructions']
+                        break
+        
+        return module
     
     def list_models(self, directory: str = "data/optimized_modules") -> List[Dict[str, Any]]:
         """

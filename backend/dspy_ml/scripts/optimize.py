@@ -19,8 +19,10 @@ def main():
     parser.add_argument("--output", required=True, help="Output module file path (.pkl)")
     parser.add_argument("--model", default="gpt-4o-mini", help="LLM model to use")
     parser.add_argument("--gepa-auto", choices=["light", "full"], default="light", help="GEPA auto mode")
-    parser.add_argument("--train-split", type=float, default=0.8, help="Training split ratio")
-    parser.add_argument("--val-split", type=float, default=0.1, help="Validation split ratio")
+    parser.add_argument("--train-split", type=float, default=1.0, help="Training split ratio (1.0 = use all data)")
+    parser.add_argument("--val-split", type=float, default=0.0, help="Validation split ratio")
+    parser.add_argument("--reflection-model", help="Model for GEPA reflection (defaults to --model)")
+    parser.add_argument("--reasoning-effort", choices=["low", "medium", "high"], help="Reasoning effort for reflection model")
     parser.add_argument("--api-key", help="API key (optional, uses env vars if not provided)")
     
     args = parser.parse_args()
@@ -45,11 +47,20 @@ def main():
     print(f"Train: {len(train)}, Val: {len(val)}, Test: {len(test)}", flush=True)
     
     # Initialize optimizer
-    print(f"Initializing GEPA optimizer (model={args.model}, auto={args.gepa_auto})...", flush=True)
+    reflection_model = args.reflection_model or args.model
+    print(f"Initializing GEPA optimizer:", flush=True)
+    print(f"  Model: {args.model}", flush=True)
+    print(f"  Reflection Model: {reflection_model}", flush=True)
+    if args.reasoning_effort:
+        print(f"  Reasoning Effort: {args.reasoning_effort}", flush=True)
+    print(f"  GEPA Auto: {args.gepa_auto}", flush=True)
+    
     optimizer = DrillOptimizer(
         model_name=args.model,
         api_key=args.api_key,
-        gepa_auto=args.gepa_auto
+        gepa_auto=args.gepa_auto,
+        reflection_model=reflection_model,
+        reflection_reasoning_effort=args.reasoning_effort
     )
     
     # Optimize
