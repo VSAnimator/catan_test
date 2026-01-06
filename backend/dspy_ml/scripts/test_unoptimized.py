@@ -37,8 +37,8 @@ def main():
         if "gpt" in args.model.lower() or "openai" in args.model.lower():
             os.environ["OPENAI_API_KEY"] = args.api_key
     
-    # Initialize DSPy
-    lm = dspy.LM(model=args.model)
+    # Initialize DSPy with deterministic settings (temperature=0 for reproducibility)
+    lm = dspy.LM(model=args.model, temperature=0.0)
     dspy.configure(lm=lm)
     
     # Create unoptimized module

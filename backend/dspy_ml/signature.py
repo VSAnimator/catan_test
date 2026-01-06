@@ -22,5 +22,5 @@ class CatanDrillSignature(dspy.Signature):
     viable_actions: str = dspy.InputField(desc="Available viable actions (filtered legal actions)")
     
     reasoning: str = dspy.OutputField(desc="Reasoning about which action to choose")
-    chosen_action: str = dspy.OutputField(desc="JSON string of chosen action: {\"type\": \"action_type\", \"payload\": {...}} or null")
+    chosen_action: str = dspy.OutputField(desc='JSON string of chosen action with keys "type" and "payload": {"type": "build_road", "payload": {"road_edge_id": 14}} or null')
 

@@ -1621,11 +1621,24 @@ def _make_agent(
 
 
 def _canonical_action_dict(action_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize action dicts for comparison."""
+    """
+    Normalize action dicts for comparison.
+    
+    Accepts both formats:
+    - API format: {"type": "...", "payload": {...}}
+    - LLMAgent format: {"action_type": "...", "action_payload": {...}}
+    
+    Always returns API format: {"type": "...", "payload": {...}}
+    """
     if not isinstance(action_dict, dict):
         return {"type": None, "payload": None}
-    action_type = action_dict.get("type")
-    payload = action_dict.get("payload", None)
+    
+    # Accept both "type" and "action_type" keys
+    action_type = action_dict.get("type") or action_dict.get("action_type")
+    
+    # Accept both "payload" and "action_payload" keys
+    payload = action_dict.get("payload") or action_dict.get("action_payload")
+    
     if payload is None:
         return {"type": action_type}
     if isinstance(payload, dict):

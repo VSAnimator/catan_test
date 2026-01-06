@@ -421,10 +421,30 @@ class DrillOptimizer:
         # Create new module
         module = dspy.ChainOfThought(CatanDrillSignature)
         
-        # Try to restore state from the dict
-        # DSPy saves module.__dict__, so we can restore it
-        if hasattr(module, '__dict__'):
-            module.__dict__.update(dspy_dict)
+        # Restore state from the dict
+        # DSPy's save format has 'predict' as a dict with keys: 'signature', 'lm', 'demos', etc.
+        # We need to restore these into the module's predict attribute, not replace it
+        if 'predict' in dspy_dict and hasattr(module, 'predict'):
+            predict_dict = dspy_dict['predict']
+            
+            # Restore signature (most important - contains instructions)
+            if 'signature' in predict_dict and hasattr(module.predict, 'signature'):
+                sig_dict = predict_dict['signature']
+                if 'instructions' in sig_dict:
+                    module.predict.signature.instructions = sig_dict['instructions']
+                    print(f"Restored instructions ({len(sig_dict['instructions'])} chars)", flush=True)
+                if 'fields' in sig_dict:
+                    module.predict.signature.fields = sig_dict['fields']
+            
+            # Restore demos if present
+            if 'demos' in predict_dict:
+                module.predict.demos = predict_dict['demos']
+                print(f"Restored {len(predict_dict['demos'])} demos", flush=True)
+        
+        # Restore other module attributes (but not 'predict')
+        for key, value in dspy_dict.items():
+            if key != 'predict' and key != 'metadata':
+                setattr(module, key, value)
         
         return module
     

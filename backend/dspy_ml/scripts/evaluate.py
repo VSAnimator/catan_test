@@ -33,9 +33,9 @@ def main():
     
     args = parser.parse_args()
     
-    # Initialize DSPy with the model
+    # Initialize DSPy with the model (temperature=0 for deterministic evaluation)
     print(f"Initializing DSPy with model: {args.model}", flush=True)
-    lm = dspy.LM(model=args.model)
+    lm = dspy.LM(model=args.model, temperature=0.0)
     dspy.configure(lm=lm)
     
     # Load dataset
