@@ -176,19 +176,53 @@ class DrillDataset:
             
             incorrect_actions = first_step.get("incorrect_actions")
             
-            # Filter legal actions if correct/incorrect specified
-            if correct_actions or incorrect_actions:
+            # Filter legal actions if correct actions are specified
+            # This matches the API endpoint behavior in routes.py
+            if correct_actions:
+                # Auto-populate incorrect_actions if empty (matching API behavior)
+                if not incorrect_actions:
+                    # Convert all legal actions to action dicts
+                    all_legal_action_dicts = []
+                    for legal_action, legal_payload in la_list:
+                        action_dict = {"type": serialize_action(legal_action)}
+                        if legal_payload is not None:
+                            action_dict["payload"] = serialize_action_payload(legal_payload)
+                        all_legal_action_dicts.append(action_dict)
+                    
+                    # Filter out correct actions to get incorrect actions
+                    def dict_to_hashable(obj):
+                        """Recursively convert dict to hashable tuple."""
+                        if isinstance(obj, dict):
+                            return tuple(sorted((k, dict_to_hashable(v)) for k, v in obj.items()))
+                        elif isinstance(obj, list):
+                            return tuple(dict_to_hashable(item) for item in obj)
+                        else:
+                            return obj
+                    
+                    def canonical_to_tuple(ca):
+                        canonical = _canonical_action_dict(ca)
+                        payload = canonical.get("payload")
+                        if payload:
+                            payload_tuple = dict_to_hashable(payload)
+                        else:
+                            payload_tuple = None
+                        return (canonical.get("type"), payload_tuple)
+                    
+                    correct_action_set = {canonical_to_tuple(ca) for ca in correct_actions}
+                    incorrect_actions = [
+                        action_dict for action_dict in all_legal_action_dicts
+                        if canonical_to_tuple(action_dict) not in correct_action_set
+                    ]
+                
+                # Filter to only include correct + incorrect actions
                 action_dicts_to_include = correct_actions.copy()
                 if incorrect_actions:
                     action_dicts_to_include.extend(incorrect_actions)
-                filtered_la_list = _filter_legal_actions(la_list, action_dicts_to_include)
+                la_list = _filter_legal_actions(la_list, action_dicts_to_include)
                 
-                # If filter rejected everything (common with propose_trade which has payload=None),
-                # keep all legal actions and let the agent see them all (matching API behavior)
-                if filtered_la_list:
-                    la_list = filtered_la_list
-                else:
-                    print(f"Warning: Filter rejected all legal actions for drill {drill_id}, keeping all legal actions", flush=True)
+                if not la_list:
+                    print(f"Warning: Filter rejected all legal actions for drill {drill_id}, skipping", flush=True)
+                    continue
             
             if not la_list:
                 continue

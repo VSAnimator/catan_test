@@ -1684,13 +1684,33 @@ def _filter_legal_actions(
     legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]],
     action_dicts: List[Dict[str, Any]]
 ) -> List[Tuple[Action, Optional[ActionPayload]]]:
-    """Filter legal actions to only include those matching the given action dicts."""
+    """
+    Filter legal actions to only include those matching the given action dicts.
+    
+    Special handling for propose_trade: If action_dicts contains any propose_trade
+    actions and legal_actions contains (PROPOSE_TRADE, None), include it, since
+    agents construct the payload at runtime.
+    """
     filtered = []
+    
+    # Check if any action_dict is a propose_trade
+    has_propose_trade = any(
+        _canonical_action_dict(ad).get("type") == "propose_trade"
+        for ad in action_dicts
+    )
+    
     for legal_action, legal_payload in legal_actions_list:
         legal_action_dict = {"type": serialize_action(legal_action)}
         if legal_payload is not None:
             legal_action_dict["payload"] = serialize_action_payload(legal_payload)
         canonical_legal = _canonical_action_dict(legal_action_dict)
+        
+        # Special case: PROPOSE_TRADE with None payload matches any propose_trade action_dict
+        if has_propose_trade and legal_action == Action.PROPOSE_TRADE and legal_payload is None:
+            filtered.append((legal_action, legal_payload))
+            continue
+        
+        # Regular matching
         for action_dict in action_dicts:
             if _canonical_action_dict(action_dict) == canonical_legal:
                 filtered.append((legal_action, legal_payload))
