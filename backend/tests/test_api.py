@@ -253,6 +253,37 @@ def test_happy_path_full_flow():
     state_after_roll = act_response.json()["new_state"]
     assert state_after_roll["dice_roll"] is not None
     
+    # If a 7 was rolled, we need to handle the robber move before ending turn
+    if state_after_roll["dice_roll"] == 7:
+        # First, handle any discards if needed (players with 8+ resources)
+        # In a 2-player game with no resources, this shouldn't be needed, but handle it
+        while state_after_roll.get("waiting_for_robber_move") and not state_after_roll.get("waiting_for_robber_steal"):
+            # Get legal actions to find a tile to move robber to
+            legal_response = client.get(f"/api/games/{game_id}/legal_actions?player_id=player_0")
+            legal_actions = legal_response.json()["legal_actions"]
+            
+            # Find a move_robber action
+            move_robber_action = None
+            for action in legal_actions:
+                if action["type"] == "move_robber":
+                    move_robber_action = action
+                    break
+            
+            if move_robber_action:
+                # Move robber to a different tile
+                act_response = client.post(
+                    f"/api/games/{game_id}/act",
+                    json={
+                        "player_id": "player_0",
+                        "action": move_robber_action
+                    }
+                )
+                assert act_response.status_code == 200
+                state_after_roll = act_response.json()["new_state"]
+            else:
+                # No valid robber move (shouldn't happen, but break to avoid infinite loop)
+                break
+    
     # End turn
     act_response = client.post(
         f"/api/games/{game_id}/act",
@@ -264,7 +295,7 @@ def test_happy_path_full_flow():
             }
         }
     )
-    assert act_response.status_code == 200
+    assert act_response.status_code == 200, f"Failed to end turn. Response: {act_response.json() if act_response.status_code != 200 else ''}"
     state_after_end = act_response.json()["new_state"]
     assert state_after_end["current_player_index"] == 1  # Should be Bob's turn now
     
@@ -272,8 +303,10 @@ def test_happy_path_full_flow():
     replay_response = client.get(f"/api/games/{game_id}/replay")
     assert replay_response.status_code == 200
     steps = replay_response.json()["steps"]
-    assert len(steps) == 3  # start_game, roll_dice, end_turn
+    # Steps should include start_game, roll_dice, possibly move_robber (if 7 was rolled), and end_turn
+    assert len(steps) >= 3
     assert steps[0]["action"]["type"] == "start_game"
     assert steps[1]["action"]["type"] == "roll_dice"
-    assert steps[2]["action"]["type"] == "end_turn"
+    # Last step should be end_turn
+    assert steps[-1]["action"]["type"] == "end_turn"
 

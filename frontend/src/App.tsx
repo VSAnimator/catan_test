@@ -18,16 +18,24 @@ import {
   getDrill,
   updateDrill,
   deleteDrill,
+  extractDrillCandidates,
+  compareLLMActions,
+  comparePlayerVsLLM,
   type GameState,
   type LegalAction,
   type Player,
   type ReplayResponse,
   type QueryEventsResponse,
   type DrillListItem,
-  type EvaluateAllDrillsResponse
+  type EvaluateAllDrillsResponse,
+  type ExtractDrillCandidatesResponse,
+  type LLMAgreement,
+  type LLMDisagreement,
+  type PlayerVsLLMDisagreement,
+  type PlayerVsLLMAgreement
 } from './api'
 
-type View = 'main' | 'game' | 'replay' | 'agent-watch' | 'event-query' | 'drills'
+type View = 'main' | 'game' | 'replay' | 'agent-watch' | 'event-query' | 'drills' | 'drill-generator'
 
 // Resource icons mapping
 const RESOURCE_ICONS: Record<string, string> = {
@@ -167,6 +175,33 @@ function App() {
   const [feedbackType, setFeedbackType] = useState('general')
   const [lastAction, setLastAction] = useState<LegalAction | null>(null)
   const [lastStepIdx] = useState<number | null>(null)  // Used in feedback submission
+
+  // Drill generator state
+  const [drillGenGameId, setDrillGenGameId] = useState('')
+  const [drillGenNumSteps, setDrillGenNumSteps] = useState(10)
+  const [drillGenComparisonMode, setDrillGenComparisonMode] = useState<'llm_vs_llm' | 'player_vs_llm'>('llm_vs_llm')
+  const [drillGenIncludeSetupActions, setDrillGenIncludeSetupActions] = useState(true)
+  const [drillGenIncludeNonSetupActions, setDrillGenIncludeNonSetupActions] = useState(true)
+  const [drillGenIncludeTradeProposals, setDrillGenIncludeTradeProposals] = useState(true)
+  const [drillGenIncludeBuildingActions, setDrillGenIncludeBuildingActions] = useState(true)
+  const [drillGenIncludeTurnEndingActions, setDrillGenIncludeTurnEndingActions] = useState(true)
+  const [drillGenIncludePlayDevCardActions, setDrillGenIncludePlayDevCardActions] = useState(true)
+  const [drillGenGoodModel, setDrillGenGoodModel] = useState('claude-sonnet-4-5-20250929')
+  const [drillGenWorseModel, setDrillGenWorseModel] = useState('gpt-4o')
+  const [drillGenLLMModel, setDrillGenLLMModel] = useState('claude-sonnet-4-5-20250929')  // For player_vs_llm mode
+  const [drillGenCandidates, setDrillGenCandidates] = useState<ExtractDrillCandidatesResponse | null>(null)
+  const [drillGenDisagreements, setDrillGenDisagreements] = useState<LLMDisagreement[]>([])
+  const [drillGenAgreements, setDrillGenAgreements] = useState<LLMAgreement[]>([])
+  const [drillGenPlayerDisagreements, setDrillGenPlayerDisagreements] = useState<PlayerVsLLMDisagreement[]>([])
+  const [drillGenPlayerAgreements, setDrillGenPlayerAgreements] = useState<PlayerVsLLMAgreement[]>([])
+  const [drillGenReviewMode, setDrillGenReviewMode] = useState<'disagreements' | 'agreements'>('disagreements')
+  const [drillGenCurrentDisagreementIdx, setDrillGenCurrentDisagreementIdx] = useState(0)
+  const [drillGenCurrentAgreementIdx, setDrillGenCurrentAgreementIdx] = useState(0)
+  const [drillGenShowingGoodAction, setDrillGenShowingGoodAction] = useState(true)  // Toggle for visualization
+  const [drillGenLoading, setDrillGenLoading] = useState(false)
+  const [drillGenReviewGameState, setDrillGenReviewGameState] = useState<GameState | null>(null)
+  const [drillGenReviewPlayerId, setDrillGenReviewPlayerId] = useState<string>('')
+  const [showActionSelector, setShowActionSelector] = useState(false)
 
   // Fetch legal actions when game state or player ID changes
   useEffect(() => {
@@ -865,7 +900,7 @@ function App() {
     return gameState.players.find(p => p.id === id) || null
   }
 
-  const renderBoard = (state: GameState | null, highlightPlayerId?: string, legalActionsList?: LegalAction[], isGameView: boolean = true) => {
+  const renderBoard = (state: GameState | null, highlightPlayerId?: string, legalActionsList?: LegalAction[], isGameView: boolean = true, highlightAction?: LegalAction | null, highlightColor?: string | null) => {
     if (!state || state.tiles.length === 0) {
       return <div className="board-placeholder">No board data available</div>
     }
@@ -973,9 +1008,18 @@ function App() {
             return false
           })
           
+          // Check if this intersection should be highlighted for the action
+          const isHighlighted = highlightAction && (
+            (highlightAction.type === 'build_settlement' && highlightAction.payload?.intersection_id === intersection.id) ||
+            (highlightAction.type === 'build_city' && highlightAction.payload?.intersection_id === intersection.id)
+          )
+          
           // Get player color if owned
           const ownerPlayer = intersection.owner ? state.players.find(p => p.id === intersection.owner) : null
           const ownerColor = ownerPlayer?.color || null
+          
+          // Use provided highlight color or default
+          const intersectionHighlightColor = isHighlighted ? (highlightColor || '#4CAF50') : null
           
           return (
           <React.Fragment key={intersection.id}>
@@ -987,6 +1031,11 @@ function App() {
                 ...(ownerColor && {
                   backgroundColor: ownerColor,
                   borderColor: ownerColor
+                }),
+                ...(isHighlighted && intersectionHighlightColor && {
+                  boxShadow: `0 0 20px 5px ${intersectionHighlightColor}80`,
+                  border: `3px solid ${intersectionHighlightColor}`,
+                  zIndex: 30
                 })
               }}
               onClick={() => handleIntersectionClick(intersection.id)}
@@ -1288,6 +1337,13 @@ function App() {
             return false
           })
           
+          // Check if this road should be highlighted for the action
+          const isRoadHighlighted = highlightAction && (
+            (highlightAction.type === 'build_road' && highlightAction.payload?.road_edge_id === road.id) ||
+            (highlightAction.type === 'setup_place_road' && highlightAction.payload?.road_edge_id === road.id)
+          )
+          const roadHighlightColor = isRoadHighlighted ? (highlightColor || '#4CAF50') : null
+          
           // Get player color if owned
           const ownerPlayer = road.owner ? state.players.find(p => p.id === road.owner) : null
           const ownerColor = ownerPlayer?.color || null
@@ -1304,6 +1360,11 @@ function App() {
                 transformOrigin: '0 50%',
                 ...(ownerColor && {
                   backgroundColor: ownerColor
+                }),
+                ...(isRoadHighlighted && roadHighlightColor && {
+                  boxShadow: `0 0 15px 3px ${roadHighlightColor}80`,
+                  border: `2px solid ${roadHighlightColor}`,
+                  zIndex: 25
                 })
               }}
               onClick={() => handleRoadClick(road.id)}
@@ -1648,7 +1709,25 @@ function App() {
                   🎯 Open Drills
                 </button>
                 <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
-                  Run an agent against your curated “best action” drills and see pass/fail.
+                  Run an agent against your curated "best action" drills and see pass/fail.
+                </div>
+              </div>
+            </div>
+
+            <div className="menu-divider">OR</div>
+
+            <div className="menu-section">
+              <h2>⚡ Drill Generator</h2>
+              <div className="form-group">
+                <button
+                  onClick={() => setView('drill-generator')}
+                  className="action-button"
+                  style={{ width: '100%' }}
+                >
+                  ⚡ Generate Drills from Game
+                </button>
+                <div style={{ fontSize: '0.85rem', color: '#666', marginTop: '0.25rem' }}>
+                  Extract non-trivial steps from a game, compare two LLMs, and create drills from disagreements.
                 </div>
               </div>
             </div>
@@ -2617,6 +2696,1489 @@ function App() {
               )}
             </div>
           </div>
+        </main>
+      </div>
+    )
+  }
+
+  // Helper function to create drill from disagreement
+  const createDrillFromDisagreement = async (
+    disagreement: LLMDisagreement,
+    correctAction: LegalAction,
+    incorrectAction: LegalAction
+  ) => {
+    const drillName = prompt('Enter drill name:')
+    if (!drillName) return
+
+    const guidelineText = prompt('Enter guideline text (optional):') || null
+
+    setDrillGenLoading(true)
+    setError(null)
+    try {
+      const result = await createDrill({
+        name: drillName,
+        guideline_text: guidelineText,
+        source_game_id: drillGenGameId,
+        source_step_idx: disagreement.step_idx,
+        player_id: disagreement.player_id,
+        steps: [{
+          player_id: disagreement.player_id,
+          state: disagreement.state_after_json || disagreement.state_before_json,
+          expected_action: correctAction,
+          correct_actions: [correctAction],
+          incorrect_actions: [incorrectAction]
+        }],
+        metadata: {
+          generated_from_disagreement: true,
+          good_model: drillGenGoodModel,
+          worse_model: drillGenWorseModel
+        }
+      })
+      alert(`Drill #${result.drill_id} created successfully!`)
+      // Move to next disagreement
+      if (drillGenCurrentDisagreementIdx < drillGenDisagreements.length - 1) {
+        setDrillGenCurrentDisagreementIdx(drillGenCurrentDisagreementIdx + 1)
+        const next = drillGenDisagreements[drillGenCurrentDisagreementIdx + 1]
+        setDrillGenReviewGameState(next.state_after_json || next.state_before_json)
+        setDrillGenReviewPlayerId(next.player_id)
+        setDrillGenShowingGoodAction(true)
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create drill')
+    } finally {
+      setDrillGenLoading(false)
+    }
+  }
+
+  // Helper function to create drill from agreement (LLM vs LLM or Player vs LLM)
+  // This creates a drill with empty incorrect_actions, which forces the LLM to consider all legal actions
+  const createDrillFromAgreement = async (
+    agreement: LLMAgreement | PlayerVsLLMAgreement
+  ) => {
+    const drillName = prompt('Enter drill name:')
+    if (!drillName) return
+
+    const guidelineText = prompt('Enter guideline text (optional):') || null
+
+    setDrillGenLoading(true)
+    setError(null)
+    try {
+      const metadata: any = {
+        generated_from_agreement: true
+      }
+      if (drillGenComparisonMode === 'llm_vs_llm') {
+        metadata.good_model = drillGenGoodModel
+        metadata.worse_model = drillGenWorseModel
+      } else {
+        metadata.player_id = 'player_0'
+        metadata.llm_model = drillGenLLMModel
+      }
+
+      const result = await createDrill({
+        name: drillName,
+        guideline_text: guidelineText,
+        source_game_id: drillGenGameId,
+        source_step_idx: agreement.step_idx,
+        player_id: agreement.player_id,
+        steps: [{
+          player_id: agreement.player_id,
+          state: agreement.state_after_json || agreement.state_before_json,
+          expected_action: agreement.agreed_action,
+          correct_actions: [agreement.agreed_action],
+          incorrect_actions: []  // Empty - forces LLM to consider all legal actions
+        }],
+        metadata
+      })
+      alert(`Drill #${result.drill_id} created successfully!`)
+      // Move to next agreement
+      if (drillGenComparisonMode === 'llm_vs_llm') {
+        if (drillGenCurrentAgreementIdx < drillGenAgreements.length - 1) {
+          setDrillGenCurrentAgreementIdx(drillGenCurrentAgreementIdx + 1)
+          const next = drillGenAgreements[drillGenCurrentAgreementIdx + 1]
+          setDrillGenReviewGameState(next.state_after_json || next.state_before_json)
+          setDrillGenReviewPlayerId(next.player_id)
+        }
+      } else {
+        if (drillGenCurrentAgreementIdx < drillGenPlayerAgreements.length - 1) {
+          setDrillGenCurrentAgreementIdx(drillGenCurrentAgreementIdx + 1)
+          const next = drillGenPlayerAgreements[drillGenCurrentAgreementIdx + 1]
+          setDrillGenReviewGameState(next.state_after_json || next.state_before_json)
+          setDrillGenReviewPlayerId(next.player_id)
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create drill')
+    } finally {
+      setDrillGenLoading(false)
+    }
+  }
+
+  // Drill Generator View
+  if (view === 'drill-generator') {
+    const currentDisagreement = drillGenReviewMode === 'disagreements' && drillGenDisagreements.length > 0 && drillGenCurrentDisagreementIdx >= 0 && drillGenCurrentDisagreementIdx < drillGenDisagreements.length
+      ? drillGenDisagreements[drillGenCurrentDisagreementIdx]
+      : null
+
+    return (
+      <div className="app">
+        <header>
+          <h1>⚡ Drill Generator</h1>
+          <button onClick={() => setView('main')} className="back-button">
+            Back to Menu
+          </button>
+        </header>
+        <main className="game-main">
+          {error && <div className="error">Error: {error}</div>}
+
+          {/* Configuration Panel */}
+          <div style={{ marginBottom: '2rem', padding: '1.5rem', backgroundColor: '#f5f5f5', borderRadius: '8px' }}>
+            <h2 style={{ marginTop: 0 }}>Configuration</h2>
+            
+            {/* Comparison Mode Selector */}
+            <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#e3f2fd', borderRadius: '4px' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                Comparison Mode:
+              </label>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button
+                  onClick={() => {
+                    setDrillGenComparisonMode('llm_vs_llm')
+                    setDrillGenDisagreements([])
+                    setDrillGenAgreements([])
+                    setDrillGenPlayerDisagreements([])
+                    setDrillGenPlayerAgreements([])
+                  }}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    backgroundColor: drillGenComparisonMode === 'llm_vs_llm' ? '#2196F3' : '#ccc',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  LLM vs LLM
+                </button>
+                <button
+                  onClick={() => {
+                    setDrillGenComparisonMode('player_vs_llm')
+                    setDrillGenDisagreements([])
+                    setDrillGenAgreements([])
+                    setDrillGenPlayerDisagreements([])
+                    setDrillGenPlayerAgreements([])
+                  }}
+                  style={{
+                    padding: '0.5rem 1rem',
+                    backgroundColor: drillGenComparisonMode === 'player_vs_llm' ? '#2196F3' : '#ccc',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Player_0 vs LLM
+                </button>
+              </div>
+              {drillGenComparisonMode === 'player_vs_llm' && (
+                <div style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: '#666' }}>
+                  Compare player_0's actual actions (from game history) against what an LLM would choose
+                </div>
+              )}
+            </div>
+            
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '1rem' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                  Game ID:
+                </label>
+                <input
+                  type="text"
+                  value={drillGenGameId}
+                  onChange={(e) => setDrillGenGameId(e.target.value)}
+                  placeholder="e.g., e74509c8-a115-48e2-acf0-a070176affbc"
+                  style={{ width: '100%', padding: '0.5rem' }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                  Number of Steps:
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={drillGenNumSteps}
+                  onChange={(e) => setDrillGenNumSteps(parseInt(e.target.value) || 10)}
+                  style={{ width: '100%', padding: '0.5rem' }}
+                />
+              </div>
+              {drillGenComparisonMode === 'llm_vs_llm' ? (
+                <>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                      Good LLM Model:
+                    </label>
+                    <input
+                      type="text"
+                      value={drillGenGoodModel}
+                      onChange={(e) => setDrillGenGoodModel(e.target.value)}
+                      placeholder="claude-sonnet-4-5-20250929"
+                      style={{ width: '100%', padding: '0.5rem' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                      Worse LLM Model:
+                    </label>
+                    <input
+                      type="text"
+                      value={drillGenWorseModel}
+                      onChange={(e) => setDrillGenWorseModel(e.target.value)}
+                      placeholder="gpt-4o"
+                      style={{ width: '100%', padding: '0.5rem' }}
+                    />
+                  </div>
+                </>
+              ) : (
+                <div>
+                  <label style={{ display: 'block', marginBottom: '0.5rem', fontWeight: 'bold' }}>
+                    LLM Model to Compare Against:
+                  </label>
+                  <input
+                    type="text"
+                    value={drillGenLLMModel}
+                    onChange={(e) => setDrillGenLLMModel(e.target.value)}
+                    placeholder="claude-sonnet-4-5-20250929"
+                    style={{ width: '100%', padding: '0.5rem' }}
+                  />
+                </div>
+              )}
+            </div>
+            
+            {/* Action Type Filters */}
+            <div style={{ marginTop: '1.5rem', padding: '1rem', backgroundColor: '#fff9e6', borderRadius: '4px', border: '1px solid #ffd54f' }}>
+              <h3 style={{ marginTop: 0, marginBottom: '0.75rem' }}>Action Type Filters</h3>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={drillGenIncludeSetupActions}
+                    onChange={(e) => setDrillGenIncludeSetupActions(e.target.checked)}
+                  />
+                  <span>Setup Actions</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={drillGenIncludeNonSetupActions}
+                    onChange={(e) => setDrillGenIncludeNonSetupActions(e.target.checked)}
+                  />
+                  <span>Non-Setup Actions</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={drillGenIncludeTradeProposals}
+                    onChange={(e) => setDrillGenIncludeTradeProposals(e.target.checked)}
+                  />
+                  <span>Trade Proposals</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={drillGenIncludeBuildingActions}
+                    onChange={(e) => setDrillGenIncludeBuildingActions(e.target.checked)}
+                  />
+                  <span>Building (Roads/Settlements/Cities/Dev Cards)</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={drillGenIncludeTurnEndingActions}
+                    onChange={(e) => setDrillGenIncludeTurnEndingActions(e.target.checked)}
+                  />
+                  <span>Turn-Ending Actions</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={drillGenIncludePlayDevCardActions}
+                    onChange={(e) => setDrillGenIncludePlayDevCardActions(e.target.checked)}
+                  />
+                  <span>Playing Dev Cards</span>
+                </label>
+              </div>
+            </div>
+            
+            <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
+              <button
+                onClick={async () => {
+                  if (!drillGenGameId.trim()) {
+                    setError('Please enter a game ID')
+                    return
+                  }
+                  setDrillGenLoading(true)
+                  setError(null)
+                  try {
+                    const result = await extractDrillCandidates(drillGenGameId, {
+                      num_steps: drillGenNumSteps,
+                      player_id: drillGenComparisonMode === 'player_vs_llm' ? 'player_0' : null,
+                      include_setup_actions: drillGenIncludeSetupActions,
+                      include_non_setup_actions: drillGenIncludeNonSetupActions,
+                      include_trade_proposals: drillGenIncludeTradeProposals,
+                      include_building_actions: drillGenIncludeBuildingActions,
+                      include_turn_ending_actions: drillGenIncludeTurnEndingActions,
+                      include_play_dev_card_actions: drillGenIncludePlayDevCardActions
+                    })
+                    setDrillGenCandidates(result)
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Failed to extract candidates')
+                  } finally {
+                    setDrillGenLoading(false)
+                  }
+                }}
+                disabled={drillGenLoading || !drillGenGameId.trim()}
+                className="action-button"
+              >
+                {drillGenLoading ? 'Extracting...' : 'Extract Candidates'}
+              </button>
+              <button
+                onClick={async () => {
+                  if (!drillGenCandidates || drillGenCandidates.candidates.length === 0) {
+                    setError('Please extract candidates first')
+                    return
+                  }
+                  setDrillGenLoading(true)
+                  setError(null)
+                  try {
+                    if (drillGenComparisonMode === 'llm_vs_llm') {
+                      const result = await compareLLMActions(drillGenGameId, {
+                        candidates: drillGenCandidates.candidates,
+                        good_model: drillGenGoodModel,
+                        worse_model: drillGenWorseModel
+                      })
+                      console.log('[Drill Generator] Comparison result:', result)
+                      setDrillGenDisagreements(result.disagreements)
+                      setDrillGenAgreements(result.agreements)
+                      setDrillGenCurrentDisagreementIdx(0)
+                      setDrillGenCurrentAgreementIdx(0)
+                      // Set up first item for review - prefer current mode, but fall back to available results
+                      let stateToSet: GameState | null = null
+                      let playerIdToSet: string | null = null
+                      if (drillGenReviewMode === 'disagreements' && result.disagreements.length > 0) {
+                        const first = result.disagreements[0]
+                        stateToSet = first.state_after_json || first.state_before_json
+                        playerIdToSet = first.player_id
+                      } else if (drillGenReviewMode === 'agreements' && result.agreements.length > 0) {
+                        const first = result.agreements[0]
+                        stateToSet = first.state_after_json || first.state_before_json
+                        playerIdToSet = first.player_id
+                      } else if (result.disagreements.length > 0) {
+                        // Fall back to disagreements if current mode has no results
+                        const first = result.disagreements[0]
+                        stateToSet = first.state_after_json || first.state_before_json
+                        playerIdToSet = first.player_id
+                        setDrillGenReviewMode('disagreements')
+                      } else if (result.agreements.length > 0) {
+                        // Fall back to agreements if disagreements also empty
+                        const first = result.agreements[0]
+                        stateToSet = first.state_after_json || first.state_before_json
+                        playerIdToSet = first.player_id
+                        setDrillGenReviewMode('agreements')
+                      }
+                      if (stateToSet) {
+                        console.log('[Drill Generator] Setting review state:', stateToSet ? 'has state' : 'null', 'player:', playerIdToSet)
+                        setDrillGenReviewGameState(stateToSet)
+                        setDrillGenReviewPlayerId(playerIdToSet!)
+                      } else {
+                        console.log('[Drill Generator] No state to set - no results found')
+                      }
+                    } else {
+                      // player_vs_llm mode
+                      const result = await comparePlayerVsLLM(drillGenGameId, {
+                        candidates: drillGenCandidates.candidates,
+                        player_id: 'player_0',
+                        llm_model: drillGenLLMModel
+                      })
+                      console.log('[Drill Generator] Player vs LLM comparison result:', result)
+                      setDrillGenPlayerDisagreements(result.disagreements)
+                      setDrillGenPlayerAgreements(result.agreements)
+                      setDrillGenCurrentDisagreementIdx(0)
+                      setDrillGenCurrentAgreementIdx(0)
+                      // Set up first item for review - prefer current mode, but fall back to available results
+                      let stateToSet: GameState | null = null
+                      let playerIdToSet: string | null = null
+                      if (drillGenReviewMode === 'disagreements' && result.disagreements.length > 0) {
+                        const first = result.disagreements[0]
+                        stateToSet = first.state_after_json || first.state_before_json
+                        playerIdToSet = first.player_id
+                      } else if (drillGenReviewMode === 'agreements' && result.agreements.length > 0) {
+                        const first = result.agreements[0]
+                        stateToSet = first.state_after_json || first.state_before_json
+                        playerIdToSet = first.player_id
+                      } else if (result.disagreements.length > 0) {
+                        // Fall back to disagreements if current mode has no results
+                        const first = result.disagreements[0]
+                        stateToSet = first.state_after_json || first.state_before_json
+                        playerIdToSet = first.player_id
+                        setDrillGenReviewMode('disagreements')
+                      } else if (result.agreements.length > 0) {
+                        // Fall back to agreements if disagreements also empty
+                        const first = result.agreements[0]
+                        stateToSet = first.state_after_json || first.state_before_json
+                        playerIdToSet = first.player_id
+                        setDrillGenReviewMode('agreements')
+                      }
+                      if (stateToSet) {
+                        console.log('[Drill Generator] Setting review state:', stateToSet ? 'has state' : 'null', 'player:', playerIdToSet)
+                        setDrillGenReviewGameState(stateToSet)
+                        setDrillGenReviewPlayerId(playerIdToSet!)
+                      } else {
+                        console.log('[Drill Generator] No state to set - no results found')
+                      }
+                    }
+                  } catch (err) {
+                    setError(err instanceof Error ? err.message : 'Failed to compare actions')
+                  } finally {
+                    setDrillGenLoading(false)
+                  }
+                }}
+                disabled={drillGenLoading || !drillGenCandidates || drillGenCandidates.candidates.length === 0}
+                className="action-button"
+              >
+                {drillGenLoading ? 'Comparing...' : 'Run Comparison'}
+              </button>
+            </div>
+          </div>
+
+          {/* Results Display */}
+          {drillGenCandidates && (
+            <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#e3f2fd', borderRadius: '4px' }}>
+              <strong>Candidates found:</strong> {drillGenCandidates.candidates.length}
+            </div>
+          )}
+          {/* Results Summary */}
+          {((drillGenComparisonMode === 'llm_vs_llm' && (drillGenDisagreements.length > 0 || drillGenAgreements.length > 0)) ||
+            (drillGenComparisonMode === 'player_vs_llm' && (drillGenPlayerDisagreements.length > 0 || drillGenPlayerAgreements.length > 0))) && (
+            <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#e3f2fd', borderRadius: '4px' }}>
+              <div style={{ display: 'flex', gap: '2rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                <div>
+                  <strong>Disagreements:</strong> {drillGenComparisonMode === 'llm_vs_llm' ? drillGenDisagreements.length : drillGenPlayerDisagreements.length}
+                </div>
+                <div>
+                  <strong>Agreements:</strong> {drillGenComparisonMode === 'llm_vs_llm' ? drillGenAgreements.length : drillGenPlayerAgreements.length}
+                </div>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <label style={{ fontWeight: 'bold' }}>Review Mode:</label>
+                  <button
+                    onClick={() => {
+                      setDrillGenReviewMode('disagreements')
+                      setDrillGenCurrentDisagreementIdx(0)
+                      if (drillGenComparisonMode === 'llm_vs_llm' && drillGenDisagreements.length > 0) {
+                        const first = drillGenDisagreements[0]
+                        setDrillGenReviewGameState(first.state_after_json || first.state_before_json)
+                        setDrillGenReviewPlayerId(first.player_id)
+                      } else if (drillGenComparisonMode === 'player_vs_llm' && drillGenPlayerDisagreements.length > 0) {
+                        const first = drillGenPlayerDisagreements[0]
+                        setDrillGenReviewGameState(first.state_after_json || first.state_before_json)
+                        setDrillGenReviewPlayerId(first.player_id)
+                      }
+                    }}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      backgroundColor: drillGenReviewMode === 'disagreements' ? '#ff9800' : '#ccc',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Disagreements
+                  </button>
+                  <button
+                    onClick={() => {
+                      setDrillGenReviewMode('agreements')
+                      setDrillGenCurrentAgreementIdx(0)
+                      if (drillGenComparisonMode === 'llm_vs_llm' && drillGenAgreements.length > 0) {
+                        const first = drillGenAgreements[0]
+                        setDrillGenReviewGameState(first.state_after_json || first.state_before_json)
+                        setDrillGenReviewPlayerId(first.player_id)
+                      } else if (drillGenComparisonMode === 'player_vs_llm' && drillGenPlayerAgreements.length > 0) {
+                        const first = drillGenPlayerAgreements[0]
+                        setDrillGenReviewGameState(first.state_after_json || first.state_before_json)
+                        setDrillGenReviewPlayerId(first.player_id)
+                      }
+                    }}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      backgroundColor: drillGenReviewMode === 'agreements' ? '#4CAF50' : '#ccc',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Agreements
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Review Interface - Disagreements */}
+          {drillGenReviewMode === 'disagreements' && drillGenDisagreements.length > 0 && drillGenReviewGameState && (() => {
+            const currentDisagreement = drillGenDisagreements[drillGenCurrentDisagreementIdx]
+            return currentDisagreement ? (
+            <div style={{ marginTop: '2rem' }}>
+              <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#f3e5f5', borderRadius: '4px' }}>
+                <h2 style={{ marginTop: 0 }}>
+                  Reviewing Disagreement {drillGenCurrentDisagreementIdx + 1} of {drillGenDisagreements.length}
+                </h2>
+                <div style={{ fontSize: '0.9rem', color: '#666', marginBottom: '1rem' }}>
+                  Step Index: {currentDisagreement.step_idx} | Player: {currentDisagreement.player_id}
+                </div>
+
+                {/* Toggle Button */}
+                <div style={{ marginBottom: '1rem' }}>
+                  <button
+                    onClick={() => setDrillGenShowingGoodAction(!drillGenShowingGoodAction)}
+                    className="action-button"
+                    style={{
+                      backgroundColor: drillGenShowingGoodAction ? '#4CAF50' : '#f44336',
+                      color: 'white',
+                      padding: '0.75rem 1.5rem',
+                      fontSize: '1rem'
+                    }}
+                  >
+                    {drillGenShowingGoodAction ? '✓ Showing Good LLM Action' : '✗ Showing Worse LLM Action'}
+                  </button>
+                </div>
+
+                {/* Board Visualization with Player Info */}
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                  <div key={`llm-vs-llm-${drillGenCurrentDisagreementIdx}-${drillGenShowingGoodAction ? 'good' : 'worse'}`}>
+                    {(() => {
+                      const displayState = drillGenShowingGoodAction 
+                        ? (currentDisagreement.state_after_good_action_json || currentDisagreement.state_before_json)  // Don't fall back to state_after_json when showing good action
+                        : (currentDisagreement.state_after_worse_action_json || currentDisagreement.state_before_json)  // Don't fall back to state_after_json when showing worse action
+                      // Debug: Check settlement locations in the state
+                      if (displayState && displayState.intersections) {
+                        const playerSettlements = displayState.intersections
+                          .filter((i: any) => i.owner === drillGenReviewPlayerId && i.building_type === 'settlement')
+                          .map((i: any) => i.id)
+                        const playerCities = displayState.intersections
+                          .filter((i: any) => i.owner === drillGenReviewPlayerId && i.building_type === 'city')
+                          .map((i: any) => i.id)
+                        console.log('[LLM vs LLM] Toggle:', drillGenShowingGoodAction ? 'good' : 'worse', 
+                          'Settlements at intersections:', playerSettlements, 
+                          'Cities at intersections:', playerCities,
+                          'Using state_after_good_action_json:', drillGenShowingGoodAction && !!currentDisagreement.state_after_good_action_json,
+                          'Using state_after_worse_action_json:', !drillGenShowingGoodAction && !!currentDisagreement.state_after_worse_action_json)
+                      }
+                      return renderBoard(
+                        displayState, 
+                        drillGenReviewPlayerId, 
+                        [], 
+                        false,
+                        null,
+                        null
+                      )
+                    })()}
+                    {/* Action Highlighting Overlay */}
+                    <div style={{ marginTop: '0.5rem', padding: '0.5rem', backgroundColor: drillGenShowingGoodAction ? '#e8f5e9' : '#ffebee', borderRadius: '4px', border: `2px solid ${drillGenShowingGoodAction ? '#4CAF50' : '#f44336'}` }}>
+                      <div style={{ fontWeight: 'bold', color: drillGenShowingGoodAction ? '#2e7d32' : '#c62828', marginBottom: '0.25rem' }}>
+                        {drillGenShowingGoodAction ? '✓ Good LLM Action' : '✗ Worse LLM Action'}
+                      </div>
+                      <div style={{ fontSize: '0.9rem' }}>
+                        {(() => {
+                          const action = drillGenShowingGoodAction ? currentDisagreement.good_action : currentDisagreement.worse_action
+                          if (action.type === 'build_settlement' && action.payload?.intersection_id) {
+                            return `Build Settlement at Intersection ${action.payload.intersection_id}`
+                          } else if (action.type === 'build_city' && action.payload?.intersection_id) {
+                            return `Build City at Intersection ${action.payload.intersection_id}`
+                          } else if (action.type === 'build_road' && action.payload?.road_edge_id) {
+                            return `Build Road on Edge ${action.payload.road_edge_id}`
+                          } else if (action.type === 'move_robber' && action.payload?.tile_id) {
+                            return `Move Robber to Tile ${action.payload.tile_id}`
+                          } else {
+                            return `${action.type}${action.payload ? `: ${JSON.stringify(action.payload)}` : ''}`
+                          }
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Player Information Panel */}
+                  {(() => {
+                    const displayState = drillGenShowingGoodAction 
+                      ? (currentDisagreement.state_after_good_action_json || currentDisagreement.state_after_json || currentDisagreement.state_before_json)
+                      : (currentDisagreement.state_after_worse_action_json || currentDisagreement.state_after_json || currentDisagreement.state_before_json)
+                    return displayState && (
+                    <div className="game-sidebar" style={{ padding: '1rem', backgroundColor: '#f9f9f9', borderRadius: '4px', border: '1px solid #ddd' }}>
+                      <h3 style={{ marginTop: 0 }}>Player Information</h3>
+                      {displayState.players.map((player: Player) => {
+                        const isReviewPlayer = player.id === drillGenReviewPlayerId
+                        const totalResources = Object.values(player.resources).reduce((a: number, b: number) => a + b, 0)
+                        const resourceEntries = Object.entries(player.resources)
+                        const resourcesDisplay = isReviewPlayer 
+                          ? resourceEntries.map(([resource, amount]) => `${RESOURCE_ICONS[resource] || ''} ${resource}: ${amount}`).join(', ')
+                          : `${totalResources} total`
+                        
+                        return (
+                          <div 
+                            key={player.id} 
+                            style={{
+                              borderLeft: `6px solid ${player.color || '#ccc'}`,
+                              padding: '0.5rem',
+                              marginBottom: '0.5rem',
+                              backgroundColor: isReviewPlayer ? '#e3f2fd' : '#fff',
+                              borderRadius: '4px',
+                              border: `2px solid ${player.color || '#ddd'}`,
+                              fontSize: '0.85rem'
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.15rem' }}>
+                              <div>
+                                <strong style={{ color: player.color || '#333' }}>{player.name}</strong>
+                                {isReviewPlayer && <span style={{ color: '#1976d2', marginLeft: '0.5rem' }}>(Reviewing)</span>}
+                              </div>
+                              <div><strong>VP:</strong> {player.victory_points}</div>
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', fontSize: '0.8rem', alignItems: 'center' }}>
+                              <div><strong>Resources:</strong> {resourcesDisplay}</div>
+                              <div>
+                                <strong>Dev Cards:</strong> {player.dev_cards?.length || 0}
+                                {isReviewPlayer && player.dev_cards && player.dev_cards.length > 0 && (
+                                  <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: '#666' }}>
+                                    ({player.dev_cards.join(', ')})
+                                  </span>
+                                )}
+                              </div>
+                              <div>Buildings: {player.settlements_built}S/{player.cities_built}C</div>
+                              <div>Roads: {player.roads_built}</div>
+                              {player.longest_road && <div style={{ color: '#1976d2' }}>🏆</div>}
+                              {player.largest_army && <div style={{ color: '#1976d2' }}>⚔️</div>}
+                              {player.knights_played > 0 && <div style={{ color: '#1976d2' }}>⚔️{player.knights_played}</div>}
+                            </div>
+                          </div>
+                        )
+                      })}
+                      
+                      {/* Game State Info */}
+                      <div style={{ marginTop: '1rem', padding: '0.75rem', backgroundColor: '#fff', borderRadius: '4px', border: '1px solid #ddd', fontSize: '0.85rem' }}>
+                        <div><strong>Turn:</strong> {displayState.turn_number}</div>
+                        <div><strong>Phase:</strong> {displayState.phase}</div>
+                        {displayState.dice_roll && (
+                          <div><strong>Last Dice Roll:</strong> {displayState.dice_roll}</div>
+                        )}
+                        {displayState.robber_tile_id !== null && (
+                          <div><strong>Robber:</strong> Tile {displayState.robber_tile_id}</div>
+                        )}
+                      </div>
+                    </div>
+                    )
+                  })()}
+                </div>
+
+                {/* Action Display */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                  <div style={{ padding: '1rem', backgroundColor: '#e8f5e9', borderRadius: '4px' }}>
+                    <h3 style={{ marginTop: 0, color: '#2e7d32' }}>Good LLM Action:</h3>
+                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                      {JSON.stringify(currentDisagreement.good_action, null, 2)}
+                    </pre>
+                  </div>
+                  <div style={{ padding: '1rem', backgroundColor: '#ffebee', borderRadius: '4px' }}>
+                    <h3 style={{ marginTop: 0, color: '#c62828' }}>Worse LLM Action:</h3>
+                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                      {JSON.stringify(currentDisagreement.worse_action, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+
+                {/* Legal Actions */}
+                <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
+                  <h3 style={{ marginTop: 0 }}>Legal Actions ({currentDisagreement.legal_actions.length}):</h3>
+                  <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                    {currentDisagreement.legal_actions.map((action, idx) => (
+                      <div key={idx} style={{ marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                          {JSON.stringify(action, null, 2)}
+                        </pre>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={async () => {
+                      await createDrillFromDisagreement(currentDisagreement, currentDisagreement.good_action, currentDisagreement.worse_action)
+                    }}
+                    className="action-button"
+                    style={{ backgroundColor: '#4CAF50', color: 'white' }}
+                  >
+                    Use Good Action as Correct
+                  </button>
+                  <button
+                    onClick={async () => {
+                      await createDrillFromDisagreement(currentDisagreement, currentDisagreement.worse_action, currentDisagreement.good_action)
+                    }}
+                    className="action-button"
+                    style={{ backgroundColor: '#f44336', color: 'white' }}
+                  >
+                    Use Worse Action as Correct
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowActionSelector(true)
+                    }}
+                    className="action-button"
+                    style={{ backgroundColor: '#2196F3', color: 'white' }}
+                  >
+                    Specify Correct Action
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (drillGenCurrentDisagreementIdx < drillGenDisagreements.length - 1) {
+                        setDrillGenCurrentDisagreementIdx(drillGenCurrentDisagreementIdx + 1)
+                        const next = drillGenDisagreements[drillGenCurrentDisagreementIdx + 1]
+                        setDrillGenReviewGameState(next.state_after_json || next.state_before_json)
+                        setDrillGenReviewPlayerId(next.player_id)
+                        setDrillGenShowingGoodAction(true)
+                      }
+                    }}
+                    disabled={drillGenCurrentDisagreementIdx >= drillGenDisagreements.length - 1}
+                    className="action-button"
+                  >
+                    Skip
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (drillGenCurrentDisagreementIdx > 0) {
+                        setDrillGenCurrentDisagreementIdx(drillGenCurrentDisagreementIdx - 1)
+                        const prev = drillGenDisagreements[drillGenCurrentDisagreementIdx - 1]
+                        setDrillGenReviewGameState(prev.state_after_json || prev.state_before_json)
+                        setDrillGenReviewPlayerId(prev.player_id)
+                        setDrillGenShowingGoodAction(true)
+                      }
+                    }}
+                    disabled={drillGenCurrentDisagreementIdx === 0}
+                    className="action-button"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (drillGenCurrentDisagreementIdx < drillGenDisagreements.length - 1) {
+                        setDrillGenCurrentDisagreementIdx(drillGenCurrentDisagreementIdx + 1)
+                        const next = drillGenDisagreements[drillGenCurrentDisagreementIdx + 1]
+                        setDrillGenReviewGameState(next.state_after_json || next.state_before_json)
+                        setDrillGenReviewPlayerId(next.player_id)
+                        setDrillGenShowingGoodAction(true)
+                      }
+                    }}
+                    disabled={drillGenCurrentDisagreementIdx >= drillGenDisagreements.length - 1}
+                    className="action-button"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </div>
+            ) : null
+          })()}
+
+          {/* Review Interface - Agreements (LLM vs LLM) */}
+          {drillGenComparisonMode === 'llm_vs_llm' && drillGenReviewMode === 'agreements' && drillGenAgreements.length > 0 && drillGenReviewGameState && (() => {
+            const currentAgreement = drillGenAgreements[drillGenCurrentAgreementIdx]
+            return currentAgreement ? (
+            <div style={{ marginTop: '2rem' }}>
+              <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#e8f5e9', borderRadius: '4px' }}>
+                <h2 style={{ marginTop: 0 }}>
+                  Reviewing Agreement {drillGenCurrentAgreementIdx + 1} of {drillGenAgreements.length}
+                </h2>
+                <div style={{ fontSize: '0.9rem', color: '#666', marginBottom: '1rem' }}>
+                  Step Index: {currentAgreement.step_idx} | Player: {currentAgreement.player_id}
+                </div>
+                <div style={{ padding: '0.75rem', backgroundColor: '#c8e6c9', borderRadius: '4px', marginBottom: '1rem' }}>
+                  <strong>Both LLMs chose the same action:</strong> This is a good candidate for a drill where the LLM must choose the correct action from all legal options.
+                </div>
+
+                {/* Board Visualization */}
+                <div style={{ marginBottom: '1rem' }}>
+                  {renderBoard(
+                    drillGenReviewGameState, 
+                    drillGenReviewPlayerId, 
+                    [], 
+                    false,
+                    null,
+                    null
+                  )}
+                  {/* Action Highlighting Overlay */}
+                  <div style={{ marginTop: '0.5rem', padding: '0.5rem', backgroundColor: '#e8f5e9', borderRadius: '4px', border: '2px solid #4CAF50' }}>
+                    <div style={{ fontWeight: 'bold', color: '#2e7d32', marginBottom: '0.25rem' }}>
+                      ✓ Agreed Action (Both LLMs)
+                    </div>
+                    <div style={{ fontSize: '0.9rem' }}>
+                      {(() => {
+                        const action = currentAgreement.agreed_action
+                        if (action.type === 'build_settlement' && action.payload?.intersection_id) {
+                          return `Build Settlement at Intersection ${action.payload.intersection_id}`
+                        } else if (action.type === 'build_city' && action.payload?.intersection_id) {
+                          return `Build City at Intersection ${action.payload.intersection_id}`
+                        } else if (action.type === 'build_road' && action.payload?.road_edge_id) {
+                          return `Build Road on Edge ${action.payload.road_edge_id}`
+                        } else if (action.type === 'move_robber' && action.payload?.tile_id) {
+                          return `Move Robber to Tile ${action.payload.tile_id}`
+                        } else {
+                          return `${action.type}${action.payload ? `: ${JSON.stringify(action.payload)}` : ''}`
+                        }
+                      })()}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Action Display */}
+                <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#e8f5e9', borderRadius: '4px' }}>
+                  <h3 style={{ marginTop: 0, color: '#2e7d32' }}>Agreed Action (Both LLMs):</h3>
+                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                    {JSON.stringify(currentAgreement.agreed_action, null, 2)}
+                  </pre>
+                </div>
+
+                {/* Legal Actions */}
+                <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
+                  <h3 style={{ marginTop: 0 }}>Legal Actions ({currentAgreement.legal_actions.length}):</h3>
+                  <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                    {currentAgreement.legal_actions.map((action, idx) => (
+                      <div key={idx} style={{ marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                          {JSON.stringify(action, null, 2)}
+                        </pre>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={async () => {
+                      await createDrillFromAgreement(currentAgreement)
+                    }}
+                    className="action-button"
+                    style={{ backgroundColor: '#4CAF50', color: 'white' }}
+                  >
+                    Create Drill (All Actions Available)
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (drillGenCurrentAgreementIdx < drillGenAgreements.length - 1) {
+                        setDrillGenCurrentAgreementIdx(drillGenCurrentAgreementIdx + 1)
+                        const next = drillGenAgreements[drillGenCurrentAgreementIdx + 1]
+                        setDrillGenReviewGameState(next.state_after_json || next.state_before_json)
+                        setDrillGenReviewPlayerId(next.player_id)
+                      }
+                    }}
+                    disabled={drillGenCurrentAgreementIdx >= drillGenAgreements.length - 1}
+                    className="action-button"
+                  >
+                    Skip
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (drillGenCurrentAgreementIdx > 0) {
+                        setDrillGenCurrentAgreementIdx(drillGenCurrentAgreementIdx - 1)
+                        const prev = drillGenAgreements[drillGenCurrentAgreementIdx - 1]
+                        setDrillGenReviewGameState(prev.state_after_json || prev.state_before_json)
+                        setDrillGenReviewPlayerId(prev.player_id)
+                      }
+                    }}
+                    disabled={drillGenCurrentAgreementIdx === 0}
+                    className="action-button"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (drillGenCurrentAgreementIdx < drillGenAgreements.length - 1) {
+                        setDrillGenCurrentAgreementIdx(drillGenCurrentAgreementIdx + 1)
+                        const next = drillGenAgreements[drillGenCurrentAgreementIdx + 1]
+                        setDrillGenReviewGameState(next.state_after_json || next.state_before_json)
+                        setDrillGenReviewPlayerId(next.player_id)
+                      }
+                    }}
+                    disabled={drillGenCurrentAgreementIdx >= drillGenAgreements.length - 1}
+                    className="action-button"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </div>
+            ) : null
+          })()}
+
+          {/* Review Interface - Disagreements (Player vs LLM) */}
+          {drillGenComparisonMode === 'player_vs_llm' && drillGenReviewMode === 'disagreements' && drillGenPlayerDisagreements.length > 0 && drillGenReviewGameState && (() => {
+            const currentDisagreement = drillGenPlayerDisagreements[drillGenCurrentDisagreementIdx]
+            return currentDisagreement ? (
+            <div style={{ marginTop: '2rem' }}>
+              <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#f3e5f5', borderRadius: '4px' }}>
+                <h2 style={{ marginTop: 0 }}>
+                  Reviewing Disagreement {drillGenCurrentDisagreementIdx + 1} of {drillGenPlayerDisagreements.length}
+                </h2>
+                <div style={{ fontSize: '0.9rem', color: '#666', marginBottom: '1rem' }}>
+                  Step Index: {currentDisagreement.step_idx} | Player: {currentDisagreement.player_id}
+                </div>
+
+                {/* Toggle Button for Player vs LLM */}
+                <div style={{ marginBottom: '1rem' }}>
+                  <button
+                    onClick={() => setDrillGenShowingGoodAction(!drillGenShowingGoodAction)}
+                    className="action-button"
+                    style={{
+                      backgroundColor: drillGenShowingGoodAction ? '#4CAF50' : '#f44336',
+                      color: 'white',
+                      padding: '0.75rem 1.5rem',
+                      fontSize: '1rem'
+                    }}
+                  >
+                    {drillGenShowingGoodAction ? '✓ Showing Player_0 Action' : '✗ Showing LLM Action'}
+                  </button>
+                </div>
+
+                {/* Board Visualization with Player Info */}
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                  <div key={`player-vs-llm-${drillGenCurrentDisagreementIdx}-${drillGenShowingGoodAction ? 'player' : 'llm'}`}>
+                    {(() => {
+                      const displayState = drillGenShowingGoodAction 
+                        ? (currentDisagreement.state_after_json || currentDisagreement.state_before_json)
+                        : (currentDisagreement.state_after_llm_action_json || currentDisagreement.state_before_json)  // Don't fall back to state_after_json (player's state) when showing LLM action
+                      // Debug: Check settlement locations in the state
+                      if (displayState && displayState.intersections) {
+                        const playerSettlements = displayState.intersections
+                          .filter((i: any) => i.owner === drillGenReviewPlayerId && i.building_type === 'settlement')
+                          .map((i: any) => i.id)
+                        const playerCities = displayState.intersections
+                          .filter((i: any) => i.owner === drillGenReviewPlayerId && i.building_type === 'city')
+                          .map((i: any) => i.id)
+                        console.log('[Player vs LLM] Toggle:', drillGenShowingGoodAction ? 'player' : 'llm', 
+                          'Settlements at intersections:', playerSettlements, 
+                          'Cities at intersections:', playerCities,
+                          'Using state_after_llm_action_json:', !drillGenShowingGoodAction && !!currentDisagreement.state_after_llm_action_json)
+                      }
+                      return renderBoard(
+                        displayState, 
+                        drillGenReviewPlayerId, 
+                        [], 
+                        false,
+                        null,
+                        null
+                      )
+                    })()}
+                    {/* Action Highlighting Overlay */}
+                    <div style={{ marginTop: '0.5rem', padding: '0.5rem', backgroundColor: drillGenShowingGoodAction ? '#e8f5e9' : '#ffebee', borderRadius: '4px', border: `2px solid ${drillGenShowingGoodAction ? '#4CAF50' : '#f44336'}` }}>
+                      <div style={{ fontWeight: 'bold', color: drillGenShowingGoodAction ? '#2e7d32' : '#c62828', marginBottom: '0.25rem' }}>
+                        {drillGenShowingGoodAction ? '✓ Player_0 Action' : '✗ LLM Action'}
+                      </div>
+                      <div style={{ fontSize: '0.9rem' }}>
+                        {JSON.stringify(drillGenShowingGoodAction ? currentDisagreement.player_action : currentDisagreement.llm_action, null, 2)}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Player Information Panel */}
+                  {(() => {
+                    const displayState = drillGenShowingGoodAction 
+                      ? (currentDisagreement.state_after_json || currentDisagreement.state_before_json)
+                      : (currentDisagreement.state_after_llm_action_json || currentDisagreement.state_after_json || currentDisagreement.state_before_json)
+                    return displayState && (
+                    <div className="game-sidebar" style={{ padding: '1rem', backgroundColor: '#f9f9f9', borderRadius: '4px', border: '1px solid #ddd' }}>
+                      <h3 style={{ marginTop: 0 }}>Player Information</h3>
+                      {displayState.players.map((player: Player) => {
+                        const isReviewPlayer = player.id === drillGenReviewPlayerId
+                        const totalResources = Object.values(player.resources).reduce((a: number, b: number) => a + b, 0)
+                        const resourceEntries = Object.entries(player.resources)
+                        const resourcesDisplay = isReviewPlayer 
+                          ? resourceEntries.map(([resource, amount]) => `${RESOURCE_ICONS[resource] || ''} ${resource}: ${amount}`).join(', ')
+                          : `${totalResources} total`
+                        
+                        return (
+                          <div 
+                            key={player.id} 
+                            style={{
+                              borderLeft: `6px solid ${player.color || '#ccc'}`,
+                              padding: '0.5rem',
+                              marginBottom: '0.5rem',
+                              backgroundColor: isReviewPlayer ? '#e3f2fd' : '#fff',
+                              borderRadius: '4px',
+                              border: `2px solid ${player.color || '#ddd'}`,
+                              fontSize: '0.85rem'
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.15rem' }}>
+                              <div>
+                                <strong style={{ color: player.color || '#333' }}>{player.name}</strong>
+                                {isReviewPlayer && <span style={{ color: '#1976d2', marginLeft: '0.5rem' }}>(Reviewing)</span>}
+                              </div>
+                              <div><strong>VP:</strong> {player.victory_points}</div>
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', fontSize: '0.8rem', alignItems: 'center' }}>
+                              <div><strong>Resources:</strong> {resourcesDisplay}</div>
+                              <div>
+                                <strong>Dev Cards:</strong> {player.dev_cards?.length || 0}
+                                {isReviewPlayer && player.dev_cards && player.dev_cards.length > 0 && (
+                                  <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: '#666' }}>
+                                    ({player.dev_cards.join(', ')})
+                                  </span>
+                                )}
+                              </div>
+                              <div>Buildings: {player.settlements_built}S/{player.cities_built}C</div>
+                              <div>Roads: {player.roads_built}</div>
+                              {player.longest_road && <div style={{ color: '#1976d2' }}>🏆</div>}
+                              {player.largest_army && <div style={{ color: '#1976d2' }}>⚔️</div>}
+                              {player.knights_played > 0 && <div style={{ color: '#1976d2' }}>⚔️{player.knights_played}</div>}
+                            </div>
+                          </div>
+                        )
+                      })}
+                      
+                      {/* Game State Info */}
+                      <div style={{ marginTop: '1rem', padding: '0.75rem', backgroundColor: '#fff', borderRadius: '4px', border: '1px solid #ddd', fontSize: '0.85rem' }}>
+                        <div><strong>Turn:</strong> {displayState.turn_number}</div>
+                        <div><strong>Phase:</strong> {displayState.phase}</div>
+                        {displayState.dice_roll && (
+                          <div><strong>Last Dice Roll:</strong> {displayState.dice_roll}</div>
+                        )}
+                        {displayState.robber_tile_id !== null && (
+                          <div><strong>Robber:</strong> Tile {displayState.robber_tile_id}</div>
+                        )}
+                      </div>
+                    </div>
+                    )
+                  })()}
+                </div>
+
+                {/* Action Display */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                  <div style={{ padding: '1rem', backgroundColor: '#e8f5e9', borderRadius: '4px' }}>
+                    <h3 style={{ marginTop: 0, color: '#2e7d32' }}>Player_0 Action:</h3>
+                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                      {JSON.stringify(currentDisagreement.player_action, null, 2)}
+                    </pre>
+                  </div>
+                  <div style={{ padding: '1rem', backgroundColor: '#ffebee', borderRadius: '4px' }}>
+                    <h3 style={{ marginTop: 0, color: '#c62828' }}>LLM Action:</h3>
+                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                      {JSON.stringify(currentDisagreement.llm_action, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+
+                {/* Legal Actions */}
+                <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
+                  <h3 style={{ marginTop: 0 }}>Legal Actions ({currentDisagreement.legal_actions.length}):</h3>
+                  <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                    {currentDisagreement.legal_actions.map((action, idx) => (
+                      <div key={idx} style={{ marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                          {JSON.stringify(action, null, 2)}
+                        </pre>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={async () => {
+                      await createDrillFromDisagreement(
+                        {
+                          step_idx: currentDisagreement.step_idx,
+                          player_id: currentDisagreement.player_id,
+                          state_before_json: currentDisagreement.state_before_json,
+                          good_action: currentDisagreement.player_action,
+                          worse_action: currentDisagreement.llm_action,
+                          legal_actions: currentDisagreement.legal_actions
+                        },
+                        currentDisagreement.player_action,
+                        currentDisagreement.llm_action
+                      )
+                    }}
+                    className="action-button"
+                    style={{ backgroundColor: '#4CAF50', color: 'white' }}
+                  >
+                    Use Player Action as Correct
+                  </button>
+                  <button
+                    onClick={async () => {
+                      await createDrillFromDisagreement(
+                        {
+                          step_idx: currentDisagreement.step_idx,
+                          player_id: currentDisagreement.player_id,
+                          state_before_json: currentDisagreement.state_before_json,
+                          good_action: currentDisagreement.player_action,
+                          worse_action: currentDisagreement.llm_action,
+                          legal_actions: currentDisagreement.legal_actions
+                        },
+                        currentDisagreement.llm_action,
+                        currentDisagreement.player_action
+                      )
+                    }}
+                    className="action-button"
+                    style={{ backgroundColor: '#f44336', color: 'white' }}
+                  >
+                    Use LLM Action as Correct
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (drillGenCurrentDisagreementIdx < drillGenPlayerDisagreements.length - 1) {
+                        setDrillGenCurrentDisagreementIdx(drillGenCurrentDisagreementIdx + 1)
+                        const next = drillGenPlayerDisagreements[drillGenCurrentDisagreementIdx + 1]
+                        setDrillGenReviewGameState(next.state_before_json)
+                        setDrillGenReviewPlayerId(next.player_id)
+                      }
+                    }}
+                    disabled={drillGenCurrentDisagreementIdx >= drillGenPlayerDisagreements.length - 1}
+                    className="action-button"
+                  >
+                    Skip
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (drillGenCurrentDisagreementIdx > 0) {
+                        setDrillGenCurrentDisagreementIdx(drillGenCurrentDisagreementIdx - 1)
+                        const prev = drillGenPlayerDisagreements[drillGenCurrentDisagreementIdx - 1]
+                        setDrillGenReviewGameState(prev.state_before_json)
+                        setDrillGenReviewPlayerId(prev.player_id)
+                      }
+                    }}
+                    disabled={drillGenCurrentDisagreementIdx === 0}
+                    className="action-button"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (drillGenCurrentDisagreementIdx < drillGenPlayerDisagreements.length - 1) {
+                        setDrillGenCurrentDisagreementIdx(drillGenCurrentDisagreementIdx + 1)
+                        const next = drillGenPlayerDisagreements[drillGenCurrentDisagreementIdx + 1]
+                        setDrillGenReviewGameState(next.state_before_json)
+                        setDrillGenReviewPlayerId(next.player_id)
+                      }
+                    }}
+                    disabled={drillGenCurrentDisagreementIdx >= drillGenPlayerDisagreements.length - 1}
+                    className="action-button"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </div>
+            ) : null
+          })()}
+
+          {/* Review Interface - Agreements (Player vs LLM) */}
+          {drillGenComparisonMode === 'player_vs_llm' && drillGenReviewMode === 'agreements' && drillGenPlayerAgreements.length > 0 && drillGenReviewGameState && (() => {
+            const currentAgreement = drillGenPlayerAgreements[drillGenCurrentAgreementIdx]
+            return currentAgreement ? (
+            <div style={{ marginTop: '2rem' }}>
+              <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#e8f5e9', borderRadius: '4px' }}>
+                <h2 style={{ marginTop: 0 }}>
+                  Reviewing Agreement {drillGenCurrentAgreementIdx + 1} of {drillGenPlayerAgreements.length}
+                </h2>
+                <div style={{ fontSize: '0.9rem', color: '#666', marginBottom: '1rem' }}>
+                  Step Index: {currentAgreement.step_idx} | Player: {currentAgreement.player_id}
+                </div>
+                <div style={{ padding: '0.75rem', backgroundColor: '#c8e6c9', borderRadius: '4px', marginBottom: '1rem' }}>
+                  <strong>Player_0 and LLM chose the same action:</strong> This is a good candidate for a drill where the LLM must choose the correct action from all legal options.
+                </div>
+
+                {/* Board Visualization with Player Info */}
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                  <div key={`player-vs-llm-agreement-${drillGenCurrentAgreementIdx}`}>
+                    {renderBoard(
+                      currentAgreement.state_after_json || currentAgreement.state_before_json, 
+                      drillGenReviewPlayerId, 
+                      [], 
+                      false,
+                      null,
+                      null
+                    )}
+                    {/* Action Highlighting Overlay */}
+                    <div style={{ marginTop: '0.5rem', padding: '0.5rem', backgroundColor: '#e8f5e9', borderRadius: '4px', border: '2px solid #4CAF50' }}>
+                      <div style={{ fontWeight: 'bold', color: '#2e7d32', marginBottom: '0.25rem' }}>
+                        ✓ Agreed Action (Player_0 & LLM)
+                      </div>
+                      <div style={{ fontSize: '0.9rem' }}>
+                        {JSON.stringify(currentAgreement.agreed_action, null, 2)}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Player Information Panel */}
+                  {(() => {
+                    const displayState = currentAgreement.state_after_json || currentAgreement.state_before_json
+                    return displayState && (
+                    <div className="game-sidebar" style={{ padding: '1rem', backgroundColor: '#f9f9f9', borderRadius: '4px', border: '1px solid #ddd' }}>
+                      <h3 style={{ marginTop: 0 }}>Player Information</h3>
+                      {displayState.players.map((player: Player) => {
+                        const isReviewPlayer = player.id === drillGenReviewPlayerId
+                        const totalResources = Object.values(player.resources).reduce((a: number, b: number) => a + b, 0)
+                        const resourceEntries = Object.entries(player.resources)
+                        const resourcesDisplay = isReviewPlayer 
+                          ? resourceEntries.map(([resource, amount]) => `${RESOURCE_ICONS[resource] || ''} ${resource}: ${amount}`).join(', ')
+                          : `${totalResources} total`
+                        
+                        return (
+                          <div 
+                            key={player.id} 
+                            style={{
+                              borderLeft: `6px solid ${player.color || '#ccc'}`,
+                              padding: '0.5rem',
+                              marginBottom: '0.5rem',
+                              backgroundColor: isReviewPlayer ? '#e3f2fd' : '#fff',
+                              borderRadius: '4px',
+                              border: `2px solid ${player.color || '#ddd'}`,
+                              fontSize: '0.85rem'
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.15rem' }}>
+                              <div>
+                                <strong style={{ color: player.color || '#333' }}>{player.name}</strong>
+                                {isReviewPlayer && <span style={{ color: '#1976d2', marginLeft: '0.5rem' }}>(Reviewing)</span>}
+                              </div>
+                              <div><strong>VP:</strong> {player.victory_points}</div>
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', fontSize: '0.8rem', alignItems: 'center' }}>
+                              <div><strong>Resources:</strong> {resourcesDisplay}</div>
+                              <div>
+                                <strong>Dev Cards:</strong> {player.dev_cards?.length || 0}
+                                {isReviewPlayer && player.dev_cards && player.dev_cards.length > 0 && (
+                                  <span style={{ marginLeft: '0.5rem', fontSize: '0.75rem', color: '#666' }}>
+                                    ({player.dev_cards.join(', ')})
+                                  </span>
+                                )}
+                              </div>
+                              <div>Buildings: {player.settlements_built}S/{player.cities_built}C</div>
+                              <div>Roads: {player.roads_built}</div>
+                              {player.longest_road && <div style={{ color: '#1976d2' }}>🏆</div>}
+                              {player.largest_army && <div style={{ color: '#1976d2' }}>⚔️</div>}
+                              {player.knights_played > 0 && <div style={{ color: '#1976d2' }}>⚔️{player.knights_played}</div>}
+                            </div>
+                          </div>
+                        )
+                      })}
+                      
+                      {/* Game State Info */}
+                      <div style={{ marginTop: '1rem', padding: '0.75rem', backgroundColor: '#fff', borderRadius: '4px', border: '1px solid #ddd', fontSize: '0.85rem' }}>
+                        <div><strong>Turn:</strong> {displayState.turn_number}</div>
+                        <div><strong>Phase:</strong> {displayState.phase}</div>
+                        {displayState.dice_roll && (
+                          <div><strong>Last Dice Roll:</strong> {displayState.dice_roll}</div>
+                        )}
+                        {displayState.robber_tile_id !== null && (
+                          <div><strong>Robber:</strong> Tile {displayState.robber_tile_id}</div>
+                        )}
+                      </div>
+                    </div>
+                    )
+                  })()}
+                </div>
+
+                {/* Action Display */}
+                <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#e8f5e9', borderRadius: '4px' }}>
+                  <h3 style={{ marginTop: 0, color: '#2e7d32' }}>Agreed Action (Player_0 & LLM):</h3>
+                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                    {JSON.stringify(currentAgreement.agreed_action, null, 2)}
+                  </pre>
+                </div>
+
+                {/* Legal Actions */}
+                <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
+                  <h3 style={{ marginTop: 0 }}>Legal Actions ({currentAgreement.legal_actions.length}):</h3>
+                  <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+                    {currentAgreement.legal_actions.map((action, idx) => (
+                      <div key={idx} style={{ marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+                          {JSON.stringify(action, null, 2)}
+                        </pre>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={async () => {
+                      await createDrillFromAgreement({
+                        step_idx: currentAgreement.step_idx,
+                        player_id: currentAgreement.player_id,
+                        state_before_json: currentAgreement.state_before_json,
+                        agreed_action: currentAgreement.agreed_action,
+                        legal_actions: currentAgreement.legal_actions
+                      })
+                    }}
+                    className="action-button"
+                    style={{ backgroundColor: '#4CAF50', color: 'white' }}
+                  >
+                    Create Drill (All Actions Available)
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (drillGenCurrentAgreementIdx < drillGenPlayerAgreements.length - 1) {
+                        setDrillGenCurrentAgreementIdx(drillGenCurrentAgreementIdx + 1)
+                        const next = drillGenPlayerAgreements[drillGenCurrentAgreementIdx + 1]
+                        setDrillGenReviewGameState(next.state_after_json || next.state_before_json)
+                        setDrillGenReviewPlayerId(next.player_id)
+                      }
+                    }}
+                    disabled={drillGenCurrentAgreementIdx >= drillGenPlayerAgreements.length - 1}
+                    className="action-button"
+                  >
+                    Skip
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (drillGenCurrentAgreementIdx > 0) {
+                        setDrillGenCurrentAgreementIdx(drillGenCurrentAgreementIdx - 1)
+                        const prev = drillGenPlayerAgreements[drillGenCurrentAgreementIdx - 1]
+                        setDrillGenReviewGameState(prev.state_after_json || prev.state_before_json)
+                        setDrillGenReviewPlayerId(prev.player_id)
+                      }
+                    }}
+                    disabled={drillGenCurrentAgreementIdx === 0}
+                    className="action-button"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (drillGenCurrentAgreementIdx < drillGenPlayerAgreements.length - 1) {
+                        setDrillGenCurrentAgreementIdx(drillGenCurrentAgreementIdx + 1)
+                        const next = drillGenPlayerAgreements[drillGenCurrentAgreementIdx + 1]
+                        setDrillGenReviewGameState(next.state_after_json || next.state_before_json)
+                        setDrillGenReviewPlayerId(next.player_id)
+                      }
+                    }}
+                    disabled={drillGenCurrentAgreementIdx >= drillGenPlayerAgreements.length - 1}
+                    className="action-button"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </div>
+            ) : null
+          })()}
+
+          {/* Action Selector Modal */}
+          {showActionSelector && drillGenReviewMode === 'disagreements' && drillGenComparisonMode === 'llm_vs_llm' && currentDisagreement && (
+            <div style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: 'rgba(0, 0, 0, 0.5)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 1000
+            }}>
+              <div style={{
+                backgroundColor: 'white',
+                padding: '2rem',
+                borderRadius: '8px',
+                maxWidth: '800px',
+                maxHeight: '80vh',
+                overflow: 'auto',
+                boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
+              }}>
+                <h2 style={{ marginTop: 0 }}>Select Correct Action</h2>
+                <p style={{ marginBottom: '1rem', color: '#666' }}>
+                  Choose which action should be marked as correct. The other LLM's action will be marked as incorrect.
+                </p>
+                
+                <div style={{ marginBottom: '1rem' }}>
+                  <h3 style={{ marginTop: 0, fontSize: '1rem' }}>Legal Actions ({currentDisagreement.legal_actions.length}):</h3>
+                  <div style={{ maxHeight: '400px', overflowY: 'auto', border: '1px solid #ddd', borderRadius: '4px', padding: '0.5rem' }}>
+                    {currentDisagreement.legal_actions.map((action, idx) => {
+                      const isGoodAction = JSON.stringify(action) === JSON.stringify(currentDisagreement.good_action)
+                      const isWorseAction = JSON.stringify(action) === JSON.stringify(currentDisagreement.worse_action)
+                      
+                      return (
+                        <div
+                          key={idx}
+                          onClick={async () => {
+                            const correctAction = action
+                            // Determine which action to use as incorrect
+                            const useGoodAsIncorrect = !isGoodAction && !isWorseAction
+                              ? confirm(
+                                  `Use the "Good LLM" action as the incorrect action?\n\n` +
+                                  `Click OK to use Good LLM action as incorrect.\n` +
+                                  `Click Cancel to use Worse LLM action as incorrect.`
+                                )
+                              : isGoodAction ? false : true
+                            
+                            const incorrectAction = useGoodAsIncorrect 
+                              ? currentDisagreement.good_action 
+                              : currentDisagreement.worse_action
+                            
+                            setShowActionSelector(false)
+                            await createDrillFromDisagreement(currentDisagreement, correctAction, incorrectAction)
+                          }}
+                          style={{
+                            padding: '0.75rem',
+                            marginBottom: '0.5rem',
+                            border: '1px solid #ccc',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            backgroundColor: isGoodAction ? '#e8f5e9' : isWorseAction ? '#ffebee' : '#f5f5f5',
+                            transition: 'background-color 0.2s'
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!isGoodAction && !isWorseAction) {
+                              e.currentTarget.style.backgroundColor = '#e3f2fd'
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!isGoodAction && !isWorseAction) {
+                              e.currentTarget.style.backgroundColor = '#f5f5f5'
+                            }
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                            <strong>Action {idx + 1}</strong>
+                            {isGoodAction && <span style={{ color: '#2e7d32', fontWeight: 'bold' }}>(Good LLM chose this)</span>}
+                            {isWorseAction && <span style={{ color: '#c62828', fontWeight: 'bold' }}>(Worse LLM chose this)</span>}
+                          </div>
+                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: '0.85rem' }}>
+                            {JSON.stringify(action, null, 2)}
+                          </pre>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+                
+                <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                  <button
+                    onClick={() => setShowActionSelector(false)}
+                    className="action-button"
+                    style={{ backgroundColor: '#666', color: 'white' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </main>
       </div>
     )

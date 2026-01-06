@@ -255,6 +255,178 @@ export async function deleteDrill(drillId: number): Promise<{ message: string }>
   return handleResponse<{ message: string }>(response)
 }
 
+// Drill Generation from Game Disagreements
+export interface ExtractDrillCandidatesRequest {
+  num_steps: number
+  player_id?: string | null
+  include_setup_actions?: boolean
+  include_non_setup_actions?: boolean
+  include_trade_proposals?: boolean
+  include_building_actions?: boolean
+  include_turn_ending_actions?: boolean
+  include_play_dev_card_actions?: boolean
+}
+
+export interface ExtractDrillCandidatesResponse {
+  candidates: Array<{
+    step_idx: number
+    player_id: string
+    state_before_json: GameState
+    legal_actions_count: number
+  }>
+}
+
+export async function extractDrillCandidates(
+  gameId: string,
+  request: ExtractDrillCandidatesRequest
+): Promise<ExtractDrillCandidatesResponse> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 120000) // 2 minute timeout
+  
+  try {
+    const response = await fetch(`${getApiBase()}/games/${gameId}/extract_drill_candidates`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+      signal: controller.signal
+    })
+    clearTimeout(timeoutId)
+    return handleResponse<ExtractDrillCandidatesResponse>(response)
+  } catch (error) {
+    clearTimeout(timeoutId)
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Request timed out after 2 minutes. The game may have too many steps to process.')
+    }
+    throw error
+  }
+}
+
+export interface CompareLLMActionsRequest {
+  candidates: Array<{
+    step_idx: number
+    player_id: string
+    state_before_json: GameState
+  }>
+  good_model: string
+  worse_model: string
+}
+
+export interface LLMDisagreement {
+  step_idx: number
+  player_id: string
+  state_before_json: GameState
+  state_after_json?: GameState  // State after action for visualization (backward compatibility)
+  state_after_good_action_json?: GameState  // State after good LLM's action
+  state_after_worse_action_json?: GameState  // State after worse LLM's action
+  good_action: LegalAction
+  worse_action: LegalAction
+  legal_actions: LegalAction[]
+}
+
+export interface LLMAgreement {
+  step_idx: number
+  player_id: string
+  state_before_json: GameState
+  state_after_json?: GameState  // State after action for visualization (backward compatibility)
+  state_after_good_action_json?: GameState  // State after action (same for both when they agree)
+  state_after_worse_action_json?: GameState  // State after action (same for both when they agree)
+  agreed_action: LegalAction  // Both LLMs chose the same action
+  legal_actions: LegalAction[]
+}
+
+export interface CompareLLMActionsResponse {
+  disagreements: LLMDisagreement[]
+  agreements: LLMAgreement[]
+}
+
+export interface ComparePlayerVsLLMRequest {
+  candidates: Array<{
+    step_idx: number
+    player_id: string
+    state_before_json: GameState
+  }>
+  player_id: string
+  llm_model: string
+}
+
+export interface PlayerVsLLMDisagreement {
+  step_idx: number
+  player_id: string
+  state_before_json: GameState
+  state_after_json?: GameState  // State after player's action
+  state_after_llm_action_json?: GameState  // State after LLM's action
+  player_action: LegalAction
+  llm_action: LegalAction
+  legal_actions: LegalAction[]
+}
+
+export interface PlayerVsLLMAgreement {
+  step_idx: number
+  player_id: string
+  state_before_json: GameState
+  state_after_json?: GameState  // State after action (same for both when they agree)
+  state_after_llm_action_json?: GameState  // State after action (same as state_after_json when they agree)
+  agreed_action: LegalAction
+  legal_actions: LegalAction[]
+}
+
+export interface ComparePlayerVsLLMResponse {
+  disagreements: PlayerVsLLMDisagreement[]
+  agreements: PlayerVsLLMAgreement[]
+}
+
+export async function compareLLMActions(
+  gameId: string,
+  request: CompareLLMActionsRequest
+): Promise<CompareLLMActionsResponse> {
+  // LLM calls can take a long time, so use a longer timeout (10 minutes)
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 600000) // 10 minute timeout
+  
+  try {
+    const response = await fetch(`${getApiBase()}/games/${gameId}/compare_llm_actions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+      signal: controller.signal
+    })
+    clearTimeout(timeoutId)
+    return handleResponse<CompareLLMActionsResponse>(response)
+  } catch (error) {
+    clearTimeout(timeoutId)
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Request timed out after 10 minutes. LLM calls may be taking too long.')
+    }
+    throw error
+  }
+}
+
+export async function comparePlayerVsLLM(
+  gameId: string,
+  request: ComparePlayerVsLLMRequest
+): Promise<ComparePlayerVsLLMResponse> {
+  // LLM calls can take a long time, so use a longer timeout (10 minutes)
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 600000) // 10 minute timeout
+  
+  try {
+    const response = await fetch(`${getApiBase()}/games/${gameId}/compare_player_vs_llm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+      signal: controller.signal
+    })
+    clearTimeout(timeoutId)
+    return handleResponse<ComparePlayerVsLLMResponse>(response)
+  } catch (error) {
+    clearTimeout(timeoutId)
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('Request timed out after 10 minutes. LLM calls may be taking too long.')
+    }
+    throw error
+  }
+}
+
 export interface EvaluateDrillRequest {
   agent_type: string
   include_guidelines?: boolean

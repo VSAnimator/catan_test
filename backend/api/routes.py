@@ -662,6 +662,846 @@ async def delete_drill_endpoint(drill_id: int):
     return {"message": "Drill deleted"}
 
 
+# =============================================================================
+# Drill Generation from Game Disagreements
+# =============================================================================
+
+class ExtractDrillCandidatesRequest(BaseModel):
+    num_steps: int
+    player_id: Optional[str] = None
+    include_setup_actions: bool = True
+    include_non_setup_actions: bool = True
+    include_trade_proposals: bool = True
+    include_building_actions: bool = True
+    include_turn_ending_actions: bool = True
+    include_play_dev_card_actions: bool = True
+
+
+class ExtractDrillCandidatesResponse(BaseModel):
+    candidates: List[Dict[str, Any]]
+
+
+@router.post("/games/{game_id}/extract_drill_candidates", response_model=ExtractDrillCandidatesResponse)
+async def extract_drill_candidates(
+    game_id: str,
+    request: ExtractDrillCandidatesRequest
+):
+    """
+    Extract non-trivial steps from a game where the player had multiple legal actions.
+    
+    Returns: List of candidate steps with state_before, player_id, step_idx
+    """
+    import asyncio
+    import time
+    
+    start_time = time.time()
+    
+    # Check if game exists
+    game_row = get_game_from_db(game_id)
+    if not game_row:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    # Get all steps from the game
+    steps = get_steps(game_id)
+    if not steps:
+        raise HTTPException(status_code=404, detail="No steps found for this game")
+    
+    print(f"[extract_drill_candidates] Processing {len(steps)} steps for game {game_id}", flush=True)
+    
+    # Run the heavy computation in a thread pool to avoid blocking the event loop
+    def process_steps():
+        candidates = []
+        
+        # Filter steps to find non-trivial ones (multiple legal actions)
+        for step in steps:
+            # Get player_id from step
+            step_player_id = step["player_id"]
+            if not step_player_id:
+                continue
+            
+            # If player_id filter is specified, skip if doesn't match
+            if request.player_id and step_player_id != request.player_id:
+                continue
+            
+            # Get state_before_json
+            state_before_json_str = step["state_before_json"] if "state_before_json" in step.keys() else None
+            if not state_before_json_str:
+                continue
+            
+            try:
+                state_before_json = json.loads(state_before_json_str) if isinstance(state_before_json_str, str) else state_before_json_str
+                state = deserialize_game_state(state_before_json)
+            except Exception as e:
+                # Skip steps with invalid state
+                continue
+            
+            # Get legal actions for this player at this step
+            legal_actions_list = legal_actions(state, step_player_id)
+            
+            # Only include if player had multiple legal actions (non-trivial)
+            if len(legal_actions_list) <= 1:
+                continue
+            
+            # Get the actual action that was taken to filter by action type
+            action_json_str = step["action_json"] if "action_json" in step.keys() else None
+            if not action_json_str:
+                continue
+            
+            try:
+                action_json = json.loads(action_json_str) if isinstance(action_json_str, str) else action_json_str
+                action_type = action_json.get("type", "")
+            except Exception:
+                continue
+            
+            # Categorize action type
+            setup_actions = {"setup_place_settlement", "setup_place_road", "start_game"}
+            building_actions = {"build_road", "build_settlement", "build_city", "buy_dev_card"}
+            trade_proposal_actions = {"propose_trade"}
+            turn_ending_actions = {"end_turn"}
+            play_dev_card_actions = {"play_dev_card"}
+            
+            is_setup = action_type in setup_actions
+            is_non_setup = action_type not in setup_actions
+            is_trade_proposal = action_type in trade_proposal_actions
+            is_building = action_type in building_actions
+            is_turn_ending = action_type in turn_ending_actions
+            is_play_dev_card = action_type in play_dev_card_actions
+            
+            # Apply filters: include if action matches at least one enabled category
+            # An action can belong to multiple categories (e.g., building + non-setup)
+            matches_enabled_category = False
+            
+            if is_setup and request.include_setup_actions:
+                matches_enabled_category = True
+            if is_non_setup and request.include_non_setup_actions:
+                matches_enabled_category = True
+            if is_trade_proposal and request.include_trade_proposals:
+                matches_enabled_category = True
+            if is_building and request.include_building_actions:
+                matches_enabled_category = True
+            if is_turn_ending and request.include_turn_ending_actions:
+                matches_enabled_category = True
+            if is_play_dev_card and request.include_play_dev_card_actions:
+                matches_enabled_category = True
+            
+            if not matches_enabled_category:
+                continue
+            
+            candidates.append({
+                "step_idx": step["step_idx"],
+                "player_id": step_player_id,
+                "state_before_json": state_before_json,
+                "legal_actions_count": len(legal_actions_list)
+            })
+        
+        # Randomly sample from candidates to get diverse distribution throughout the game
+        if len(candidates) > request.num_steps:
+            import random
+            candidates = random.sample(candidates, request.num_steps)
+            # Sort by step_idx to maintain chronological order in response
+            candidates.sort(key=lambda x: x["step_idx"])
+        
+        return candidates
+    
+    # Run in executor to avoid blocking - use asyncio.to_thread if available (Python 3.9+)
+    # Otherwise fall back to run_in_executor
+    try:
+        # Python 3.9+ has asyncio.to_thread which is cleaner
+        candidates = await asyncio.to_thread(process_steps)
+    except AttributeError:
+        # Fallback for Python < 3.9
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+        candidates = await loop.run_in_executor(None, process_steps)
+    except Exception as e:
+        print(f"[extract_drill_candidates] Error processing steps: {e}", flush=True)
+        raise HTTPException(status_code=500, detail=f"Error processing steps: {str(e)}")
+    
+    elapsed = time.time() - start_time
+    print(f"[extract_drill_candidates] Completed in {elapsed:.2f}s, found {len(candidates)} candidates", flush=True)
+    
+    return ExtractDrillCandidatesResponse(candidates=candidates)
+
+
+class CompareLLMActionsRequest(BaseModel):
+    candidates: List[Dict[str, Any]]
+    good_model: str
+    worse_model: str
+
+
+class ComparePlayerVsLLMRequest(BaseModel):
+    candidates: List[Dict[str, Any]]
+    player_id: str  # The player whose actions we're comparing (e.g., "player_0")
+    llm_model: str  # The LLM model to compare against
+
+
+class CompareLLMActionsResponse(BaseModel):
+    disagreements: List[Dict[str, Any]]
+    agreements: List[Dict[str, Any]]  # Cases where both LLMs chose the same action
+
+
+class ComparePlayerVsLLMResponse(BaseModel):
+    disagreements: List[Dict[str, Any]]  # Player action != LLM action
+    agreements: List[Dict[str, Any]]  # Player action == LLM action
+
+
+def _actions_equal(action1: Dict[str, Any], action2: Dict[str, Any]) -> bool:
+    """Compare two actions including full payload."""
+    if action1.get("type") != action2.get("type"):
+        return False
+    payload1 = action1.get("payload", {})
+    payload2 = action2.get("payload", {})
+    # Deep equality check - compare all keys and values
+    if isinstance(payload1, dict) and isinstance(payload2, dict):
+        # Normalize by removing None values for comparison
+        p1_clean = {k: v for k, v in payload1.items() if v is not None}
+        p2_clean = {k: v for k, v in payload2.items() if v is not None}
+        return p1_clean == p2_clean
+    return payload1 == payload2
+
+def _compare_states_for_differences(state1_json: Dict[str, Any], state2_json: Dict[str, Any], player_id: str, context: str = "") -> Dict[str, Any]:
+    """
+    Compare two game states and return a dict with differences.
+    Returns dict with keys: 'are_different', 'differences', 'warnings'
+    """
+    if not state1_json or not state2_json:
+        return {
+            "are_different": False,
+            "differences": [],
+            "warnings": ["One or both states are None"],
+            "player_intersections1": [],
+            "player_intersections2": []
+        }
+    
+    differences = []
+    warnings = []
+    
+    # Compare intersections (settlements/cities)
+    intersections1 = {i["id"]: (i.get("owner"), i.get("building_type")) for i in state1_json.get("intersections", [])}
+    intersections2 = {i["id"]: (i.get("owner"), i.get("building_type")) for i in state2_json.get("intersections", [])}
+    
+    # Find intersections that differ
+    all_intersection_ids = set(intersections1.keys()) | set(intersections2.keys())
+    for inter_id in all_intersection_ids:
+        owner1, building1 = intersections1.get(inter_id, (None, None))
+        owner2, building2 = intersections2.get(inter_id, (None, None))
+        if (owner1, building1) != (owner2, building2):
+            differences.append(f"Intersection {inter_id}: State1 has owner={owner1}, building={building1}; State2 has owner={owner2}, building={building2}")
+    
+    # Check player-specific intersections
+    player_intersections1 = [i["id"] for i in state1_json.get("intersections", []) 
+                             if i.get("owner") == player_id]
+    player_intersections2 = [i["id"] for i in state2_json.get("intersections", []) 
+                             if i.get("owner") == player_id]
+    
+    if set(player_intersections1) == set(player_intersections2):
+        warnings.append(f"Player {player_id} has same intersections in both states: {sorted(player_intersections1)}")
+    
+    # Compare roads
+    roads1 = {(r.get("intersection1_id"), r.get("intersection2_id"), r.get("owner")) 
+              for r in state1_json.get("road_edges", [])}
+    roads2 = {(r.get("intersection1_id"), r.get("intersection2_id"), r.get("owner")) 
+              for r in state2_json.get("road_edges", [])}
+    
+    if roads1 != roads2:
+        diff_roads = roads1.symmetric_difference(roads2)
+        differences.append(f"Roads differ: {len(diff_roads)} road(s) different")
+    
+    # Compare player resources (might differ due to action costs)
+    players1 = {p["id"]: p.get("resources", {}) for p in state1_json.get("players", [])}
+    players2 = {p["id"]: p.get("resources", {}) for p in state2_json.get("players", [])}
+    
+    if players1.get(player_id, {}) != players2.get(player_id, {}):
+        differences.append(f"Player {player_id} resources differ")
+    
+    # Compare victory points
+    vp1 = next((p.get("victory_points", 0) for p in state1_json.get("players", []) if p["id"] == player_id), 0)
+    vp2 = next((p.get("victory_points", 0) for p in state2_json.get("players", []) if p["id"] == player_id), 0)
+    
+    if vp1 != vp2:
+        differences.append(f"Player {player_id} victory points differ: {vp1} vs {vp2}")
+    
+    are_different = len(differences) > 0
+    
+    if not are_different and context:
+        warnings.append(f"WARNING: States appear identical in {context} - this may indicate a bug!")
+    
+    return {
+        "are_different": are_different,
+        "differences": differences,
+        "warnings": warnings,
+        "player_intersections1": sorted(player_intersections1),
+        "player_intersections2": sorted(player_intersections2)
+    }
+
+
+@router.post("/games/{game_id}/compare_llm_actions", response_model=CompareLLMActionsResponse)
+async def compare_llm_actions(
+    game_id: str,
+    request: CompareLLMActionsRequest
+):
+    """
+    Run two LLMs on a set of game states and compare their actions.
+    
+    Returns: List of disagreements with both LLM actions
+    """
+    import asyncio
+    import traceback
+    
+    try:
+        # Check if game exists
+        game_row = get_game_from_db(game_id)
+        if not game_row:
+            raise HTTPException(status_code=404, detail="Game not found")
+        
+        from agents.llm_agent import LLMAgent
+        
+        disagreements = []
+        agreements = []
+        errors = []
+        
+        print(f"[compare_llm_actions] Processing {len(request.candidates)} candidates", flush=True)
+        print(f"[compare_llm_actions] Good model: {request.good_model}, Worse model: {request.worse_model}", flush=True)
+        
+        if not request.candidates:
+            return CompareLLMActionsResponse(disagreements=[])
+        
+        # Process candidates in parallel (up to 16 at a time)
+        max_concurrency = 16
+        
+        def _process_one_candidate(candidate_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            """Process a single candidate and return result dict with 'type' field: 'disagreement', 'agreement', or None/Exception on error."""
+            try:
+                step_idx = candidate_data.get("step_idx")
+                player_id = candidate_data.get("player_id")
+                state_before_json = candidate_data.get("state_before_json")
+                
+                if not all([step_idx is not None, player_id, state_before_json]):
+                    print(f"[compare_llm_actions] Skipping invalid candidate: missing required fields", flush=True)
+                    return None
+                
+                print(f"[compare_llm_actions] Processing candidate: step_idx={step_idx}, player_id={player_id}", flush=True)
+                
+                # Get state_after_json from the step to show the result of the action
+                # We need to get it from the database since candidates only have state_before_json
+                steps = get_steps(game_id)
+                step_row = next((s for s in steps if s["step_idx"] == step_idx), None)
+                state_after_json = None
+                if step_row and "state_after_json" in step_row.keys():
+                    state_after_json_str = step_row["state_after_json"]
+                    if state_after_json_str:
+                        try:
+                            state_after_json = json.loads(state_after_json_str) if isinstance(state_after_json_str, str) else state_after_json_str
+                        except Exception:
+                            pass  # Fall back to state_before_json if state_after_json is invalid
+                
+                # Use state_after_json if available, otherwise fall back to state_before_json
+                # Ensure we always have a valid state (never None)
+                display_state_json = state_after_json if state_after_json is not None else state_before_json
+                if display_state_json is None:
+                    print(f"[compare_llm_actions] WARNING: Both state_after_json and state_before_json are None for step_idx={step_idx}", flush=True)
+                    display_state_json = state_before_json  # Final fallback
+                
+                # Deserialize state (use state_before for getting legal actions)
+                try:
+                    state = deserialize_game_state(state_before_json)
+                except Exception as e:
+                    print(f"[compare_llm_actions] Failed to deserialize state for step_idx={step_idx}: {e}", flush=True)
+                    raise Exception(f"Step {step_idx}: Failed to deserialize state: {str(e)}")
+                
+                # Get legal actions
+                legal_actions_list = legal_actions(state, player_id)
+                
+                if not legal_actions_list:
+                    print(f"[compare_llm_actions] No legal actions for step_idx={step_idx}, skipping", flush=True)
+                    return None  # Skip if no legal actions
+                
+                # Create two LLM agents
+                try:
+                    good_agent = LLMAgent(
+                        player_id=player_id,
+                        model=request.good_model,
+                        enable_retrieval=False
+                    )
+                    worse_agent = LLMAgent(
+                        player_id=player_id,
+                        model=request.worse_model,
+                        enable_retrieval=False
+                    )
+                except Exception as e:
+                    error_msg = f"Step {step_idx}: Failed to create LLM agents: {str(e)}"
+                    print(f"[compare_llm_actions] {error_msg}", flush=True)
+                    raise Exception(error_msg)
+                
+                # Get actions from both agents (synchronous calls since we're in a thread)
+                try:
+                    good_result = good_agent.choose_action(state, legal_actions_list)
+                    worse_result = worse_agent.choose_action(state, legal_actions_list)
+                except Exception as e:
+                    print(f"[compare_llm_actions] Failed to get actions from agents for step_idx={step_idx}: {e}", flush=True)
+                    raise Exception(f"Step {step_idx}: Failed to get LLM actions: {str(e)}")
+                
+                # Extract action and payload from results (choose_action returns 4-tuple)
+                # Handle both 3-tuple and 4-tuple return formats
+                if len(good_result) >= 2:
+                    good_action, good_payload = good_result[0], good_result[1]
+                else:
+                    print(f"[compare_llm_actions] Unexpected good_result format for step_idx={step_idx}: {good_result}", flush=True)
+                    raise Exception(f"Step {step_idx}: Unexpected result format from good agent")
+                
+                if len(worse_result) >= 2:
+                    worse_action, worse_payload = worse_result[0], worse_result[1]
+                else:
+                    print(f"[compare_llm_actions] Unexpected worse_result format for step_idx={step_idx}: {worse_result}", flush=True)
+                    raise Exception(f"Step {step_idx}: Unexpected result format from worse agent")
+                
+                # Serialize actions to dict format
+                try:
+                    good_action_dict = {
+                        "type": serialize_action(good_action)
+                    }
+                    if good_payload:
+                        good_action_dict["payload"] = serialize_action_payload(good_payload)
+                    
+                    worse_action_dict = {
+                        "type": serialize_action(worse_action)
+                    }
+                    if worse_payload:
+                        worse_action_dict["payload"] = serialize_action_payload(worse_payload)
+                except Exception as e:
+                    print(f"[compare_llm_actions] Failed to serialize actions for step_idx={step_idx}: {e}", flush=True)
+                    raise Exception(f"Step {step_idx}: Failed to serialize actions: {str(e)}")
+                
+                # Serialize legal actions for frontend (needed for both disagreements and agreements)
+                serialized_legal_actions = []
+                for action, payload in legal_actions_list:
+                    action_dict = {
+                        "type": serialize_action(action)
+                    }
+                    if payload:
+                        action_dict["payload"] = serialize_action_payload(payload)
+                    serialized_legal_actions.append(action_dict)
+                
+                # Compute states after both LLM actions for visualization
+                state_after_good_action_json = None
+                state_after_worse_action_json = None
+                try:
+                    from engine import Action, deserialize_action, deserialize_action_payload
+                    # IMPORTANT: Deserialize fresh states from state_before_json for each action
+                    # (the 'state' variable might have been modified by llm_agent.choose_action calls)
+                    
+                    # Compute state after good LLM's action
+                    good_action_enum = deserialize_action(good_action_dict["type"])
+                    good_payload_obj = deserialize_action_payload(good_action_dict.get("payload", {})) if good_action_dict.get("payload") else None
+                    fresh_state_for_good = deserialize_game_state(state_before_json)
+                    state_after_good = fresh_state_for_good.step(good_action_enum, good_payload_obj, player_id=player_id)
+                    state_after_good_action_json = serialize_game_state(state_after_good)
+                    
+                    # Compute state after worse LLM's action (start from state_before again)
+                    worse_action_enum = deserialize_action(worse_action_dict["type"])
+                    worse_payload_obj = deserialize_action_payload(worse_action_dict.get("payload", {})) if worse_action_dict.get("payload") else None
+                    fresh_state_for_worse = deserialize_game_state(state_before_json)
+                    state_after_worse = fresh_state_for_worse.step(worse_action_enum, worse_payload_obj, player_id=player_id)
+                    state_after_worse_action_json = serialize_game_state(state_after_worse)
+                    
+                    # VALIDATION: Verify states are actually different
+                    comparison = _compare_states_for_differences(
+                        state_after_good_action_json,
+                        state_after_worse_action_json,
+                        player_id,
+                        f"good LLM action vs worse LLM action at step_idx={step_idx}"
+                    )
+                    if comparison["are_different"]:
+                        print(f"[compare_llm_actions] ✓ States are different at step_idx={step_idx}: {len(comparison['differences'])} difference(s)", flush=True)
+                        for diff in comparison["differences"][:3]:  # Log first 3 differences
+                            print(f"  - {diff}", flush=True)
+                    else:
+                        print(f"[compare_llm_actions] ⚠️ WARNING: States are IDENTICAL at step_idx={step_idx}!", flush=True)
+                        print(f"  Player intersections in state_after_good_action_json: {comparison['player_intersections1']}", flush=True)
+                        print(f"  Player intersections in state_after_worse_action_json: {comparison['player_intersections2']}", flush=True)
+                        for warning in comparison["warnings"]:
+                            print(f"  ⚠️ {warning}", flush=True)
+                    
+                    good_intersection_id = good_payload_obj.intersection_id if hasattr(good_payload_obj, 'intersection_id') else None
+                    worse_intersection_id = worse_payload_obj.intersection_id if hasattr(worse_payload_obj, 'intersection_id') else None
+                    print(f"[compare_llm_actions] Good LLM intersection: {good_intersection_id}, Worse LLM intersection: {worse_intersection_id}", flush=True)
+                except Exception as e:
+                    import traceback
+                    print(f"[compare_llm_actions] Failed to compute states after LLM actions for step_idx={step_idx}: {e}", flush=True)
+                    print(f"[compare_llm_actions] Traceback: {traceback.format_exc()}", flush=True)
+                    # DO NOT fall back to display_state_json - that would be wrong!
+                    # If computation fails, we can't show the LLM states, so set to None
+                    # The frontend should handle this gracefully
+                    state_after_good_action_json = None
+                    state_after_worse_action_json = None
+                    print(f"[compare_llm_actions] WARNING: state_after_good_action_json and state_after_worse_action_json are None due to computation failure", flush=True)
+                
+                # Compare actions
+                if not _actions_equal(good_action_dict, worse_action_dict):
+                    # Actions differ - this is a disagreement
+                    print(f"[compare_llm_actions] Found disagreement at step_idx={step_idx}", flush=True)
+                    return {
+                        "type": "disagreement",
+                        "step_idx": step_idx,
+                        "player_id": player_id,
+                        "state_before_json": state_before_json,
+                        "state_after_json": display_state_json,  # Keep for backward compatibility
+                        "state_after_good_action_json": state_after_good_action_json,  # State after good LLM's action
+                        "state_after_worse_action_json": state_after_worse_action_json,  # State after worse LLM's action
+                        "good_action": good_action_dict,
+                        "worse_action": worse_action_dict,
+                        "legal_actions": serialized_legal_actions
+                    }
+                else:
+                    # Actions agree - this is an agreement
+                    print(f"[compare_llm_actions] Found agreement at step_idx={step_idx}", flush=True)
+                    return {
+                        "type": "agreement",
+                        "step_idx": step_idx,
+                        "player_id": player_id,
+                        "state_before_json": state_before_json,
+                        "state_after_json": display_state_json,  # State after action (same for both when they agree)
+                        "state_after_good_action_json": state_after_good_action_json,  # Same as state_after_json when actions agree
+                        "state_after_worse_action_json": state_after_worse_action_json,  # Same as state_after_json when actions agree
+                        "agreed_action": good_action_dict,  # Both LLMs chose the same action
+                        "legal_actions": serialized_legal_actions
+                    }
+            except Exception as e:
+                # Return exception to be handled by caller
+                return e
+        
+        # Use semaphore to limit concurrency
+        sem = asyncio.Semaphore(max_concurrency)
+        
+        async def _run_one(candidate_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            """Async wrapper that uses semaphore to limit concurrency."""
+            async with sem:
+                return await asyncio.to_thread(_process_one_candidate, candidate_data)
+        
+        # Run all candidates in parallel
+        print(f"[compare_llm_actions] Processing {len(request.candidates)} candidates in parallel (max {max_concurrency} concurrent)", flush=True)
+        results = await asyncio.gather(*[_run_one(c) for c in request.candidates], return_exceptions=True)
+        
+        # Process results
+        for candidate, result in zip(request.candidates, results):
+            if isinstance(result, Exception):
+                error_msg = f"Error processing candidate at step_idx={candidate.get('step_idx', 'unknown')}: {str(result)}"
+                print(f"[compare_llm_actions] {error_msg}", flush=True)
+                errors.append(error_msg)
+            elif result is not None:
+                # Result is a dict with 'type' field
+                if result.get("type") == "disagreement":
+                    disagreements.append(result)
+                elif result.get("type") == "agreement":
+                    agreements.append(result)
+        
+        print(f"[compare_llm_actions] Completed: {len(disagreements)} disagreements, {len(agreements)} agreements, {len(errors)} errors", flush=True)
+        
+        # If there were errors but we still got some results, log them but continue
+        if len(errors) > 0:
+            print(f"[compare_llm_actions] Errors encountered: {errors}", flush=True)
+        
+        # If all candidates failed, raise an error with details
+        if len(disagreements) == 0 and len(errors) > 0:
+            error_summary = "; ".join(errors[:3])  # Show first 3 errors
+            if len(errors) > 3:
+                error_summary += f" ... and {len(errors) - 3} more errors"
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to process all candidates. First errors: {error_summary}"
+            )
+        
+        # Return both disagreements and agreements
+        return CompareLLMActionsResponse(disagreements=disagreements, agreements=agreements)
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        # Catch any other exceptions and return a proper error
+        error_msg = f"Unexpected error in compare_llm_actions: {str(e)}"
+        print(f"[compare_llm_actions] {error_msg}", flush=True)
+        print(f"[compare_llm_actions] Traceback: {traceback.format_exc()}", flush=True)
+        raise HTTPException(
+            status_code=500,
+            detail=error_msg
+        )
+
+
+@router.post("/games/{game_id}/compare_player_vs_llm", response_model=ComparePlayerVsLLMResponse)
+async def compare_player_vs_llm(
+    game_id: str,
+    request: ComparePlayerVsLLMRequest
+):
+    """
+    Compare a player's actual actions from game history against what an LLM would choose.
+    
+    Returns: List of disagreements and agreements
+    """
+    import asyncio
+    import traceback
+    import json
+    
+    try:
+        # Check if game exists
+        game_row = get_game_from_db(game_id)
+        if not game_row:
+            raise HTTPException(status_code=404, detail="Game not found")
+        
+        from agents.llm_agent import LLMAgent
+        
+        disagreements = []
+        agreements = []
+        errors = []
+        
+        print(f"[compare_player_vs_llm] Processing {len(request.candidates)} candidates", flush=True)
+        print(f"[compare_player_vs_llm] Player: {request.player_id}, LLM model: {request.llm_model}", flush=True)
+        
+        if not request.candidates:
+            return ComparePlayerVsLLMResponse(disagreements=[], agreements=[])
+        
+        # Get all steps to retrieve actual player actions
+        steps = get_steps(game_id)
+        step_dict = {step["step_idx"]: step for step in steps}
+        
+        def _process_one_candidate(candidate_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            """Process a single candidate and return result dict with 'type' field: 'disagreement', 'agreement', or None/Exception on error."""
+            try:
+                step_idx = candidate_data.get("step_idx")
+                player_id = candidate_data.get("player_id")
+                state_before_json = candidate_data.get("state_before_json")
+                
+                if not all([step_idx is not None, player_id, state_before_json]):
+                    print(f"[compare_player_vs_llm] Skipping invalid candidate: missing required fields", flush=True)
+                    return None
+                
+                # Verify player_id matches
+                if player_id != request.player_id:
+                    return None
+                
+                print(f"[compare_player_vs_llm] Processing candidate: step_idx={step_idx}, player_id={player_id}", flush=True)
+                
+                # Get the actual action the player took
+                step_row = step_dict.get(step_idx)
+                if not step_row:
+                    print(f"[compare_player_vs_llm] Step {step_idx} not found in game history", flush=True)
+                    return None
+                
+                action_json_str = step_row["action_json"] if "action_json" in step_row.keys() else None
+                if not action_json_str:
+                    print(f"[compare_player_vs_llm] No action_json for step_idx={step_idx}", flush=True)
+                    return None
+                
+                player_action_dict = json.loads(action_json_str) if isinstance(action_json_str, str) else action_json_str
+                
+                # Get state_after_json from the step to show the result of the action
+                state_after_json = None
+                if "state_after_json" in step_row.keys():
+                    state_after_json_str = step_row["state_after_json"]
+                    if state_after_json_str:
+                        try:
+                            state_after_json = json.loads(state_after_json_str) if isinstance(state_after_json_str, str) else state_after_json_str
+                        except Exception:
+                            pass  # Fall back to state_before_json if state_after_json is invalid
+                
+                # Use state_after_json if available, otherwise fall back to state_before_json
+                # Ensure we always have a valid state (never None)
+                display_state_json = state_after_json if state_after_json is not None else state_before_json
+                if display_state_json is None:
+                    print(f"[compare_player_vs_llm] WARNING: Both state_after_json and state_before_json are None for step_idx={step_idx}", flush=True)
+                    display_state_json = state_before_json  # Final fallback
+                
+                # Deserialize state (use state_before for getting legal actions)
+                try:
+                    state = deserialize_game_state(state_before_json)
+                except Exception as e:
+                    print(f"[compare_player_vs_llm] Failed to deserialize state for step_idx={step_idx}: {e}", flush=True)
+                    raise Exception(f"Step {step_idx}: Failed to deserialize state: {str(e)}")
+                
+                # Get legal actions
+                legal_actions_list = legal_actions(state, player_id)
+                
+                if not legal_actions_list:
+                    print(f"[compare_player_vs_llm] No legal actions for step_idx={step_idx}, skipping", flush=True)
+                    return None  # Skip if no legal actions
+                
+                # Create LLM agent
+                try:
+                    llm_agent = LLMAgent(
+                        player_id=player_id,
+                        model=request.llm_model,
+                        enable_retrieval=False
+                    )
+                except Exception as e:
+                    error_msg = f"Step {step_idx}: Failed to create LLM agent: {str(e)}"
+                    print(f"[compare_player_vs_llm] {error_msg}", flush=True)
+                    raise Exception(error_msg)
+                
+                # Get action from LLM
+                try:
+                    llm_result = llm_agent.choose_action(state, legal_actions_list)
+                except Exception as e:
+                    print(f"[compare_player_vs_llm] Failed to get action from LLM for step_idx={step_idx}: {e}", flush=True)
+                    raise Exception(f"Step {step_idx}: Failed to get LLM action: {str(e)}")
+                
+                # Extract action and payload from LLM result
+                if len(llm_result) >= 2:
+                    llm_action, llm_payload = llm_result[0], llm_result[1]
+                else:
+                    print(f"[compare_player_vs_llm] Unexpected llm_result format for step_idx={step_idx}: {llm_result}", flush=True)
+                    raise Exception(f"Step {step_idx}: Unexpected result format from LLM")
+                
+                # Serialize LLM action to dict format
+                try:
+                    llm_action_dict = {
+                        "type": serialize_action(llm_action)
+                    }
+                    if llm_payload:
+                        llm_action_dict["payload"] = serialize_action_payload(llm_payload)
+                except Exception as e:
+                    print(f"[compare_player_vs_llm] Failed to serialize LLM action for step_idx={step_idx}: {e}", flush=True)
+                    raise Exception(f"Step {step_idx}: Failed to serialize LLM action: {str(e)}")
+                
+                # Serialize legal actions for frontend
+                serialized_legal_actions = []
+                for action, payload in legal_actions_list:
+                    action_dict = {
+                        "type": serialize_action(action)
+                    }
+                    if payload:
+                        action_dict["payload"] = serialize_action_payload(payload)
+                    serialized_legal_actions.append(action_dict)
+                
+                # Compute state after LLM's action for visualization
+                state_after_llm_action_json = None
+                try:
+                    # Deserialize action and payload from dict format
+                    from engine import Action, deserialize_action, deserialize_action_payload
+                    llm_action_enum = deserialize_action(llm_action_dict["type"])
+                    llm_payload_obj = deserialize_action_payload(llm_action_dict.get("payload", {})) if llm_action_dict.get("payload") else None
+                    # IMPORTANT: Deserialize a fresh state from state_before_json to ensure we're starting from the original state
+                    # (the 'state' variable might have been modified by llm_agent.choose_action)
+                    fresh_state = deserialize_game_state(state_before_json)
+                    # Apply LLM's action to fresh state to get state after LLM action
+                    state_after_llm = fresh_state.step(llm_action_enum, llm_payload_obj, player_id=player_id)
+                    state_after_llm_action_json = serialize_game_state(state_after_llm)
+                    
+                    # VALIDATION: Verify states are actually different
+                    comparison = _compare_states_for_differences(
+                        display_state_json, 
+                        state_after_llm_action_json, 
+                        player_id,
+                        f"player action vs LLM action at step_idx={step_idx}"
+                    )
+                    if comparison["are_different"]:
+                        print(f"[compare_player_vs_llm] ✓ States are different at step_idx={step_idx}: {len(comparison['differences'])} difference(s)", flush=True)
+                        for diff in comparison["differences"][:3]:  # Log first 3 differences
+                            print(f"  - {diff}", flush=True)
+                    else:
+                        print(f"[compare_player_vs_llm] ⚠️ WARNING: States are IDENTICAL at step_idx={step_idx}!", flush=True)
+                        print(f"  Player intersections in state_after_json: {comparison['player_intersections1']}", flush=True)
+                        print(f"  Player intersections in state_after_llm_action_json: {comparison['player_intersections2']}", flush=True)
+                        for warning in comparison["warnings"]:
+                            print(f"  ⚠️ {warning}", flush=True)
+                    
+                    llm_intersection_id = llm_payload_obj.intersection_id if hasattr(llm_payload_obj, 'intersection_id') else None
+                    player_intersection_id = None
+                    if player_action_dict.get("type") == "setup_place_settlement" and player_action_dict.get("payload"):
+                        player_intersection_id = player_action_dict["payload"].get("intersection_id")
+                    print(f"[compare_player_vs_llm] Player action intersection: {player_intersection_id}, LLM action intersection: {llm_intersection_id}", flush=True)
+                except Exception as e:
+                    import traceback
+                    print(f"[compare_player_vs_llm] Failed to compute state after LLM action for step_idx={step_idx}: {e}", flush=True)
+                    print(f"[compare_player_vs_llm] Traceback: {traceback.format_exc()}", flush=True)
+                    # DO NOT fall back to display_state_json (player's state) - that would be wrong!
+                    # If computation fails, we can't show the LLM's state, so set to None
+                    # The frontend should handle this gracefully
+                    state_after_llm_action_json = None
+                    print(f"[compare_player_vs_llm] WARNING: state_after_llm_action_json is None due to computation failure", flush=True)
+                
+                # Compare actions
+                if not _actions_equal(player_action_dict, llm_action_dict):
+                    # Actions differ - this is a disagreement
+                    print(f"[compare_player_vs_llm] Found disagreement at step_idx={step_idx}", flush=True)
+                    return {
+                        "type": "disagreement",
+                        "step_idx": step_idx,
+                        "player_id": player_id,
+                        "state_before_json": state_before_json,
+                        "state_after_json": display_state_json,  # State after player's action
+                        "state_after_llm_action_json": state_after_llm_action_json,  # State after LLM's action
+                        "player_action": player_action_dict,
+                        "llm_action": llm_action_dict,
+                        "legal_actions": serialized_legal_actions
+                    }
+                else:
+                    # Actions agree
+                    print(f"[compare_player_vs_llm] Found agreement at step_idx={step_idx}", flush=True)
+                    return {
+                        "type": "agreement",
+                        "step_idx": step_idx,
+                        "player_id": player_id,
+                        "state_before_json": state_before_json,
+                        "state_after_json": display_state_json,  # State after action (same for both)
+                        "state_after_llm_action_json": state_after_llm_action_json,  # Same as state_after_json when actions agree
+                        "agreed_action": player_action_dict,  # Player and LLM chose the same action
+                        "legal_actions": serialized_legal_actions
+                    }
+            except Exception as e:
+                # Return exception to be handled by caller
+                return e
+        
+        # Use semaphore to limit concurrency
+        max_concurrency = 16
+        sem = asyncio.Semaphore(max_concurrency)
+        
+        async def _run_one(candidate_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            """Async wrapper that uses semaphore to limit concurrency."""
+            async with sem:
+                return await asyncio.to_thread(_process_one_candidate, candidate_data)
+        
+        # Run all candidates in parallel
+        print(f"[compare_player_vs_llm] Processing {len(request.candidates)} candidates in parallel (max {max_concurrency} concurrent)", flush=True)
+        results = await asyncio.gather(*[_run_one(c) for c in request.candidates], return_exceptions=True)
+        
+        # Process results
+        for candidate, result in zip(request.candidates, results):
+            if isinstance(result, Exception):
+                error_msg = f"Error processing candidate at step_idx={candidate.get('step_idx', 'unknown')}: {str(result)}"
+                print(f"[compare_player_vs_llm] {error_msg}", flush=True)
+                errors.append(error_msg)
+            elif result is not None:
+                # Result is a dict with 'type' field
+                if result.get("type") == "disagreement":
+                    disagreements.append(result)
+                elif result.get("type") == "agreement":
+                    agreements.append(result)
+        
+        print(f"[compare_player_vs_llm] Completed: {len(disagreements)} disagreements, {len(agreements)} agreements, {len(errors)} errors", flush=True)
+        
+        # If there were errors but we still got some results, log them but continue
+        if len(errors) > 0:
+            print(f"[compare_player_vs_llm] Errors encountered: {errors}", flush=True)
+        
+        # Return both disagreements and agreements
+        return ComparePlayerVsLLMResponse(disagreements=disagreements, agreements=agreements)
+    
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        # Catch any other exceptions and return a proper error
+        error_msg = f"Unexpected error in compare_player_vs_llm: {str(e)}"
+        print(f"[compare_player_vs_llm] {error_msg}", flush=True)
+        print(f"[compare_player_vs_llm] Traceback: {traceback.format_exc()}", flush=True)
+        raise HTTPException(
+            status_code=500,
+            detail=error_msg
+        )
+
+
 def _parse_llm_agent_spec(agent_type_str: str) -> Optional[Dict[str, Any]]:
     """
     Parse frontend agent_type strings for LLM variants.
@@ -916,6 +1756,8 @@ async def evaluate_drill(drill_id: int, request: EvaluateDrillRequest):
                     ]
             
             # Filter to only include correct + incorrect actions
+            # This restricts the action space so the LLM can only choose between
+            # the specified correct and incorrect actions, not all legal actions.
             action_dicts_to_include = correct_actions.copy()
             if incorrect_actions:
                 action_dicts_to_include.extend(incorrect_actions)
