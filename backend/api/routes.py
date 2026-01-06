@@ -1630,7 +1630,9 @@ def _canonical_action_dict(action_dict: Dict[str, Any]) -> Dict[str, Any]:
         return {"type": action_type}
     if isinstance(payload, dict):
         # Remove nulls to avoid trivial mismatches between absent vs null
-        cleaned = {k: v for k, v in payload.items() if v is not None}
+        # Also remove the redundant "type" field from payload (e.g., "BuildRoadPayload")
+        # since LLM agents don't include this field and it's redundant with the action type
+        cleaned = {k: v for k, v in payload.items() if v is not None and k != "type"}
         return {"type": action_type, "payload": cleaned}
     return {"type": action_type, "payload": payload}
 
