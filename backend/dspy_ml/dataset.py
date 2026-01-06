@@ -45,6 +45,7 @@ class DrillExample:
     correct_actions: List[Dict[str, Any]]
     incorrect_actions: Optional[List[Dict[str, Any]]] = None
     state: Optional[GameState] = None  # Game state for phase-aware comparison
+    guideline: str = ""  # Strategic guideline for this drill (from database)
 
 
 class DrillDataset:
@@ -93,6 +94,7 @@ class DrillDataset:
                     steps = get_drill_steps(drill_id)
                     drills.append({
                         "id": drill_id,
+                        "guideline_text": drill_row.get("guideline_text") if drill_row else None,
                         "steps": [
                             {
                                 "idx": r["idx"],
@@ -113,6 +115,7 @@ class DrillDataset:
                 steps = get_drill_steps(drill_id)
                 drills.append({
                     "id": drill_id,
+                    "guideline_text": drill_row["guideline_text"] if "guideline_text" in drill_row.keys() else None,
                     "steps": [
                         {
                             "idx": r["idx"],
@@ -129,6 +132,7 @@ class DrillDataset:
         # Convert each drill's first step to example
         for drill in drills:
             drill_id = drill["id"]
+            drill_guideline = drill.get("guideline_text", "") or ""  # Get guideline from drill
             steps = drill.get("steps", [])
             
             if not steps:
@@ -249,7 +253,8 @@ class DrillDataset:
                 expected_action=expected_action,
                 correct_actions=correct_actions,
                 incorrect_actions=incorrect_actions,
-                state=state  # Include state for phase-aware comparison
+                state=state,  # Include state for phase-aware comparison
+                guideline=drill_guideline or ""  # Include guideline from database
             ))
         
         self.examples = examples
@@ -267,6 +272,7 @@ class DrillDataset:
                 "expected_action": ex.expected_action,
                 "correct_actions": ex.correct_actions,
                 "incorrect_actions": ex.incorrect_actions,
+                "guideline": ex.guideline,
             })
         
         with open(filepath, 'w') as f:
@@ -303,6 +309,7 @@ class DrillDataset:
                 correct_actions=item["correct_actions"],
                 incorrect_actions=item.get("incorrect_actions"),
                 state=state,
+                guideline=item.get("guideline", ""),
             ))
         
         self.examples = examples

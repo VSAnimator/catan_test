@@ -50,7 +50,8 @@ class DSPyDrillAgent:
         result = self.module(
             game_rules=example.game_rules,
             observation=example.observation,
-            viable_actions=example.viable_actions
+            viable_actions=example.viable_actions,
+            guideline=example.guideline or ""  # Pass guideline (empty string if None)
         )
         
         reasoning = result.reasoning if hasattr(result, 'reasoning') else ""
