@@ -5,12 +5,48 @@ Uses retrieval-augmented generation to learn from past games and user feedback.
 import os
 import json
 from typing import Tuple, Optional, List, Dict, Any
+from datetime import datetime
+from pathlib import Path
 from engine import GameState, Action, ActionPayload
 from engine.serialization import legal_actions, state_to_text, legal_actions_to_text
 from .base_agent import BaseAgent
 from .llm_retrieval import StateRetriever, RetrievedExample
 from api.guidelines_db import get_guidelines, get_feedback
 from api.database import get_optimized_prompt, get_default_optimized_prompt
+
+# Log file for fallback events
+FALLBACK_LOG_FILE = Path(__file__).parent.parent / "llm_fallback_logs.txt"
+
+# Ensure ANTHROPIC_API_KEY is loaded from ~/.zshrc with correct value
+# This runs when the module is imported, before any LLM calls
+# Always reload from .zshrc to ensure we have the correct key (not the OpenAI key)
+zshrc_path = Path.home() / ".zshrc"
+if zshrc_path.exists():
+    try:
+        with open(zshrc_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("export ANTHROPIC_API_KEY="):
+                    key_value = line.split("=", 1)[1].strip()
+                    key_value = key_value.strip('"').strip("'")
+                    # Only set if it looks like a valid Anthropic key (starts with sk-ant-api)
+                    if key_value.startswith("sk-ant-api"):
+                        os.environ["ANTHROPIC_API_KEY"] = key_value
+                        break
+    except Exception:
+        pass  # Silently fail if we can't load it
+
+def _log_fallback(message: str):
+    """Write fallback log message to file with timestamp."""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = f"[{timestamp}] {message}\n"
+    try:
+        with open(FALLBACK_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(log_entry)
+    except Exception as e:
+        # If file writing fails, at least print to console
+        print(f"Failed to write to fallback log file: {e}", flush=True)
+        print(log_entry, flush=True)
 
 
 class LLMAgent(BaseAgent):
@@ -95,9 +131,14 @@ class LLMAgent(BaseAgent):
         # Only create retriever if retrieval is enabled (for zero-shot, skip this)
         self.retriever = StateRetriever(max_examples=max_examples) if enable_retrieval else None
         
-        # Set API key if provided, otherwise LiteLLM will use env vars
+        # Set API key if provided, otherwise LiteLLM will use env vars automatically
+        # LiteLLM automatically picks up the correct key from environment based on model name:
+        # - Anthropic models: ANTHROPIC_API_KEY
+        # - OpenAI models: OPENAI_API_KEY
+        # - Google models: GEMINI_API_KEY
         if api_key:
-            # Determine provider from model name and set appropriate env var
+            # Only set env var if provided, but LiteLLM will use env vars automatically anyway
+            # This is mainly for backwards compatibility
             if model.startswith("claude") or "anthropic" in model.lower():
                 os.environ["ANTHROPIC_API_KEY"] = api_key
             elif model.startswith("gemini") or "google" in model.lower():
@@ -150,6 +191,10 @@ class LLMAgent(BaseAgent):
                 "temperature": temperature,
                 "max_tokens": 2000,
             }
+
+            # LiteLLM automatically picks up API keys from environment variables based on model name
+            # No need to explicitly pass them - just ensure the environment has the right keys
+            # (which is handled by main.py and llm_agent.py module-level loading)
 
             # Enable "thinking mode" for GPT-5.* by setting reasoning effort (default: medium).
             # We only set this for GPT-5 models to avoid passing provider-specific params to other models.
@@ -817,7 +862,7 @@ class LLMAgent(BaseAgent):
 - **Distance rule**: Settlements and cities must be at least 2 edges apart (no adjacent intersections can both have buildings)
 
 ### Playing Phase:
-- **One dev card per turn**: You can only play ONE development card per turn (except Victory Point cards, which are revealed at game end)
+- **Playing dev cards**: You can only PLAY ONE development card per turn (except Victory Point cards, which are revealed at game end). However, you CAN buy multiple development cards in the same turn if you have enough resources (1 wheat, 1 sheep, 1 ore each).
 - **Road building**: Roads must connect to your existing roads or settlements/cities
 - **Settlement placement**: Settlements must be at least 2 edges from any other settlement/city (distance rule)
 - **City placement**: Cities can only be built by upgrading existing settlements
@@ -1159,12 +1204,22 @@ Now reason about the best action and respond in JSON format as specified."""
         # Call + parse with one retry. If parsing fails, retry using gpt-5.2 with thinking disabled.
         first_response_text: Optional[str] = None
         last_error: Optional[Exception] = None
+        original_model = self.model
+        game_id = state.game_id if hasattr(state, 'game_id') else 'unknown'
+        
         for attempt in range(2):
             try:
                 if attempt == 0:
+                    _log_fallback(f"Player {self.player_id} (Game {game_id}): Attempting with model {original_model}")
                     response_text = self._call_llm(messages)
                 else:
                     # Fallback call: gpt-5.2 without thinking, and with strict JSON-only instruction.
+                    _log_fallback(f"Player {self.player_id} (Game {game_id}): FALLBACK TRIGGERED!")
+                    _log_fallback(f"  Original model: {original_model}")
+                    _log_fallback(f"  Fallback model: gpt-5.2")
+                    _log_fallback(f"  Error from original attempt: {last_error}")
+                    _log_fallback(f"  First response (truncated): {(first_response_text or '')[:500]}")
+                    
                     prev = (first_response_text or "")[:1500]
                     retry_messages = messages + [
                         {
@@ -1188,20 +1243,32 @@ Now reason about the best action and respond in JSON format as specified."""
                         model_override="gpt-5.2",
                         thinking_mode_override=False,
                     )
+                    _log_fallback(f"Player {self.player_id} (Game {game_id}): Fallback to gpt-5.2 completed, attempting to parse response")
 
                 # Store response for debugging
                 self._last_llm_response = response_text
                 if attempt == 0:
                     first_response_text = response_text
 
-                return self._parse_llm_action_response(response_text, state, legal_actions_list)
+                parsed_result = self._parse_llm_action_response(response_text, state, legal_actions_list)
+                if attempt > 0:
+                    _log_fallback(f"Player {self.player_id} (Game {game_id}): Fallback to gpt-5.2 SUCCESSFUL - action parsed")
+                return parsed_result
             except Exception as e:
                 last_error = e
+                if attempt == 0:
+                    _log_fallback(f"Player {self.player_id} (Game {game_id}): First attempt with {original_model} FAILED: {e}")
+                else:
+                    _log_fallback(f"Player {self.player_id} (Game {game_id}): Fallback to gpt-5.2 also FAILED: {e}")
                 # Retry once; otherwise fall through to final fallback.
                 continue
 
         # Final fallback: pick first legal action so the game keeps moving.
-        print(f"Warning: LLM parsing failed twice; falling back to first legal action. Error: {last_error}", flush=True)
+        _log_fallback(f"Player {self.player_id} (Game {game_id}): FINAL FALLBACK - Using first legal action")
+        _log_fallback(f"  Original model: {original_model}")
+        _log_fallback(f"  Attempted fallback to: gpt-5.2")
+        _log_fallback(f"  Final error: {last_error}")
+        _log_fallback(f"  First response (truncated): {(first_response_text or '')[:500]}")
         action, payload = legal_actions_list[0]
         return (action, payload, f"Fallback: LLM parsing failed twice ({last_error})", first_response_text)
     

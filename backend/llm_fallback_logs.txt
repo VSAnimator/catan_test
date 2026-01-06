@@ -1,0 +1,260 @@
+[2026-01-05 22:54:19] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 22:56:26] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 22:56:26] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 22:56:26] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 22:56:26] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 22:56:46] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 22:56:46] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): First attempt with claude-sonnet-4-5-20250929 FAILED: LLM API error: litellm.RateLimitError: AnthropicException - {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization (e7616225-3463-4916-8bf4-40930e183412) of 30,000 input tokens per minute. For details, refer to: https://docs.claude.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase."},"request_id":"req_011CWqgt4mkMBGCSy1tioG8i"}
+[2026-01-05 22:56:46] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): FALLBACK TRIGGERED!
+[2026-01-05 22:56:46]   Original model: claude-sonnet-4-5-20250929
+[2026-01-05 22:56:46]   Fallback model: gpt-5.2
+[2026-01-05 22:56:46]   Error from original attempt: LLM API error: litellm.RateLimitError: AnthropicException - {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization (e7616225-3463-4916-8bf4-40930e183412) of 30,000 input tokens per minute. For details, refer to: https://docs.claude.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase."},"request_id":"req_011CWqgt4mkMBGCSy1tioG8i"}
+[2026-01-05 22:56:46]   First response (truncated): 
+[2026-01-05 22:56:49] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 22:56:50] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): First attempt with claude-sonnet-4-5-20250929 FAILED: LLM API error: litellm.RateLimitError: AnthropicException - {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization (e7616225-3463-4916-8bf4-40930e183412) of 30,000 input tokens per minute. For details, refer to: https://docs.claude.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase."},"request_id":"req_011CWqgtKPpV4Q1nNbyqT49B"}
+[2026-01-05 22:56:50] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): FALLBACK TRIGGERED!
+[2026-01-05 22:56:50]   Original model: claude-sonnet-4-5-20250929
+[2026-01-05 22:56:50]   Fallback model: gpt-5.2
+[2026-01-05 22:56:50]   Error from original attempt: LLM API error: litellm.RateLimitError: AnthropicException - {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization (e7616225-3463-4916-8bf4-40930e183412) of 30,000 input tokens per minute. For details, refer to: https://docs.claude.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase."},"request_id":"req_011CWqgtKPpV4Q1nNbyqT49B"}
+[2026-01-05 22:56:50]   First response (truncated): 
+[2026-01-05 22:56:50] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Fallback to gpt-5.2 completed, attempting to parse response
+[2026-01-05 22:56:50] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Fallback to gpt-5.2 SUCCESSFUL - action parsed
+[2026-01-05 22:56:50] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 22:56:51] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): First attempt with claude-sonnet-4-5-20250929 FAILED: LLM API error: litellm.RateLimitError: AnthropicException - {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization (e7616225-3463-4916-8bf4-40930e183412) of 30,000 input tokens per minute. For details, refer to: https://docs.claude.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase."},"request_id":"req_011CWqgtQ47p2XsdNdXYZwnf"}
+[2026-01-05 22:56:51] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): FALLBACK TRIGGERED!
+[2026-01-05 22:56:51]   Original model: claude-sonnet-4-5-20250929
+[2026-01-05 22:56:51]   Fallback model: gpt-5.2
+[2026-01-05 22:56:51]   Error from original attempt: LLM API error: litellm.RateLimitError: AnthropicException - {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization (e7616225-3463-4916-8bf4-40930e183412) of 30,000 input tokens per minute. For details, refer to: https://docs.claude.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase."},"request_id":"req_011CWqgtQ47p2XsdNdXYZwnf"}
+[2026-01-05 22:56:51]   First response (truncated): 
+[2026-01-05 22:56:52] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Fallback to gpt-5.2 completed, attempting to parse response
+[2026-01-05 22:56:52] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Fallback to gpt-5.2 SUCCESSFUL - action parsed
+[2026-01-05 22:56:52] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 22:56:52] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): First attempt with claude-sonnet-4-5-20250929 FAILED: LLM API error: litellm.RateLimitError: AnthropicException - {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization (e7616225-3463-4916-8bf4-40930e183412) of 30,000 input tokens per minute. For details, refer to: https://docs.claude.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase."},"request_id":"req_011CWqgtXAzWiGXCqaBEr2XR"}
+[2026-01-05 22:56:52] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): FALLBACK TRIGGERED!
+[2026-01-05 22:56:52]   Original model: claude-sonnet-4-5-20250929
+[2026-01-05 22:56:52]   Fallback model: gpt-5.2
+[2026-01-05 22:56:52]   Error from original attempt: LLM API error: litellm.RateLimitError: AnthropicException - {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization (e7616225-3463-4916-8bf4-40930e183412) of 30,000 input tokens per minute. For details, refer to: https://docs.claude.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase."},"request_id":"req_011CWqgtXAzWiGXCqaBEr2XR"}
+[2026-01-05 22:56:52]   First response (truncated): 
+[2026-01-05 22:56:54] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 22:56:54] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): First attempt with claude-sonnet-4-5-20250929 FAILED: LLM API error: litellm.RateLimitError: AnthropicException - {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization (e7616225-3463-4916-8bf4-40930e183412) of 30,000 input tokens per minute. For details, refer to: https://docs.claude.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase."},"request_id":"req_011CWqgte6xnnrHaTfwXq8Dh"}
+[2026-01-05 22:56:54] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): FALLBACK TRIGGERED!
+[2026-01-05 22:56:54]   Original model: claude-sonnet-4-5-20250929
+[2026-01-05 22:56:54]   Fallback model: gpt-5.2
+[2026-01-05 22:56:54]   Error from original attempt: LLM API error: litellm.RateLimitError: AnthropicException - {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization (e7616225-3463-4916-8bf4-40930e183412) of 30,000 input tokens per minute. For details, refer to: https://docs.claude.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase."},"request_id":"req_011CWqgte6xnnrHaTfwXq8Dh"}
+[2026-01-05 22:56:54]   First response (truncated): 
+[2026-01-05 22:56:54] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Fallback to gpt-5.2 completed, attempting to parse response
+[2026-01-05 22:56:54] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Fallback to gpt-5.2 SUCCESSFUL - action parsed
+[2026-01-05 22:56:54] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 22:56:55] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): First attempt with claude-sonnet-4-5-20250929 FAILED: LLM API error: litellm.RateLimitError: AnthropicException - {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization (e7616225-3463-4916-8bf4-40930e183412) of 30,000 input tokens per minute. For details, refer to: https://docs.claude.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase."},"request_id":"req_011CWqgthBFu7XEvnZFaT5Wd"}
+[2026-01-05 22:56:55] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): FALLBACK TRIGGERED!
+[2026-01-05 22:56:55]   Original model: claude-sonnet-4-5-20250929
+[2026-01-05 22:56:55]   Fallback model: gpt-5.2
+[2026-01-05 22:56:55]   Error from original attempt: LLM API error: litellm.RateLimitError: AnthropicException - {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed the rate limit for your organization (e7616225-3463-4916-8bf4-40930e183412) of 30,000 input tokens per minute. For details, refer to: https://docs.claude.com/en/api/rate-limits. You can see the response headers for current usage. Please reduce the prompt length or the maximum tokens requested, or try again later. You may also contact sales at https://www.anthropic.com/contact-sales to discuss your options for a rate limit increase."},"request_id":"req_011CWqgthBFu7XEvnZFaT5Wd"}
+[2026-01-05 22:56:55]   First response (truncated): 
+[2026-01-05 22:56:57] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Fallback to gpt-5.2 completed, attempting to parse response
+[2026-01-05 22:56:57] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Fallback to gpt-5.2 SUCCESSFUL - action parsed
+[2026-01-05 22:56:58] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Fallback to gpt-5.2 completed, attempting to parse response
+[2026-01-05 22:56:58] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Fallback to gpt-5.2 SUCCESSFUL - action parsed
+[2026-01-05 22:57:03] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Fallback to gpt-5.2 completed, attempting to parse response
+[2026-01-05 22:57:03] Player player_0 (Game e74509c8-a115-48e2-acf0-a070176affbc): Fallback to gpt-5.2 SUCCESSFUL - action parsed
+[2026-01-05 22:58:01] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 22:58:19] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 22:58:44] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 22:59:05] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 22:59:33] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 22:59:55] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:00:19] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:00:47] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:01:26] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:01:46] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:02:03] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:02:25] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:03:02] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:03:21] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:03:42] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:04:16] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:04:38] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:05:09] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:05:42] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:06:00] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:06:31] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:07:07] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:07:29] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:07:50] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:08:14] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:08:32] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:09:08] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:09:36] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:09:55] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:10:14] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:10:14] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:10:14] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:10:14] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:10:14] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:10:14] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:10:14] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:10:14] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:10:14] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:10:14] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:10:37] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:11:18] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:11:36] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:12:08] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:12:27] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:13:11] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:13:40] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:14:00] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:14:42] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): First attempt with claude-sonnet-4-5-20250929 FAILED: Expecting value: line 1 column 1 (char 0)
+[2026-01-05 23:14:42] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): FALLBACK TRIGGERED!
+[2026-01-05 23:14:42]   Original model: claude-sonnet-4-5-20250929
+[2026-01-05 23:14:42]   Fallback model: gpt-5.2
+[2026-01-05 23:14:42]   Error from original attempt: Expecting value: line 1 column 1 (char 0)
+[2026-01-05 23:14:42]   First response (truncated): I need to analyze my current situation and determine the best action.
+
+## Current Situation Analysis:
+
+**My Resources:** 
+- Wood: 0, Brick: 2, Wheat: 0, Sheep: 0, Ore: 1
+
+**My Position:**
+- 2 VP (need 8 more to win)
+- 2 settlements, 0 cities
+- 3 roads (longest road: 2 segments)
+
+**What I Need:**
+- **For settlement**: 1 wood, 1 brick, 1 sheep, 1 wheat (I have: 2 brick, 1 ore - missing wood, sheep, wheat)
+- **For city**: 2 wheat, 3 ore (I have: 1 ore - missing 2 wheat, 2 ore)
+- **For road**: 1 woo
+[2026-01-05 23:14:46] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Fallback to gpt-5.2 completed, attempting to parse response
+[2026-01-05 23:14:46] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Fallback to gpt-5.2 SUCCESSFUL - action parsed
+[2026-01-05 23:14:47] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:15:07] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:15:25] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:15:56] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:17:55] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:17:55] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:17:55] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:17:55] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:17:55] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:17:55] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:17:55] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:17:55] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:17:55] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:17:55] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:18:30] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:18:49] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:19:38] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:20:53] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:20:53] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:20:53] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:20:53] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:20:53] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:20:53] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:20:53] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:20:53] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:20:53] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:20:53] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:21:02] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:21:24] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:21:45] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:22:12] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:22:32] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:22:54] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:23:26] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:23:54] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:24:18] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:24:44] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:25:28] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:25:51] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:26:20] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:26:54] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:27:13] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:27:40] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:28:00] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:28:25] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:28:43] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:29:12] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:29:32] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:30:44] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:31:07] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:31:24] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:31:41] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:32:08] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:32:31] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:32:52] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:33:24] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:33:51] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:34:17] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:34:50] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:35:11] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:35:33] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:36:01] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:36:22] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:36:41] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:38:13] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:38:33] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:39:03] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:39:37] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:39:37] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:39:37] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:39:37] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:39:37] Player player_0 (Game c1997124-a506-4330-946f-7f97430c8973): Attempting with model gpt-5.2
+[2026-01-05 23:39:38] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:40:08] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:41:30] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:42:56] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:43:21] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:43:44] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:44:08] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:44:29] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:45:00] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:45:29] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:45:53] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:47:28] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:48:13] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:48:51] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:49:11] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:49:38] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:50:01] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:50:18] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:50:40] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:51:07] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:51:53] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:52:17] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:52:47] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:53:11] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:53:47] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:54:41] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:54:59] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:55:28] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:55:52] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:56:50] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:57:12] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:57:47] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:58:24] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:58:45] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:59:04] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:59:28] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-05 23:59:47] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 00:00:59] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 00:01:29] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 00:02:09] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 00:02:38] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 00:08:37] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 00:09:07] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 00:09:30] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 00:12:58] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 00:13:25] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 00:13:52] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 00:14:16] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 00:14:36] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 00:14:59] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 00:15:19] Player player_3 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 00:15:58] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 08:13:01] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 08:13:34] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 08:13:56] Player player_1 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 08:14:20] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 08:14:44] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 08:15:06] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929
+[2026-01-06 08:15:25] Player player_2 (Game 78e2cca1-cae7-4a0b-8c7e-7976dc368fe5): Attempting with model claude-sonnet-4-5-20250929

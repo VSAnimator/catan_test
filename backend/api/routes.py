@@ -1019,14 +1019,17 @@ async def compare_llm_actions(
                     return None  # Skip if no legal actions
                 
                 # Create two LLM agents
+                # LiteLLM automatically picks up the correct API key from environment based on model name
                 try:
                     good_agent = LLMAgent(
                         player_id=player_id,
+                        api_key=None,  # Let LiteLLM use environment variables automatically
                         model=request.good_model,
                         enable_retrieval=False
                     )
                     worse_agent = LLMAgent(
                         player_id=player_id,
+                        api_key=None,  # Let LiteLLM use environment variables automatically
                         model=request.worse_model,
                         enable_retrieval=False
                     )
@@ -1331,6 +1334,7 @@ async def compare_player_vs_llm(
                 try:
                     llm_agent = LLMAgent(
                         player_id=player_id,
+                        api_key=None,  # Let LiteLLM use environment variables automatically
                         model=request.llm_model,
                         enable_retrieval=False
                     )
@@ -1590,16 +1594,12 @@ def _make_agent(
     if llm_spec is not None:
         agent_class = AGENT_CLASSES.get("llm", RandomAgent)
         import os
-        api_key = (
-            os.getenv("OPENAI_API_KEY")
-            or os.getenv("ANTHROPIC_API_KEY")
-            or os.getenv("GEMINI_API_KEY")
-            or os.getenv("LLM_API_KEY")
-        )
         model = llm_spec["model"] or os.getenv("LLM_MODEL", "gpt-5.1")
+        # LiteLLM automatically picks up the correct API key from environment based on model name
+        # No need to pass api_key - just ensure environment variables are set (handled by main.py)
         return agent_class(
             player_id,
-            api_key=api_key,
+            api_key=None,  # Let LiteLLM use environment variables automatically
             model=model,
             enable_retrieval=False,
             thinking_mode=llm_spec["thinking_mode"],
@@ -2502,18 +2502,13 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
             # Special handling for LLM agent
             if llm_spec is not None:
                 import os
-                # Get API key and model from env vars
-                api_key = (
-                    os.getenv("OPENAI_API_KEY") or
-                    os.getenv("ANTHROPIC_API_KEY") or
-                    os.getenv("GEMINI_API_KEY") or
-                    os.getenv("LLM_API_KEY")
-                )
                 model = llm_spec["model"] or os.getenv("LLM_MODEL", "gpt-5.1")  # Default to gpt-5.1 (latest model)
+                # LiteLLM automatically picks up the correct API key from environment based on model name
+                # No need to pass api_key - just ensure environment variables are set (handled by main.py)
                 # Zero-shot mode: disable retrieval
                 agents[player.id] = agent_class(
                     player.id,
-                    api_key=api_key,
+                    api_key=None,  # Let LiteLLM use environment variables automatically
                     model=model,
                     enable_retrieval=False,  # Zero-shot mode
                     thinking_mode=llm_spec["thinking_mode"],
