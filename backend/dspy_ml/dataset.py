@@ -44,6 +44,7 @@ class DrillExample:
     expected_action: Dict[str, Any]
     correct_actions: List[Dict[str, Any]]
     incorrect_actions: Optional[List[Dict[str, Any]]] = None
+    state: Optional[GameState] = None  # Game state for phase-aware comparison
 
 
 class DrillDataset:
@@ -247,7 +248,8 @@ class DrillDataset:
                 viable_actions=viable_actions,
                 expected_action=expected_action,
                 correct_actions=correct_actions,
-                incorrect_actions=incorrect_actions
+                incorrect_actions=incorrect_actions,
+                state=state  # Include state for phase-aware comparison
             ))
         
         self.examples = examples
@@ -271,20 +273,36 @@ class DrillDataset:
             json.dump(data, f, indent=2)
     
     def load_from_json(self, filepath: str) -> List[DrillExample]:
-        """Load dataset from JSON file."""
+        """Load dataset from JSON file. Also loads game states from database for phase-aware comparison."""
         with open(filepath, 'r') as f:
             data = json.load(f)
         
         examples = []
         for item in data:
+            drill_id = item["drill_id"]
+            
+            # Load state from database for phase-aware comparison
+            state = None
+            try:
+                drill = get_drill(drill_id)
+                if drill:
+                    steps = get_drill_steps(drill_id)
+                    if steps:
+                        first_step = steps[0]
+                        state_json = json.loads(first_step["state_json"])
+                        state = deserialize_game_state(state_json)
+            except Exception as e:
+                print(f"Warning: Could not load state for drill {drill_id}: {e}", flush=True)
+            
             examples.append(DrillExample(
-                drill_id=item["drill_id"],
+                drill_id=drill_id,
                 game_rules=item["game_rules"],
                 observation=item["observation"],
                 viable_actions=item["viable_actions"],
                 expected_action=item["expected_action"],
                 correct_actions=item["correct_actions"],
                 incorrect_actions=item.get("incorrect_actions"),
+                state=state,
             ))
         
         self.examples = examples

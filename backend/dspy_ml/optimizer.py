@@ -77,9 +77,16 @@ def create_drill_metric(examples: List[DrillExample]) -> callable:
                 return 0.0
             
             # Check if it matches any correct action
-            canonical_predicted = _canonical_action_dict(chosen_action)
+            # Get state from the example if available
+            state = None
+            if hasattr(gold, 'state'):
+                state = gold.state
+            elif hasattr(gold, '_drill_example') and hasattr(gold._drill_example, 'state'):
+                state = gold._drill_example.state
+            
+            canonical_predicted = _canonical_action_dict(chosen_action, state=state)
             for correct_action in correct_actions:
-                if _canonical_action_dict(correct_action) == canonical_predicted:
+                if _canonical_action_dict(correct_action, state=state) == canonical_predicted:
                     return 1.0
             
             return 0.0

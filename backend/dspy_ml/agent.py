@@ -82,9 +82,10 @@ class DSPyDrillAgent:
             return 0.0
         
         # Check if prediction matches any correct action
-        canonical_predicted = _canonical_action_dict(prediction)
+        # Pass state for phase-aware comparison (setup phase mappings)
+        canonical_predicted = _canonical_action_dict(prediction, state=example.state)
         for correct_action in example.correct_actions:
-            if _canonical_action_dict(correct_action) == canonical_predicted:
+            if _canonical_action_dict(correct_action, state=example.state) == canonical_predicted:
                 return 1.0
         
         return 0.0

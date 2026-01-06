@@ -1620,13 +1620,16 @@ def _make_agent(
     return agent_class(player_id)
 
 
-def _canonical_action_dict(action_dict: Dict[str, Any]) -> Dict[str, Any]:
+def _canonical_action_dict(action_dict: Dict[str, Any], state: Optional[GameState] = None) -> Dict[str, Any]:
     """
     Normalize action dicts for comparison.
     
     Accepts both formats:
     - API format: {"type": "...", "payload": {...}}
     - LLMAgent format: {"action_type": "...", "action_payload": {...}}
+    
+    Also applies LLMAgent-style mappings:
+    - During setup phase: build_road → setup_place_road, build_settlement → setup_place_settlement
     
     Always returns API format: {"type": "...", "payload": {...}}
     """
@@ -1635,6 +1638,13 @@ def _canonical_action_dict(action_dict: Dict[str, Any]) -> Dict[str, Any]:
     
     # Accept both "type" and "action_type" keys
     action_type = action_dict.get("type") or action_dict.get("action_type")
+    
+    # Apply setup phase mappings (matching LLMAgent behavior)
+    if state and state.phase == "setup":
+        if action_type == "build_settlement":
+            action_type = "setup_place_settlement"
+        elif action_type == "build_road":
+            action_type = "setup_place_road"
     
     # Accept both "payload" and "action_payload" keys
     payload = action_dict.get("payload") or action_dict.get("action_payload")
