@@ -15,3 +15,14 @@
   - If output is too long, use pagination tools that preserve full output (like `less` or `more`)
 - When analyzing command output, read the full log file rather than piping
 
+## LLM Behavior and Determinism
+- **LLM stochasticity is NOT a significant source of variability** in these agents
+- DSPy caches LLM calls by default - repeated calls with same inputs return cached results
+- If performance changes between runs, it's due to actual changes in:
+  - Prompt/signature changes
+  - Input data changes
+  - Evaluation metric changes
+  - System setup differences
+- **DO NOT attribute performance differences to "randomness" or "stochasticity"**
+- Always look for systematic differences in setup/evaluation when results differ
+
