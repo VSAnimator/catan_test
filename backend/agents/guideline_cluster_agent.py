@@ -144,18 +144,100 @@ class GuidelineClusterAgent(LLMAgent):
         # Use filtered actions
         legal_actions_list = filtered_actions if filtered_actions else legal_actions_list
 
+        # Step 1: Observe - Format current state
+        state_and_actions = self._format_state_and_actions(state, legal_actions_list)
+        
+        # Step 2: Think - Retrieve context (optional, can skip for cluster agent)
+        context = self._retrieve_context(state, legal_actions_list)
+        
+        # Step 3: Retrieve cluster guideline
         observation = state_to_text(
             state,
             self.player_id,
             exclude_higher_level_features=self.exclude_higher_level_features
         )
-        viable_actions = legal_actions_to_text(legal_actions_list, state=state, player_id=self.player_id)
-
-        # Retrieve guideline
         guideline = self._retrieve_guideline(observation)
+        
+        # Step 4: Act - Build prompt and call LLM
+        system_prompt = self._get_system_prompt()
+        
+        # Add urgent note if trade response is needed
+        trade_urgency_note = ""
+        if state.pending_trade_offer is not None:
+            current_player = state.players[state.current_player_index]
+            offer = state.pending_trade_offer
+            if (current_player.id in offer['target_player_ids'] and 
+                current_player.id not in state.pending_trade_responses):
+                trade_urgency_note = "\n\n⚠️ URGENT: You MUST respond to the pending trade offer. You can only choose ACCEPT_TRADE or REJECT_TRADE. No other actions are available until you respond.\n"
+        
+        # Inject retrieved cluster guideline
+        cluster_guideline_note = ""
+        if guideline:
+            cluster_guideline_note = (
+                "\n\nHere's a useful guideline you should follow in situations like this: "
+                f"{guideline}\n"
+            )
 
-        # Use LLMAgent predict with guideline injection
-        prompt = self._build_prompt(observation, viable_actions, guideline)
-        action, payload, reasoning = self._predict_action_from_prompt(prompt, legal_actions_list)
-        return action, payload, reasoning
+        user_prompt = f"""{state_and_actions}{cluster_guideline_note}
+
+{context}{trade_urgency_note}
+
+Now reason about the best action and respond in JSON format as specified."""
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        # Call LLM and parse response (same logic as LLMAgent)
+        first_response_text: Optional[str] = None
+        last_error: Optional[Exception] = None
+        original_model = self.model
+        game_id = state.game_id if hasattr(state, 'game_id') else 'unknown'
+        
+        for attempt in range(2):
+            try:
+                if attempt == 0:
+                    response_text = self._call_llm(messages)
+                else:
+                    # Fallback call: gpt-5.2 without thinking, and with strict JSON-only instruction.
+                    prev = (first_response_text or "")[:1500]
+                    retry_messages = messages + [
+                        {
+                            "role": "system",
+                            "content": (
+                                "CRITICAL: Output MUST be a single valid JSON object (no markdown/code fences, no extra text). "
+                                "Use an action_type that exactly matches one of the legal actions."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                "Your previous response could not be parsed or mapped to a legal action. "
+                                "Return ONLY valid JSON in the specified schema.\n\n"
+                                f"Previous response (truncated):\n{prev}"
+                            ),
+                        },
+                    ]
+                    response_text = self._call_llm(
+                        retry_messages,
+                        model_override="gpt-5.2",
+                        thinking_mode_override=False,
+                    )
+
+                # Store response for debugging
+                self._last_llm_response = response_text
+                if attempt == 0:
+                    first_response_text = response_text
+
+                parsed_result = self._parse_llm_action_response(response_text, state, legal_actions_list)
+                return parsed_result
+            except Exception as e:
+                last_error = e
+                # Retry once; otherwise fall through to final fallback.
+                continue
+
+        # Final fallback: pick first legal action so the game keeps moving.
+        action, payload = legal_actions_list[0]
+        return (action, payload, f"Fallback: LLM parsing failed twice ({last_error})", first_response_text)
 
