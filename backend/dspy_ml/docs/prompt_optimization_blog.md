@@ -171,6 +171,78 @@ for _ in range(iterations):
 - **Reusable scripts and logs**: one-click runs (`cluster_guideline_tree.py`, `cluster_guideline_tree_meta.py`) with detailed logs for postmortem.
 - **Clustering**: carry situational power without per-instance guidelines at inference; fewer prompts to manage.
 
+## Drill Snapshots (Concrete Examples)
+- **Setup settlement (drill 72)**  
+  - Expected: `setup_place_settlement` @ intersection 16  
+  - Pred (before fixes): `build_settlement` @ intersection 4 → WRONG (type + payload)  
+  - After normalization + guideline: type fixed; payload still off; final guideline: “PLACE SETTLEMENT NOW on best intersection; do NOT trade/road first.”
+- **Setup road (drill 73)**  
+  - Expected: `setup_place_road` edge 30  
+  - Pred: `build_road` edge 29 → WRONG; normalization fixes type; guideline adds explicit edge targeting.
+- **Tempo/end-turn vs trade**  
+  - Expected: `end_turn`  
+  - Pred: `propose_trade` offering surplus ore → WRONG; guideline: “IF no immediate build, END TURN; do NOT propose speculative trades.”
+- **Dev card misuse (VP/Monopoly)**  
+  - Expected: `end_turn` (hold VP/Monopoly)  
+  - Pred: `play_dev_card` VP/Monopoly for tiny gain → WRONG; guideline: “ONLY play VP if it wins THIS TURN; Monopoly only for LARGE windfall; otherwise END TURN.”
+
+## Failure Case Study (Trade vs Settle)
+- Pattern: model trades when it can already settle or build road-to-settle this turn.  
+- Fix: “IF you can settle now, DO IT. ONLY trade if exactly one resource short AND it completes the build this turn. DO NOT ‘set up’ roads first.”  
+- Result: clusters 0/3 lifted from ~0.25–0.5 to ~0.75 in best scores.
+
+## Before/After (Selected Cases)
+| Case | Before | After |
+| --- | --- | --- |
+| Setup type mismatch | `build_settlement` vs `setup_place_settlement` (0%) | Normalized type; payload fixed via explicit edge/vertex in guideline |
+| Speculative trade | Trade instead of settle-now (0.25–0.5) | “IF can settle, DO IT; ONLY trade if exactly 1 short” (0.75+) |
+| VP misuse | Reveal VP without win | “ONLY play VP if wins THIS turn; else END TURN” (1.0) |
+| Monopoly misuse | Play for small gain | “ONLY on large windfall; else END TURN” (1.0) |
+
+## Leaf vs Meta (Score Glimpse)
+| Level | Example clusters | Best scores |
+| --- | --- | --- |
+| Leaf | dev-card timing, VP/Monopoly | 1.0 |
+| Leaf | settle vs trade clusters | ~0.75 after aggressive prompts |
+| Leaf | setup roads/settles | From 0.0 → fixed type; remaining payload issues |
+| Meta | grouped leaf clusters | Often 0.75–1.0; early-stop after 3 perfects |
+
+## Token/Time Savings
+- Early stop after 3 perfect prompts per cluster avoids over-iteration once solved.
+- Aggressive prompts reduce manual retuning; “iter best” lines in logs stabilize early.
+- Normalization reduces false negatives without manual adjudication.
+
+## Workflow Timeline (Fast Loop)
+1) Export drills (single-step, restricted actions, higher-level features).  
+2) Baseline eval (plain distilled).  
+3) GEPA attempts (with/without guideline seed).  
+4) Leaf clustering + overfit + early stop → `guideline_tree.json`, `best_guidelines_leaf.json`.  
+5) Meta clustering + overfit + early stop → `guideline_tree_meta.json`, `best_guidelines_meta.json`.  
+6) Eval with per-cluster/meta guidelines; iterate on scoring fixes (build↔setup, payload feedback).
+
+## Log Pointers (for readers)
+- Leaf log: `dspy_ml/data/guideline_tree_overfit_iter10_v3.log`  
+  - Grep `iter best` for per-iteration best scores/fail counts.  
+  - Grep `score=` for final top candidates; payload/type notes included.  
+- Meta log: `dspy_ml/data/guideline_tree_meta.log`  
+  - Same patterns; shows meta cluster sizes and early-stop events.
+
+## Aggressive Prompt Template (Excerpt)
+```
+OVERFIT to these drills: your goal is to push the LLM to pick the correct action from viable_actions for THESE drills, even if the tone is aggressive or the advice is very specific.
+You may use CAPS, imperative voice, explicit DO/DO NOT. You may forbid wrong patterns you infer.
+Write 2-4 sentences, WHEN/IF [situation], then [action/principle]. Be specific and actionable.
+You may include a short ALL-CAPS motto line if it helps force the choice.
+```
+
+## Human-in-the-Loop Minimization (Quantified)
+- Single-step drills: no long rollouts.  
+- Restricted viable actions: small, deterministic choice set.  
+- Automated feedback: expected vs predicted with payload notes; no manual labeling loop.  
+- Early stop: halts once solved.  
+- Clustering: reuse per-situation guidance; fewer prompts to manage; no per-instance guidelines at inference.  
+- Normalization: prevents false negatives (build vs setup) without manual adjudication.
+
 ## Remaining Gaps and Next Steps
 - Pass GameState into scoring everywhere to reduce payload mismatches on setup drills.
 - Add retrieval: select cluster/meta guideline via embedding similarity at inference.
