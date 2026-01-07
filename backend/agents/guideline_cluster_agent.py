@@ -19,9 +19,8 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agents.llm_agent import LLMAgent
-from engine import GameState, Action, ActionPayload
+from engine import GameState, Action, ActionPayload, ResourceType
 from engine.serialization import state_to_text, legal_actions_to_text
-from api.routes import _filter_legal_actions
 
 try:
     import litellm
@@ -109,8 +108,40 @@ class GuidelineClusterAgent(LLMAgent):
         if not legal_actions_list:
             raise ValueError("No legal actions available")
 
-        # Filter propose_trade duplicates like base LLMAgent
-        filtered_actions = _filter_legal_actions(legal_actions_list, state, include_propose_trade_duplicates=False)
+        # Filter out propose_trade actions that were already taken this turn
+        # (same logic as base LLMAgent)
+        filtered_actions = []
+        player_actions_this_turn = [
+            a for a in state.actions_taken_this_turn 
+            if a["player_id"] == self.player_id and a["action"] == "propose_trade"
+        ]
+        
+        for action, payload in legal_actions_list:
+            if action == Action.PROPOSE_TRADE:
+                # Check if this exact trade was already proposed this turn
+                already_proposed = False
+                if payload and hasattr(payload, 'give_resources') and hasattr(payload, 'receive_resources'):
+                    # Normalize current payload to string keys (matching stored format)
+                    current_give = {rt.value: count for rt, count in payload.give_resources.items()}
+                    current_receive = {rt.value: count for rt, count in payload.receive_resources.items()}
+                    
+                    for prev_action in player_actions_this_turn:
+                        prev_payload = prev_action.get("payload", {})
+                        prev_give = prev_payload.get("give_resources", {})
+                        prev_receive = prev_payload.get("receive_resources", {})
+                        prev_targets = set(prev_payload.get("target_player_ids", []))
+                        
+                        if (prev_give == current_give and
+                            prev_receive == current_receive and
+                            prev_targets == set(payload.target_player_ids)):
+                            already_proposed = True
+                            break
+                if not already_proposed:
+                    filtered_actions.append((action, payload))
+            else:
+                filtered_actions.append((action, payload))
+        
+        # Use filtered actions
         legal_actions_list = filtered_actions if filtered_actions else legal_actions_list
 
         observation = state_to_text(
