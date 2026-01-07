@@ -5,6 +5,9 @@ author: "Catan Agent Team"
 
 # From Drills to Clustered Guidelines: Prompt Optimization for a Catan LLM Agent
 
+## Goal and Philosophy
+The personal goal here is simple: **build the strongest possible Catan agent, fast, with as little human-in-the-loop pain as possible**. I know the game well and want rapid iteration, deterministic feedback, and minimal hand-tuning. Everything that follows—single-step drills, constrained action spaces, clustering, aggressive overfitting with feedback—exists to shorten the loop from “idea” to “measurable lift” without burning human hours.
+
 ## Why Drills?
 Catan is a combinatorial, stateful game with long temporal dependencies. Optimizing full games is expensive and noisy. We instead optimize on **single-step drills**:
 - Each drill isolates one decision (trade, build, dev card, robber move, setup placement, etc.).
@@ -158,6 +161,15 @@ for _ in range(iterations):
 - **Early stop after perfects**: saves tokens and avoids over-churn on already-solved clusters.
 - **Type normalization**: build vs setup mapping; reduces false negatives.
 - **Action-space discipline**: hard reminders to avoid speculative trades/devs unless they complete an immediate build/win.
+
+## Making It Pain-Free and Fast
+- **Single-step drills**: cheap, focused evaluation; no long rollouts.
+- **Restricted viable actions**: fewer degrees of freedom; easier, deterministic scoring.
+- **Aggressive overfit prompts**: allow CAPS/imperatives to jolt the model out of bad local minima without manual tinkering.
+- **Iterative synthesis + early stop**: stop after 3 perfect prompts per cluster; saves tokens and time.
+- **Normalization fixes**: build↔setup mapping to avoid false negatives on setup drills.
+- **Reusable scripts and logs**: one-click runs (`cluster_guideline_tree.py`, `cluster_guideline_tree_meta.py`) with detailed logs for postmortem.
+- **Clustering**: carry situational power without per-instance guidelines at inference; fewer prompts to manage.
 
 ## Remaining Gaps and Next Steps
 - Pass GameState into scoring everywhere to reduce payload mismatches on setup drills.
