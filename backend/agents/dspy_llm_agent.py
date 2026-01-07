@@ -56,7 +56,7 @@ class DSPyLLMAgent(BaseAgent):
     def __init__(
         self,
         player_id: str,
-        module_path: str,
+        module_path: Optional[str] = None,
         model_name: Optional[str] = None,
         api_key: Optional[str] = None,
     ):
@@ -74,9 +74,19 @@ class DSPyLLMAgent(BaseAgent):
         if not DSPY_AVAILABLE:
             raise ImportError("dspy-ai is not installed")
         
+        # Resolve module path (env override -> default distilled module)
+        import os
+        default_path = Path(__file__).parent.parent / "dspy_ml" / "data" / "optimized_distilled_module.pkl"
+        resolved_path = Path(os.getenv("DSPY_MODULE_PATH", module_path or default_path))
+        if not resolved_path.exists():
+            raise FileNotFoundError(
+                f"DSPy module not found at {resolved_path}. "
+                f"Set DSPY_MODULE_PATH env var or place a module at {default_path}."
+            )
+
         # Load optimized module
         optimizer = DrillOptimizer(model_name=model_name or "gpt-4o-mini", api_key=api_key)
-        self.module, self.metadata = optimizer.load(module_path)
+        self.module, self.metadata = optimizer.load(str(resolved_path))
         
         # Get game rules (without strategic advice)
         temp_agent = LLMAgent("player_0", exclude_strategic_advice=True)

@@ -1441,6 +1441,8 @@ function App() {
                         <option value="llm:gpt-5.2">LLM Agent (gpt-5.2)</option>
                         <option value="llm:gpt-5.2:thinking:medium">LLM Agent (gpt-5.2 thinking · medium)</option>
                         <option value="llm:claude-sonnet-4-5-20250929">LLM Agent (Claude Sonnet 4.5)</option>
+                        <option value="dspy_llm">DSPy Agent (optimized module)</option>
+                        <option value="guideline_cluster">Guideline Cluster Agent</option>
                         <option value="behavior_tree">Behavior Tree Agent</option>
                         <option value="balanced">Balanced Agent</option>
                         <option value="aggressive_builder">Aggressive Builder</option>
@@ -2301,6 +2303,8 @@ function App() {
                   <option value="llm:gpt-5.2">LLM Agent (gpt-5.2)</option>
                   <option value="llm:gpt-5.2:thinking:medium">LLM Agent (gpt-5.2 thinking · medium)</option>
                   <option value="llm:claude-sonnet-4-5-20250929">LLM Agent (Claude Sonnet 4.5)</option>
+                  <option value="dspy_llm">DSPy Agent (optimized module)</option>
+                  <option value="guideline_cluster">Guideline Cluster Agent</option>
                   <option value="behavior_tree">Behavior Tree Agent</option>
                   <option value="balanced">Balanced Agent</option>
                   <option value="aggressive_builder">Aggressive Builder</option>

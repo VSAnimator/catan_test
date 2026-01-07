@@ -1557,6 +1557,8 @@ def _make_agent(
     from agents import RandomAgent, BehaviorTreeAgent
     try:
         from agents.llm_agent import LLMAgent
+        from agents.dspy_llm_agent import DSPyLLMAgent
+        from agents.guideline_cluster_agent import GuidelineClusterAgent
         from agents.variants import (
             BalancedAgent,
             AggressiveBuilderAgent,
@@ -1577,6 +1579,8 @@ def _make_agent(
             "defensive": DefensiveAgent,
             "state_conditioned": StateConditionedAgent,
             "llm": LLMAgent,
+            "dspy_llm": DSPyLLMAgent,
+            "guideline_cluster": GuidelineClusterAgent,
             "imitation_bt": ImitationBehaviorTreeAgent,
         }
     except Exception:
@@ -1609,6 +1613,18 @@ def _make_agent(
             exclude_higher_level_features=exclude_higher_level_features,
         )
     agent_class = AGENT_CLASSES.get(agent_type, RandomAgent)
+    if agent_type == "dspy_llm":
+        import os
+        return agent_class(
+            player_id,
+            module_path=os.getenv("DSPY_MODULE_PATH"),
+        )
+    if agent_type == "guideline_cluster":
+        return agent_class(
+            player_id,
+            exclude_strategic_advice=exclude_strategic_advice,
+            exclude_higher_level_features=exclude_higher_level_features,
+        )
     if agent_type == "imitation_bt":
         # Requires env var for now; this is primarily for offline evaluation.
         import os
@@ -2506,6 +2522,8 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
     from agents import RandomAgent, BehaviorTreeAgent
     try:
         from agents.llm_agent import LLMAgent
+        from agents.dspy_llm_agent import DSPyLLMAgent
+        from agents.guideline_cluster_agent import GuidelineClusterAgent
         from agents.variants import (
             BalancedAgent,
             AggressiveBuilderAgent,
@@ -2526,6 +2544,8 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
             "state_conditioned": StateConditionedAgent,
             "player_style_imitation": PlayerStyleImitationAgent,
             "llm": LLMAgent,
+            "dspy_llm": DSPyLLMAgent,
+            "guideline_cluster": GuidelineClusterAgent,
         }
     except ImportError:
         AGENT_CLASSES = {
@@ -2562,7 +2582,20 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
                     exclude_higher_level_features=exclude_higher_level_features,
                 )
             else:
-                agents[player.id] = agent_class(player.id)
+                if agent_type == "dspy_llm":
+                    import os
+                    agents[player.id] = agent_class(
+                        player.id,
+                        module_path=os.getenv("DSPY_MODULE_PATH"),
+                    )
+                elif agent_type == "guideline_cluster":
+                    agents[player.id] = agent_class(
+                        player.id,
+                        exclude_strategic_advice=exclude_strategic_advice,
+                        exclude_higher_level_features=exclude_higher_level_features,
+                    )
+                else:
+                    agents[player.id] = agent_class(player.id)
     
     # Create agent runner
     runner = AgentRunner(current_state, agents, max_turns=1000)
