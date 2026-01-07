@@ -1613,6 +1613,8 @@ def _make_agent(
             exclude_higher_level_features=exclude_higher_level_features,
         )
     agent_class = AGENT_CLASSES.get(agent_type, RandomAgent)
+    if agent_class == RandomAgent and agent_type not in AGENT_CLASSES:
+        print(f"Warning: Agent type '{agent_type}' not found in AGENT_CLASSES. Available types: {list(AGENT_CLASSES.keys())}", flush=True)
     if agent_type == "dspy_llm":
         import os
         return agent_class(
@@ -1620,11 +1622,17 @@ def _make_agent(
             module_path=os.getenv("DSPY_MODULE_PATH"),
         )
     if agent_type == "guideline_cluster":
-        return agent_class(
-            player_id,
-            exclude_strategic_advice=exclude_strategic_advice,
-            exclude_higher_level_features=exclude_higher_level_features,
-        )
+        try:
+            return agent_class(
+                player_id,
+                exclude_strategic_advice=exclude_strategic_advice,
+                exclude_higher_level_features=exclude_higher_level_features,
+            )
+        except Exception as e:
+            print(f"Error creating GuidelineClusterAgent: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            raise
     if agent_type == "imitation_bt":
         # Requires env var for now; this is primarily for offline evaluation.
         import os

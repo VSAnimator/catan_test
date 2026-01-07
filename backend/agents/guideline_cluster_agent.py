@@ -39,7 +39,7 @@ class GuidelineClusterAgent(LLMAgent):
         self,
         player_id: str,
         meta_tree_path: str = "dspy_ml/data/guideline_tree_meta.json",
-        model_name: Optional[str] = None,
+        model: str = "gpt-5.2",
         exclude_strategic_advice: bool = True,
         exclude_higher_level_features: bool = False,
     ):
@@ -47,11 +47,13 @@ class GuidelineClusterAgent(LLMAgent):
             player_id,
             exclude_strategic_advice=exclude_strategic_advice,
             exclude_higher_level_features=exclude_higher_level_features,
-            model_name=model_name,
+            model=model,
         )
         if litellm is None:
             raise ImportError("litellm not installed; needed for embeddings")
-        self.meta_tree_path = Path(meta_tree_path)
+        # Resolve path relative to backend directory
+        backend_dir = Path(__file__).parent.parent
+        self.meta_tree_path = (backend_dir / meta_tree_path).resolve()
         if not self.meta_tree_path.exists():
             raise FileNotFoundError(f"Meta guideline tree not found at {self.meta_tree_path}")
         with open(self.meta_tree_path) as f:
@@ -64,7 +66,6 @@ class GuidelineClusterAgent(LLMAgent):
         # because we do not have the drill observations. Instead, we embed the cluster candidate
         # guidelines themselves as a proxy centroid. This keeps it payload-agnostic and uses only
         # text available at runtime.
-        self.model_name = model_name or "gpt-5.2"
         self._prepare_centroids()
 
     def _embed_text(self, text: str) -> np.ndarray:
