@@ -134,6 +134,7 @@ def synthesize_guidelines_with_feedback(cluster_drills: List[Dict[str, Any]], nu
     prompt_base.append("You are creating an overfitted strategic guideline for a meta-cluster of Catan drills.")
     prompt_base.append("OVERFIT: force the LLM to pick the correct action from viable_actions for THESE drills, even with aggressive wording.")
     prompt_base.append("You may use CAPS, imperative voice, explicit DO/DO NOT, and forbid wrong patterns. 2-4 sentences, WHEN/IF ... then ...")
+    prompt_base.append("Do NOT hardcode edge/intersection/tile IDs or fixed numeric payloads; instead, reference viable_actions and choose by rule (shortest path to settle, highest-value build, avoid speculative trades/devs).")
     if feedback:
         prompt_base.append("\nFeedback from previous attempt (failures to fix):")
         prompt_base.append(feedback)
@@ -183,13 +184,25 @@ def process_cluster_iterative(args_tuple):
     return cid, clist, top, iter_log
 
 
-def cluster_meta(nodes: List[Dict[str, Any]], target_size: int = 3) -> Dict[int, List[Dict[str, Any]]]:
-    texts = []
+def cluster_meta(nodes: List[Dict[str, Any]], drills_by_id: Dict[int, Dict[str, Any]], target_size: int = 3) -> Dict[int, List[Dict[str, Any]]]:
+    """
+    Cluster leaf clusters using ONLY observation text (no guideline or drill name),
+    by averaging embeddings of member drill observations.
+    """
+    cluster_embeddings = []
     for n in nodes:
-        drills_text = " ".join(str(did) for did in n["drill_ids"])
-        cg = " ".join(c["guideline"][:200] for c in n.get("candidates", []))
-        texts.append(f"{drills_text} {cg}")
-    X = embed_texts(texts)
+        obs_texts = []
+        for did in n["drill_ids"]:
+            obs = drills_by_id[did]["observation"]
+            obs_texts.append(obs)
+        if not obs_texts:
+            emb = np.zeros((1536,))
+        else:
+            emb_matrix = embed_texts(obs_texts)
+            emb = emb_matrix.mean(axis=0)
+        cluster_embeddings.append(emb)
+
+    X = np.vstack(cluster_embeddings)
     k = max(1, math.ceil(len(nodes) / target_size))
     km = KMeans(n_clusters=k, random_state=42, n_init=10)
     labels = km.fit_predict(X)
@@ -230,7 +243,7 @@ def main():
         lf.write(f"Leaf clusters: {len(leaf_nodes)}\n")
         lf.flush()
 
-    meta_clusters = cluster_meta(leaf_nodes, target_size=args.target_cluster_size)
+    meta_clusters = cluster_meta(leaf_nodes, drills_by_id, target_size=args.target_cluster_size)
 
     with open(log_path, "a") as lf:
         lf.write(f"Meta clusters: {len(meta_clusters)}\n")

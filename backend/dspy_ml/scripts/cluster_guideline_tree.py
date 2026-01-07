@@ -42,12 +42,11 @@ def embed_texts(texts: List[str], model: str = "text-embedding-3-small") -> np.n
 
 
 def build_features(drills: List[Dict[str, Any]]) -> np.ndarray:
+    # Use only observation text (available at inference) for clustering.
     texts = []
     for d in drills:
-        g = d.get("guideline") or ""
         obs = d.get("observation") or ""
-        text = g if g.strip() else obs
-        texts.append(text)
+        texts.append(obs)
     return embed_texts(texts)
 
 
@@ -90,6 +89,7 @@ def synthesize_guidelines_with_feedback(cluster_drills: List[Dict[str, Any]], nu
     prompt_base.append("OVERFIT to these drills: your goal is to push the LLM to pick the correct action from viable_actions for THESE drills, even if the tone is aggressive or the advice is very specific.")
     prompt_base.append("You may use CAPS, imperative voice, and explicit DO/DO NOT instructions. You may explicitly forbid wrong patterns you infer.")
     prompt_base.append("Write 2-4 sentences, start with WHEN/IF [situation], then [action/principle]. Be specific and actionable.")
+    prompt_base.append("Do NOT hardcode edge/intersection/tile IDs or fixed numeric payloads; instead, reference viable_actions and choose by rule (e.g., shortest path to settlement, highest-value build, avoid speculative trades/devs).")
     prompt_base.append("You may include a short ALL-CAPS motto line if it helps force the choice (e.g., NEVER TRADE HERE—BUILD THE ROAD NOW).")
     if feedback:
         prompt_base.append("\nFeedback from previous attempt (failures to fix):")
