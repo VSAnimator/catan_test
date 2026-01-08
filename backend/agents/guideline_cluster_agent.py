@@ -28,6 +28,7 @@ from agents.llm_agent import LLMAgent
 from engine import GameState, Action, ActionPayload
 from engine.serialization import state_to_text, legal_actions_to_text
 from dspy_ml.dspy_prompt_template import format_prompt
+from dspy_ml.dataset import DrillDataset
 
 
 def robust_parse(chosen_action_str: str) -> Any:
@@ -88,7 +89,16 @@ class GuidelineClusterAgent(BaseAgent):
         if not self.meta_clusters:
             raise ValueError("No meta_clusters found in meta tree")
 
-        # Precompute centroids using guideline text embeddings
+        # Load dataset to get observations for centroid computation
+        dataset_path = backend_dir / "dspy_ml" / "data" / "drills_dataset.json"
+        if not dataset_path.exists():
+            raise FileNotFoundError(f"Dataset not found at {dataset_path}")
+        
+        dataset = DrillDataset()
+        dataset.load_from_json(str(dataset_path))
+        self.drills_by_id = {ex.drill_id: ex for ex in dataset.examples}
+
+        # Precompute centroids using observation embeddings (matching clustering evaluation)
         self._prepare_centroids()
 
     def _embed_text(self, text: str) -> np.ndarray:
@@ -96,18 +106,39 @@ class GuidelineClusterAgent(BaseAgent):
         return np.array(resp["data"][0]["embedding"])
 
     def _prepare_centroids(self):
+        """
+        Prepare centroids using observation embeddings (matching clustering evaluation).
+        For each cluster, average the observation embeddings of all drills in that cluster.
+        """
         self.centroids = []
         for cluster in self.meta_clusters:
-            cands = cluster.get("candidates", [])
-            if not cands:
+            drill_ids = cluster.get("drill_ids", [])
+            if not drill_ids:
                 continue
-            # Use the top guideline text as centroid proxy
-            top_guideline = cands[0].get("guideline", "")
-            emb = self._embed_text(top_guideline)
+            
+            # Get observations for all drills in this cluster
+            obs_texts = []
+            for drill_id in drill_ids:
+                if drill_id in self.drills_by_id:
+                    obs = self.drills_by_id[drill_id].observation
+                    if obs:
+                        obs_texts.append(obs)
+            
+            if not obs_texts:
+                continue
+            
+            # Compute average embedding of observations (matching clustering evaluation)
+            obs_embeddings = [self._embed_text(obs) for obs in obs_texts]
+            avg_emb = np.mean(obs_embeddings, axis=0)
+            
+            # Get the top guideline for this cluster
+            cands = cluster.get("candidates", [])
+            top_guideline = cands[0].get("guideline", "") if cands else ""
+            
             self.centroids.append({
-                "cluster_id": cluster["cluster_id"],
+                "cluster_id": cluster.get("cluster_id"),
                 "guideline": top_guideline,
-                "embedding": emb,
+                "embedding": avg_emb,
             })
         if not self.centroids:
             raise ValueError("No centroids prepared from meta clusters")
