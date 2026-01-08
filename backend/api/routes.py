@@ -2158,15 +2158,16 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
                 actual_action_dict["raw_llm_response"] = raw_llm_response
 
             # Check match: if using enhanced format, check against correct_actions set
+            # Pass state for proper setup phase normalization (matching clustering evaluation behavior)
             if correct_actions is not None:
                 match = False
                 for correct_action in correct_actions:
-                    if _canonical_action_dict(actual_action_dict) == _canonical_action_dict(correct_action):
+                    if _canonical_action_dict(actual_action_dict, state=state) == _canonical_action_dict(correct_action, state=state):
                         match = True
                         break
             else:
                 # Backward compatibility: check against single expected_action
-                match = _canonical_action_dict(actual_action_dict) == _canonical_action_dict(expected_action)
+                match = _canonical_action_dict(actual_action_dict, state=state) == _canonical_action_dict(expected_action, state=state)
             if request.include_step_results:
                 step_results.append(
                     {

@@ -196,7 +196,7 @@ class GuidelineClusterAgent(BaseAgent):
                     {"role": "system", "content": prompt_dict["system"]},
                     {"role": "user", "content": prompt_dict["user"]}
                 ],
-                temperature=0.0,  # Deterministic like clustering evaluation
+                # Don't set temperature - use model default (matching DSPy behavior)
             )
             
             response_text = response.choices[0].message.content
