@@ -55,7 +55,9 @@ USER_PROMPT_TEMPLATE = """[[ ## game_rules ## ]]
 {viable_actions}
 
 [[ ## guideline ## ]]
-{guideline}"""
+{guideline}
+
+Respond with the corresponding output fields, starting with the field `[[ ## reasoning ## ]]`, then `[[ ## chosen_action ## ]]`, and then ending with the marker for `[[ ## completed ## ]]`."""
 
 
 def format_prompt(game_rules: str, observation: str, viable_actions: str, guideline: str) -> dict:

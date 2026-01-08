@@ -202,17 +202,38 @@ class GuidelineClusterAgent(BaseAgent):
             response_text = response.choices[0].message.content
             
             # Parse the response - extract reasoning and chosen_action from the structured format
+            # This should match how DSPy's ChainOfThought extracts the values
             reasoning = ""
             chosen_action_str = "null"
             
             # Look for [[ ## reasoning ## ]] and [[ ## chosen_action ## ]] sections
-            reasoning_match = re.search(r'\[\[ ## reasoning ## \]\]\s*(.*?)(?=\[\[ ## chosen_action ## \]\]|$)', response_text, re.DOTALL)
-            if reasoning_match:
-                reasoning = reasoning_match.group(1).strip()
+            # Try multiple patterns to be robust
+            reasoning_patterns = [
+                r'\[\[ ## reasoning ## \]\]\s*(.*?)(?=\[\[ ## chosen_action ## \]\]|\[\[ ## completed ## \]\]|$)',
+                r'\[\[ ## reasoning ## \]\]\s*(.*?)(?=\[\[ ## chosen_action ## \]\]|$)',
+            ]
+            for pattern in reasoning_patterns:
+                reasoning_match = re.search(pattern, response_text, re.DOTALL)
+                if reasoning_match:
+                    reasoning = reasoning_match.group(1).strip()
+                    break
             
-            chosen_action_match = re.search(r'\[\[ ## chosen_action ## \]\]\s*(.*?)(?=\[\[ ## completed ## \]\]|$)', response_text, re.DOTALL)
-            if chosen_action_match:
-                chosen_action_str = chosen_action_match.group(1).strip()
+            chosen_action_patterns = [
+                r'\[\[ ## chosen_action ## \]\]\s*(.*?)(?=\[\[ ## completed ## \]\]|$)',
+                r'\[\[ ## chosen_action ## \]\]\s*(.*)',
+            ]
+            for pattern in chosen_action_patterns:
+                chosen_action_match = re.search(pattern, response_text, re.DOTALL)
+                if chosen_action_match:
+                    chosen_action_str = chosen_action_match.group(1).strip()
+                    break
+            
+            # If we still didn't find chosen_action, try to extract JSON from the response
+            if chosen_action_str == "null" and "chosen_action" not in response_text.lower():
+                # Maybe the LLM didn't follow the format - try to find JSON in the response
+                json_match = re.search(r'\{[^{}]*"type"[^{}]*\}', response_text)
+                if json_match:
+                    chosen_action_str = json_match.group(0)
             
         except Exception as e:
             print(f"Error calling LLM: {e}", flush=True)
