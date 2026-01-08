@@ -1,13 +1,14 @@
 """
-Cluster-guideline DSPy agent.
+Cluster-guideline agent using extracted DSPy prompt template.
 
 At runtime:
 - Embed the current observation (same embedding model used for clustering: text-embedding-3-small).
 - Retrieve the nearest meta cluster centroid.
-- Use DSPy module with CatanDrillSignature, passing the guideline as input (exactly like clustering evaluation).
+- Use the extracted DSPy prompt template directly with litellm (avoiding thread-safety issues).
 """
 import sys
 import json
+import re
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any
 
@@ -17,24 +18,16 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
-    import dspy
-    DSPY_AVAILABLE = True
-except ImportError:
-    DSPY_AVAILABLE = False
-    raise ImportError("dspy-ai is not installed. Install it with: pip install dspy-ai")
-
-try:
     import litellm
 except ImportError:
     litellm = None
+    raise ImportError("litellm not installed; needed for LLM calls and embeddings")
 
 from agents.base_agent import BaseAgent
 from agents.llm_agent import LLMAgent
 from engine import GameState, Action, ActionPayload
-from engine.serialization import state_to_text, legal_actions_to_text, legal_actions
-from dspy_ml.signature import CatanDrillSignature
-from api.routes import _canonical_action_dict
-from engine.serialization import serialize_action, serialize_action_payload
+from engine.serialization import state_to_text, legal_actions_to_text
+from dspy_ml.dspy_prompt_template import format_prompt
 
 
 def robust_parse(chosen_action_str: str) -> Any:
@@ -48,7 +41,6 @@ def robust_parse(chosen_action_str: str) -> Any:
             cleaned = chosen_action_str.rstrip("}").rstrip() + "}"
             return json.loads(cleaned)
         except Exception:
-            import re
             m = re.search(r"\{[^{}]*\{[^{}]*\}[^{}]*\}", chosen_action_str)
             if m:
                 try:
@@ -60,8 +52,8 @@ def robust_parse(chosen_action_str: str) -> Any:
 
 class GuidelineClusterAgent(BaseAgent):
     """
-    DSPy-based agent that routes to a meta-cluster guideline based on observation embedding,
-    then uses DSPy module with CatanDrillSignature (exactly like clustering evaluation).
+    Agent that routes to a meta-cluster guideline based on observation embedding,
+    then uses the extracted DSPy prompt template directly with litellm.
     """
 
     def __init__(
@@ -74,18 +66,12 @@ class GuidelineClusterAgent(BaseAgent):
     ):
         super().__init__(player_id)
         
-        if not DSPY_AVAILABLE:
-            raise ImportError("dspy-ai is not installed")
         if litellm is None:
             raise ImportError("litellm not installed; needed for embeddings")
         
         self.model = model
         self.exclude_strategic_advice = exclude_strategic_advice
         self.exclude_higher_level_features = exclude_higher_level_features
-        
-        # Don't configure DSPy here - configure it in choose_action to ensure thread-safety
-        # Create DSPy module (same as clustering evaluation)
-        self.module = dspy.ChainOfThought(CatanDrillSignature)
         
         # Get game rules (without strategic advice)
         temp_agent = LLMAgent("player_0", exclude_strategic_advice=True)
@@ -194,26 +180,45 @@ class GuidelineClusterAgent(BaseAgent):
         # Retrieve guideline
         guideline = self._retrieve_guideline(observation)
         
-        # Configure DSPy in this thread (required for thread-safety during parallel evaluation)
-        lm = dspy.LM(model=self.model)
-        dspy.configure(lm=lm)
+        # Format prompt using extracted DSPy template
+        prompt_dict = format_prompt(
+            game_rules=self.game_rules,
+            observation=observation,
+            viable_actions=viable_actions,
+            guideline=guideline
+        )
         
-        # Call DSPy module (exactly like clustering evaluation)
+        # Call LLM using litellm (no DSPy, avoiding thread-safety issues)
         try:
-            result = self.module(
-                game_rules=self.game_rules,
-                observation=observation,
-                viable_actions=viable_actions,
-                guideline=guideline
+            response = litellm.completion(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": prompt_dict["system"]},
+                    {"role": "user", "content": prompt_dict["user"]}
+                ],
+                temperature=0.0,  # Deterministic like clustering evaluation
             )
             
-            reasoning = getattr(result, "reasoning", "") or ""
-            chosen_action_str = getattr(result, "chosen_action", "null") or "null"
+            response_text = response.choices[0].message.content
+            
+            # Parse the response - extract reasoning and chosen_action from the structured format
+            reasoning = ""
+            chosen_action_str = "null"
+            
+            # Look for [[ ## reasoning ## ]] and [[ ## chosen_action ## ]] sections
+            reasoning_match = re.search(r'\[\[ ## reasoning ## \]\]\s*(.*?)(?=\[\[ ## chosen_action ## \]\]|$)', response_text, re.DOTALL)
+            if reasoning_match:
+                reasoning = reasoning_match.group(1).strip()
+            
+            chosen_action_match = re.search(r'\[\[ ## chosen_action ## \]\]\s*(.*?)(?=\[\[ ## completed ## \]\]|$)', response_text, re.DOTALL)
+            if chosen_action_match:
+                chosen_action_str = chosen_action_match.group(1).strip()
+            
         except Exception as e:
-            print(f"Error calling DSPy module: {e}", flush=True)
+            print(f"Error calling LLM: {e}", flush=True)
             # Fallback to first legal action
             action, payload = legal_actions_list[0]
-            return (action, payload, f"Fallback: DSPy module error ({e})")
+            return (action, payload, f"Fallback: LLM error ({e})")
         
         # Parse chosen_action JSON string (same as clustering evaluation)
         predicted = robust_parse(chosen_action_str)
@@ -223,7 +228,6 @@ class GuidelineClusterAgent(BaseAgent):
             return (action, payload, "Fallback: No action chosen")
         
         # Convert action dict to Action and ActionPayload
-        # Reuse parsing logic from DSPyLLMAgent
         try:
             action, payload = self._parse_action_dict(predicted, state, legal_actions_list)
             return (action, payload, reasoning)
