@@ -83,10 +83,7 @@ class GuidelineClusterAgent(BaseAgent):
         self.exclude_strategic_advice = exclude_strategic_advice
         self.exclude_higher_level_features = exclude_higher_level_features
         
-        # Configure DSPy LM
-        lm = dspy.LM(model=model)
-        dspy.configure(lm=lm)
-        
+        # Don't configure DSPy here - configure it in choose_action to ensure thread-safety
         # Create DSPy module (same as clustering evaluation)
         self.module = dspy.ChainOfThought(CatanDrillSignature)
         
@@ -196,6 +193,10 @@ class GuidelineClusterAgent(BaseAgent):
         
         # Retrieve guideline
         guideline = self._retrieve_guideline(observation)
+        
+        # Configure DSPy in this thread (required for thread-safety during parallel evaluation)
+        lm = dspy.LM(model=self.model)
+        dspy.configure(lm=lm)
         
         # Call DSPy module (exactly like clustering evaluation)
         try:
