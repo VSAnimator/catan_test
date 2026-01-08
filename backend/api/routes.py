@@ -2158,16 +2158,33 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
                 actual_action_dict["raw_llm_response"] = raw_llm_response
 
             # Check match: if using enhanced format, check against correct_actions set
-            # Pass state for proper setup phase normalization (matching clustering evaluation behavior)
+            # Use same normalization as clustering evaluation (always normalize build_road/build_settlement)
+            def normalize_setup_build(canon):
+                """Normalize build_road/build_settlement to setup_place_road/setup_place_settlement (matching clustering evaluation)."""
+                if not isinstance(canon, dict):
+                    return canon
+                t = canon.get("type")
+                if t == "build_road":
+                    canon = canon.copy()
+                    canon["type"] = "setup_place_road"
+                elif t == "build_settlement":
+                    canon = canon.copy()
+                    canon["type"] = "setup_place_settlement"
+                return canon
+            
             if correct_actions is not None:
                 match = False
+                actual_canon = normalize_setup_build(_canonical_action_dict(actual_action_dict, state=state))
                 for correct_action in correct_actions:
-                    if _canonical_action_dict(actual_action_dict, state=state) == _canonical_action_dict(correct_action, state=state):
+                    correct_canon = normalize_setup_build(_canonical_action_dict(correct_action, state=state))
+                    if actual_canon == correct_canon:
                         match = True
                         break
             else:
                 # Backward compatibility: check against single expected_action
-                match = _canonical_action_dict(actual_action_dict, state=state) == _canonical_action_dict(expected_action, state=state)
+                actual_canon = normalize_setup_build(_canonical_action_dict(actual_action_dict, state=state))
+                expected_canon = normalize_setup_build(_canonical_action_dict(expected_action, state=state))
+                match = actual_canon == expected_canon
             if request.include_step_results:
                 step_results.append(
                     {
