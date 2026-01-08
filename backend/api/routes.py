@@ -1559,6 +1559,7 @@ def _make_agent(
         from agents.llm_agent import LLMAgent
         from agents.dspy_llm_agent import DSPyLLMAgent
         from agents.guideline_cluster_agent import GuidelineClusterAgent
+        from agents.leaf_guideline_agent import LeafGuidelineAgent
         from agents.variants import (
             BalancedAgent,
             AggressiveBuilderAgent,
@@ -1581,6 +1582,7 @@ def _make_agent(
             "llm": LLMAgent,
             "dspy_llm": DSPyLLMAgent,
             "guideline_cluster": GuidelineClusterAgent,
+            "leaf_guideline": LeafGuidelineAgent,
             "imitation_bt": ImitationBehaviorTreeAgent,
         }
     except Exception:
@@ -1630,6 +1632,30 @@ def _make_agent(
             )
         except Exception as e:
             print(f"Error creating GuidelineClusterAgent: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            raise
+    if agent_type == "leaf_guideline":
+        try:
+            return agent_class(
+                player_id,
+                exclude_strategic_advice=exclude_strategic_advice,
+                exclude_higher_level_features=exclude_higher_level_features,
+            )
+        except Exception as e:
+            print(f"Error creating LeafGuidelineAgent: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            raise
+    if agent_type == "hybrid_guideline":
+        try:
+            return agent_class(
+                player_id,
+                exclude_strategic_advice=exclude_strategic_advice,
+                exclude_higher_level_features=exclude_higher_level_features,
+            )
+        except Exception as e:
+            print(f"Error creating HybridGuidelineAgent: {e}", flush=True)
             import traceback
             traceback.print_exc()
             raise
@@ -2550,6 +2576,7 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
         from agents.llm_agent import LLMAgent
         from agents.dspy_llm_agent import DSPyLLMAgent
         from agents.guideline_cluster_agent import GuidelineClusterAgent
+        from agents.leaf_guideline_agent import LeafGuidelineAgent
         from agents.variants import (
             BalancedAgent,
             AggressiveBuilderAgent,
@@ -2572,6 +2599,7 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
             "llm": LLMAgent,
             "dspy_llm": DSPyLLMAgent,
             "guideline_cluster": GuidelineClusterAgent,
+            "leaf_guideline": LeafGuidelineAgent,
         }
     except ImportError:
         AGENT_CLASSES = {
@@ -2615,6 +2643,12 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
                         module_path=os.getenv("DSPY_MODULE_PATH"),
                     )
                 elif agent_type == "guideline_cluster":
+                    agents[player.id] = agent_class(
+                        player.id,
+                        exclude_strategic_advice=exclude_strategic_advice,
+                        exclude_higher_level_features=exclude_higher_level_features,
+                    )
+                elif agent_type == "leaf_guideline":
                     agents[player.id] = agent_class(
                         player.id,
                         exclude_strategic_advice=exclude_strategic_advice,

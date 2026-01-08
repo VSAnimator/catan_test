@@ -1443,6 +1443,8 @@ function App() {
                         <option value="llm:claude-sonnet-4-5-20250929">LLM Agent (Claude Sonnet 4.5)</option>
                         <option value="dspy_llm">DSPy Agent (optimized module)</option>
                         <option value="guideline_cluster">Guideline Cluster Agent</option>
+                        <option value="leaf_guideline">Leaf Guideline Agent</option>
+                        <option value="hybrid_guideline">Hybrid Guideline Agent</option>
                         <option value="behavior_tree">Behavior Tree Agent</option>
                         <option value="balanced">Balanced Agent</option>
                         <option value="aggressive_builder">Aggressive Builder</option>
@@ -2305,6 +2307,7 @@ function App() {
                   <option value="llm:claude-sonnet-4-5-20250929">LLM Agent (Claude Sonnet 4.5)</option>
                   <option value="dspy_llm">DSPy Agent (optimized module)</option>
                   <option value="guideline_cluster">Guideline Cluster Agent</option>
+                  <option value="leaf_guideline">Leaf Guideline Agent</option>
                   <option value="behavior_tree">Behavior Tree Agent</option>
                   <option value="balanced">Balanced Agent</option>
                   <option value="aggressive_builder">Aggressive Builder</option>

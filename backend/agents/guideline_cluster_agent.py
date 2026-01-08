@@ -418,6 +418,90 @@ class GuidelineClusterAgent(BaseAgent):
                     payload = DiscardResourcesPayload(resources=discard_dict)
                     return (target_action, payload)
         
+        if target_action == Action.PLAY_DEV_CARD and action_payload_dict:
+            from engine import ResourceType, PlayDevCardPayload
+            card_type = action_payload_dict.get("card_type", "").lower()
+            
+            # Handle year_of_plenty
+            if card_type == "year_of_plenty" and "year_of_plenty_resources" in action_payload_dict:
+                llm_resources = action_payload_dict["year_of_plenty_resources"]
+                # Convert string resource names to ResourceType
+                yop_dict = {}
+                for k, v in llm_resources.items():
+                    if isinstance(k, str):
+                        for rt in ResourceType:
+                            if rt.value == k.lower():
+                                yop_dict[rt] = v
+                                break
+                        else:
+                            raise ValueError(f"Invalid resource type: {k}")
+                    else:
+                        yop_dict[k] = v
+                
+                # Try to find matching legal action
+                for action, payload in legal_actions_list:
+                    if action == target_action and payload:
+                        if (hasattr(payload, "card_type") and payload.card_type == "year_of_plenty" and
+                            hasattr(payload, "year_of_plenty_resources") and
+                            payload.year_of_plenty_resources == yop_dict):
+                            return (action, payload)
+                
+                # If no exact match, construct payload (if legal)
+                payload = PlayDevCardPayload(
+                    card_type="year_of_plenty",
+                    year_of_plenty_resources=yop_dict
+                )
+                # Verify it's in legal actions
+                for action, legal_payload in legal_actions_list:
+                    if action == target_action:
+                        if legal_payload is None or (hasattr(legal_payload, "card_type") and legal_payload.card_type == "year_of_plenty"):
+                            return (target_action, payload)
+            
+            # Handle monopoly
+            elif card_type == "monopoly" and "monopoly_resource_type" in action_payload_dict:
+                llm_resource_type = action_payload_dict["monopoly_resource_type"]
+                # Convert string to ResourceType
+                monopoly_rt = None
+                if isinstance(llm_resource_type, str):
+                    for rt in ResourceType:
+                        if rt.value == llm_resource_type.lower():
+                            monopoly_rt = rt
+                            break
+                    if not monopoly_rt:
+                        raise ValueError(f"Invalid resource type: {llm_resource_type}")
+                else:
+                    monopoly_rt = llm_resource_type
+                
+                # Try to find matching legal action
+                for action, payload in legal_actions_list:
+                    if action == target_action and payload:
+                        if (hasattr(payload, "card_type") and payload.card_type == "monopoly" and
+                            hasattr(payload, "monopoly_resource_type") and
+                            payload.monopoly_resource_type == monopoly_rt):
+                            return (action, payload)
+                
+                # If no exact match, construct payload (if legal)
+                payload = PlayDevCardPayload(
+                    card_type="monopoly",
+                    monopoly_resource_type=monopoly_rt
+                )
+                # Verify it's in legal actions
+                for action, legal_payload in legal_actions_list:
+                    if action == target_action:
+                        if legal_payload is None or (hasattr(legal_payload, "card_type") and legal_payload.card_type == "monopoly"):
+                            return (target_action, payload)
+            
+            # For other card types (knight, road_building, victory_point), just match by card_type
+            else:
+                for action, payload in legal_actions_list:
+                    if action == target_action and payload:
+                        if hasattr(payload, "card_type") and payload.card_type == card_type:
+                            return (action, payload)
+                # If no match, return first legal action of this type
+                for action, payload in legal_actions_list:
+                    if action == target_action:
+                        return (action, payload)
+        
         # For other actions, try to match payload
         for action, payload in legal_actions_list:
             if action == target_action:

@@ -1,0 +1,450 @@
+[
+  {
+    "drill_id": 128,
+    "decision": "meta",
+    "leaf_score": 1.0,
+    "meta_score": 1.0,
+    "drop": 0.0,
+    "reason": "drop 0.000 <= 0.05"
+  },
+  {
+    "drill_id": 130,
+    "decision": "meta",
+    "leaf_score": 1.0,
+    "meta_score": 1.0,
+    "drop": 0.0,
+    "reason": "drop 0.000 <= 0.05"
+  },
+  {
+    "drill_id": 99,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.5,
+    "drop": 0.5,
+    "reason": "meta_score 0.500 < 0.8"
+  },
+  {
+    "drill_id": 117,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.6666666666666666,
+    "drop": 0.33333333333333337,
+    "reason": "meta_score 0.667 < 0.8"
+  },
+  {
+    "drill_id": 115,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.6666666666666666,
+    "drop": 0.33333333333333337,
+    "reason": "meta_score 0.667 < 0.8"
+  },
+  {
+    "drill_id": 121,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.6666666666666666,
+    "drop": 0.33333333333333337,
+    "reason": "meta_score 0.667 < 0.8"
+  },
+  {
+    "drill_id": 120,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.6666666666666666,
+    "drop": 0.33333333333333337,
+    "reason": "meta_score 0.667 < 0.8"
+  },
+  {
+    "drill_id": 118,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.6666666666666666,
+    "drop": 0.33333333333333337,
+    "reason": "meta_score 0.667 < 0.8"
+  },
+  {
+    "drill_id": 114,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.6666666666666666,
+    "drop": 0.33333333333333337,
+    "reason": "meta_score 0.667 < 0.8"
+  },
+  {
+    "drill_id": 105,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.7857142857142857,
+    "drop": 0.2142857142857143,
+    "reason": "meta_score 0.786 < 0.8"
+  },
+  {
+    "drill_id": 101,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.7857142857142857,
+    "drop": 0.2142857142857143,
+    "reason": "meta_score 0.786 < 0.8"
+  },
+  {
+    "drill_id": 125,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.5,
+    "drop": 0.5,
+    "reason": "meta_score 0.500 < 0.8"
+  },
+  {
+    "drill_id": 124,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.5,
+    "drop": 0.5,
+    "reason": "meta_score 0.500 < 0.8"
+  },
+  {
+    "drill_id": 112,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.5,
+    "drop": 0.5,
+    "reason": "meta_score 0.500 < 0.8"
+  },
+  {
+    "drill_id": 73,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.5,
+    "drop": 0.5,
+    "reason": "meta_score 0.500 < 0.8"
+  },
+  {
+    "drill_id": 72,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.5,
+    "drop": 0.5,
+    "reason": "meta_score 0.500 < 0.8"
+  },
+  {
+    "drill_id": 116,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.6,
+    "drop": 0.4,
+    "reason": "meta_score 0.600 < 0.8"
+  },
+  {
+    "drill_id": 113,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.6,
+    "drop": 0.4,
+    "reason": "meta_score 0.600 < 0.8"
+  },
+  {
+    "drill_id": 110,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.7857142857142857,
+    "drop": 0.2142857142857143,
+    "reason": "meta_score 0.786 < 0.8"
+  },
+  {
+    "drill_id": 92,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.7857142857142857,
+    "drop": 0.2142857142857143,
+    "reason": "meta_score 0.786 < 0.8"
+  },
+  {
+    "drill_id": 86,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.7857142857142857,
+    "drop": 0.2142857142857143,
+    "reason": "meta_score 0.786 < 0.8"
+  },
+  {
+    "drill_id": 78,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.7857142857142857,
+    "drop": 0.2142857142857143,
+    "reason": "meta_score 0.786 < 0.8"
+  },
+  {
+    "drill_id": 131,
+    "decision": "meta",
+    "leaf_score": 1.0,
+    "meta_score": 1.0,
+    "drop": 0.0,
+    "reason": "drop 0.000 <= 0.05"
+  },
+  {
+    "drill_id": 129,
+    "decision": "meta",
+    "leaf_score": 1.0,
+    "meta_score": 1.0,
+    "drop": 0.0,
+    "reason": "drop 0.000 <= 0.05"
+  },
+  {
+    "drill_id": 111,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.7857142857142857,
+    "drop": 0.2142857142857143,
+    "reason": "meta_score 0.786 < 0.8"
+  },
+  {
+    "drill_id": 107,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.7857142857142857,
+    "drop": 0.2142857142857143,
+    "reason": "meta_score 0.786 < 0.8"
+  },
+  {
+    "drill_id": 106,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.7857142857142857,
+    "drop": 0.2142857142857143,
+    "reason": "meta_score 0.786 < 0.8"
+  },
+  {
+    "drill_id": 96,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.7857142857142857,
+    "drop": 0.2142857142857143,
+    "reason": "meta_score 0.786 < 0.8"
+  },
+  {
+    "drill_id": 109,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.5555555555555556,
+    "drop": 0.4444444444444444,
+    "reason": "meta_score 0.556 < 0.8"
+  },
+  {
+    "drill_id": 94,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.5555555555555556,
+    "drop": 0.4444444444444444,
+    "reason": "meta_score 0.556 < 0.8"
+  },
+  {
+    "drill_id": 87,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.5555555555555556,
+    "drop": 0.4444444444444444,
+    "reason": "meta_score 0.556 < 0.8"
+  },
+  {
+    "drill_id": 127,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.6,
+    "drop": 0.4,
+    "reason": "meta_score 0.600 < 0.8"
+  },
+  {
+    "drill_id": 126,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.6,
+    "drop": 0.4,
+    "reason": "meta_score 0.600 < 0.8"
+  },
+  {
+    "drill_id": 90,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.6666666666666666,
+    "drop": 0.33333333333333337,
+    "reason": "meta_score 0.667 < 0.8"
+  },
+  {
+    "drill_id": 108,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.7857142857142857,
+    "drop": 0.2142857142857143,
+    "reason": "meta_score 0.786 < 0.8"
+  },
+  {
+    "drill_id": 103,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.7857142857142857,
+    "drop": 0.2142857142857143,
+    "reason": "meta_score 0.786 < 0.8"
+  },
+  {
+    "drill_id": 102,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.7857142857142857,
+    "drop": 0.2142857142857143,
+    "reason": "meta_score 0.786 < 0.8"
+  },
+  {
+    "drill_id": 100,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.7857142857142857,
+    "drop": 0.2142857142857143,
+    "reason": "meta_score 0.786 < 0.8"
+  },
+  {
+    "drill_id": 89,
+    "decision": "meta",
+    "leaf_score": 1.0,
+    "meta_score": 1.0,
+    "drop": 0.0,
+    "reason": "drop 0.000 <= 0.05"
+  },
+  {
+    "drill_id": 104,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.5555555555555556,
+    "drop": 0.4444444444444444,
+    "reason": "meta_score 0.556 < 0.8"
+  },
+  {
+    "drill_id": 123,
+    "decision": "leaf",
+    "leaf_score": 0.6666666666666666,
+    "meta_score": 0.6666666666666666,
+    "drop": 0.0,
+    "reason": "meta_score 0.667 < 0.8"
+  },
+  {
+    "drill_id": 122,
+    "decision": "leaf",
+    "leaf_score": 0.6666666666666666,
+    "meta_score": 0.6666666666666666,
+    "drop": 0.0,
+    "reason": "meta_score 0.667 < 0.8"
+  },
+  {
+    "drill_id": 119,
+    "decision": "leaf",
+    "leaf_score": 0.6666666666666666,
+    "meta_score": 0.6666666666666666,
+    "drop": 0.0,
+    "reason": "meta_score 0.667 < 0.8"
+  },
+  {
+    "drill_id": 98,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.6,
+    "drop": 0.4,
+    "reason": "meta_score 0.600 < 0.8"
+  },
+  {
+    "drill_id": 95,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.6,
+    "drop": 0.4,
+    "reason": "meta_score 0.600 < 0.8"
+  },
+  {
+    "drill_id": 88,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.6,
+    "drop": 0.4,
+    "reason": "meta_score 0.600 < 0.8"
+  },
+  {
+    "drill_id": 97,
+    "decision": "leaf",
+    "leaf_score": 0.5,
+    "meta_score": 0.6666666666666666,
+    "drop": -0.16666666666666663,
+    "reason": "meta_score 0.667 < 0.8"
+  },
+  {
+    "drill_id": 84,
+    "decision": "leaf",
+    "leaf_score": 0.5,
+    "meta_score": 0.6666666666666666,
+    "drop": -0.16666666666666663,
+    "reason": "meta_score 0.667 < 0.8"
+  },
+  {
+    "drill_id": 77,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.6,
+    "drop": 0.4,
+    "reason": "meta_score 0.600 < 0.8"
+  },
+  {
+    "drill_id": 76,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.6,
+    "drop": 0.4,
+    "reason": "meta_score 0.600 < 0.8"
+  },
+  {
+    "drill_id": 75,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.6,
+    "drop": 0.4,
+    "reason": "meta_score 0.600 < 0.8"
+  },
+  {
+    "drill_id": 93,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.5555555555555556,
+    "drop": 0.4444444444444444,
+    "reason": "meta_score 0.556 < 0.8"
+  },
+  {
+    "drill_id": 91,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.5555555555555556,
+    "drop": 0.4444444444444444,
+    "reason": "meta_score 0.556 < 0.8"
+  },
+  {
+    "drill_id": 83,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.5555555555555556,
+    "drop": 0.4444444444444444,
+    "reason": "meta_score 0.556 < 0.8"
+  },
+  {
+    "drill_id": 80,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.5555555555555556,
+    "drop": 0.4444444444444444,
+    "reason": "meta_score 0.556 < 0.8"
+  },
+  {
+    "drill_id": 79,
+    "decision": "leaf",
+    "leaf_score": 1.0,
+    "meta_score": 0.5555555555555556,
+    "drop": 0.4444444444444444,
+    "reason": "meta_score 0.556 < 0.8"
+  }
+]
