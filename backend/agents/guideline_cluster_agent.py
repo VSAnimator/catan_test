@@ -229,11 +229,19 @@ class GuidelineClusterAgent(BaseAgent):
                     break
             
             # If we still didn't find chosen_action, try to extract JSON from the response
-            if chosen_action_str == "null" and "chosen_action" not in response_text.lower():
-                # Maybe the LLM didn't follow the format - try to find JSON in the response
-                json_match = re.search(r'\{[^{}]*"type"[^{}]*\}', response_text)
-                if json_match:
-                    chosen_action_str = json_match.group(0)
+            # This matches the robust_parse logic from clustering evaluation
+            if chosen_action_str == "null" or not chosen_action_str:
+                # Try to find JSON anywhere in the response
+                json_patterns = [
+                    r'\{[^{}]*"type"[^{}]*"payload"[^{}]*\}',  # Full action with payload
+                    r'\{[^{}]*"type"[^{}]*\}',  # Action without payload
+                    r'\{[^{}]*\{[^{}]*\}[^{}]*\}',  # Nested JSON (from robust_parse)
+                ]
+                for pattern in json_patterns:
+                    json_match = re.search(pattern, response_text)
+                    if json_match:
+                        chosen_action_str = json_match.group(0)
+                        break
             
         except Exception as e:
             print(f"Error calling LLM: {e}", flush=True)
