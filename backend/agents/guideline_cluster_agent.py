@@ -109,7 +109,20 @@ class GuidelineClusterAgent(BaseAgent):
         """
         Prepare centroids using observation embeddings (matching clustering evaluation).
         For each cluster, average the observation embeddings of all drills in that cluster.
+        Uses precomputed embeddings if available to avoid API calls.
         """
+        # Try to load precomputed embeddings
+        backend_dir = Path(__file__).parent.parent
+        embeddings_path = backend_dir / "dspy_ml" / "data" / "observation_embeddings.json"
+        precomputed_embeddings = None
+        if embeddings_path.exists():
+            try:
+                with open(embeddings_path) as f:
+                    precomputed_embeddings = json.load(f)
+                print(f"Loaded {len(precomputed_embeddings)} precomputed embeddings", flush=True)
+            except Exception as e:
+                print(f"Warning: Failed to load precomputed embeddings: {e}", flush=True)
+        
         self.centroids = []
         for cluster in self.meta_clusters:
             drill_ids = cluster.get("drill_ids", [])
@@ -128,7 +141,15 @@ class GuidelineClusterAgent(BaseAgent):
                 continue
             
             # Compute average embedding of observations (matching clustering evaluation)
-            obs_embeddings = [self._embed_text(obs) for obs in obs_texts]
+            obs_embeddings = []
+            for obs in obs_texts:
+                if precomputed_embeddings and obs in precomputed_embeddings:
+                    # Use precomputed embedding
+                    obs_embeddings.append(np.array(precomputed_embeddings[obs]))
+                else:
+                    # Fall back to API call
+                    obs_embeddings.append(self._embed_text(obs))
+            
             avg_emb = np.mean(obs_embeddings, axis=0)
             
             # Get the top guideline for this cluster
