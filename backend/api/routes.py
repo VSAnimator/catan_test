@@ -1908,8 +1908,11 @@ async def evaluate_drill(drill_id: int, request: EvaluateDrillRequest):
         )
         try:
             choice = agent.choose_action(state, la_list)
-            if isinstance(choice, tuple) and len(choice) == 4:
+            if isinstance(choice, tuple) and len(choice) == 5:
+                action, payload, reasoning, raw_llm_response, parsing_warnings = choice
+            elif isinstance(choice, tuple) and len(choice) == 4:
                 action, payload, reasoning, raw_llm_response = choice
+                parsing_warnings = None
             elif isinstance(choice, tuple) and len(choice) == 3:
                 action, payload, reasoning = choice
                 raw_llm_response = None
@@ -2177,8 +2180,11 @@ async def evaluate_all_drills(request: EvaluateAllDrillsRequest):
 
             try:
                 choice = agent.choose_action(state, la_list)
-                if isinstance(choice, tuple) and len(choice) == 4:
+                if isinstance(choice, tuple) and len(choice) == 5:
+                    action, payload, reasoning, raw_llm_response, parsing_warnings = choice
+                elif isinstance(choice, tuple) and len(choice) == 4:
                     action, payload, reasoning, raw_llm_response = choice
+                    parsing_warnings = None
                 elif isinstance(choice, tuple) and len(choice) == 3:
                     action, payload, reasoning = choice
                     raw_llm_response = None

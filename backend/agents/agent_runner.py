@@ -128,7 +128,9 @@ class AgentRunner:
                                     
                                     # Choose a discard action (random agent will pick one)
                                     result = discard_agent.choose_action(self.state, discard_actions)
-                                    if len(result) == 4:
+                                    if len(result) == 5:
+                                        action, payload, _, _, _ = result  # Ignore reasoning, raw_response, and parsing_warnings for discard
+                                    elif len(result) == 4:
                                         action, payload, _, _ = result  # Ignore reasoning and raw_response for discard
                                     elif len(result) == 3:
                                         action, payload, _ = result  # Ignore reasoning for discard
@@ -378,7 +380,9 @@ class AgentRunner:
                                 
                                 # Choose a discard action
                                 result = discard_agent.choose_action(self.state, discard_actions)
-                                if len(result) == 4:
+                                if len(result) == 5:
+                                    action, payload, reasoning, _, _ = result  # Ignore raw_response and parsing_warnings for discard
+                                elif len(result) == 4:
                                     action, payload, reasoning, _ = result
                                 elif len(result) == 3:
                                     action, payload, reasoning = result

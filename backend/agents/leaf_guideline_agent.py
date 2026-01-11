@@ -469,7 +469,7 @@ class LeafGuidelineAgent(BaseAgent):
         state: GameState,
         legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]],
         drill_id: Optional[int] = None
-    ) -> Tuple[Action, Optional[ActionPayload], Optional[str]]:
+    ) -> Tuple[Action, Optional[ActionPayload], Optional[str], Optional[str], Optional[str]]:
         total_start = time.time()
         timing_info = {}
         
@@ -511,7 +511,8 @@ class LeafGuidelineAgent(BaseAgent):
                 
                 # Add note about fallback
                 fallback_reasoning = f"[Fallback to LLMAgent due to: {error_msg}]\n\n{reasoning}" if reasoning else f"[Fallback to LLMAgent due to: {error_msg}]"
-                return action, payload, fallback_reasoning
+                # Return 5-tuple: (action, payload, reasoning, raw_llm_response, parsing_warnings)
+                return action, payload, fallback_reasoning, raw_llm_response, parsing_warnings
             except Exception as fallback_error:
                 # If fallback also fails, try safe fallbacks
                 total_time = time.time() - total_start
@@ -522,14 +523,14 @@ class LeafGuidelineAgent(BaseAgent):
                 if end_turn_action:
                     warning_msg = f"Error: {error_msg}\nFallback to LLMAgent also failed: {str(fallback_error)}\nUsing END_TURN as safe fallback.\n\n{timing_str}"
                     print(f"LeafGuidelineAgent: All fallbacks failed, using END_TURN", flush=True)
-                    return Action.END_TURN, None, warning_msg
+                    return Action.END_TURN, None, warning_msg, None, None
                 
                 # Try first available action
                 if legal_actions_list:
                     action, payload = legal_actions_list[0]
                     warning_msg = f"Error: {error_msg}\nFallback to LLMAgent also failed: {str(fallback_error)}\nUsing first available action: {action.value}\n\n{timing_str}"
                     print(f"LeafGuidelineAgent: All fallbacks failed, using first available action: {action.value}", flush=True)
-                    return action, payload, warning_msg
+                    return action, payload, warning_msg, None, None
                 
                 # Only raise if no legal actions
                 raise ValueError(f"LeafGuidelineAgent error: {error_msg}. Fallback to LLMAgent also failed: {str(fallback_error)}. No legal actions available.")
@@ -567,7 +568,7 @@ class LeafGuidelineAgent(BaseAgent):
             filtered_actions.append((action, payload))
         
         if not filtered_actions:
-            return Action.END_TURN, None, "No legal actions available after filtering"
+            return Action.END_TURN, None, "No legal actions available after filtering", None, None
         
         timing_info["filter_actions"] = time.time() - filter_start
 
@@ -708,7 +709,7 @@ class LeafGuidelineAgent(BaseAgent):
             # Parse action
             action_dict = robust_parse(chosen_action_str)
             if not action_dict:
-                return Action.END_TURN, None, reasoning or "Failed to parse action"
+                return Action.END_TURN, None, reasoning or "Failed to parse action", response_text, None
             
             # Convert to Action and ActionPayload (copy parsing logic to avoid creating GuidelineClusterAgent instance)
             parse_start = time.time()
@@ -762,7 +763,8 @@ class LeafGuidelineAgent(BaseAgent):
             )
             reasoning_with_timing = f"{reasoning}\n\n{timing_str}" if reasoning else timing_str
             
-            return action, payload, reasoning_with_timing
+            # Return 5-tuple: (action, payload, reasoning, raw_llm_response, parsing_warnings)
+            return action, payload, reasoning_with_timing, response_text, None
             
         except Exception as e:
             total_time = time.time() - total_start
@@ -772,5 +774,7 @@ class LeafGuidelineAgent(BaseAgent):
             input_tokens = timing_info.get('input_tokens', 0)
             output_tokens = timing_info.get('output_tokens', 0)
             timing_str = f"[Timing: total={total_time:.2f}s, embed={embed_time:.2f}s, llm={llm_time:.2f}s ({input_tokens}→{output_tokens}), error={str(e)}]"
-            return Action.END_TURN, None, f"Error: {str(e)}\n\n{timing_str}"
+            # Try to get response_text if it exists
+            response_text = locals().get('response_text', None)
+            return Action.END_TURN, None, f"Error: {str(e)}\n\n{timing_str}", response_text, None
 

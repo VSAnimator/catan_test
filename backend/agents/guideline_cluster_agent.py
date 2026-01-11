@@ -180,7 +180,7 @@ class GuidelineClusterAgent(BaseAgent):
         self,
         state: GameState,
         legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
-    ) -> Tuple[Action, Optional[ActionPayload], Optional[str]]:
+    ) -> Tuple[Action, Optional[ActionPayload], Optional[str], Optional[str], Optional[str]]:
         if not legal_actions_list:
             raise ValueError("No legal actions available")
 
@@ -218,7 +218,8 @@ class GuidelineClusterAgent(BaseAgent):
                 
                 # Add note about fallback
                 fallback_reasoning = f"[Fallback to LLMAgent due to: {error_msg}]\n\n{reasoning}" if reasoning else f"[Fallback to LLMAgent due to: {error_msg}]"
-                return action, payload, fallback_reasoning
+                # Return 5-tuple: (action, payload, reasoning, raw_llm_response, parsing_warnings)
+                return action, payload, fallback_reasoning, raw_llm_response, parsing_warnings
             except Exception as fallback_error:
                 # If fallback also fails, try safe fallbacks
                 # Try end_turn if available
@@ -226,14 +227,14 @@ class GuidelineClusterAgent(BaseAgent):
                 if end_turn_action:
                     warning_msg = f"Error: {error_msg}\nFallback to LLMAgent also failed: {str(fallback_error)}\nUsing END_TURN as safe fallback."
                     print(f"GuidelineClusterAgent: All fallbacks failed, using END_TURN", flush=True)
-                    return Action.END_TURN, None, warning_msg
+                    return Action.END_TURN, None, warning_msg, None, None
                 
                 # Try first available action
                 if legal_actions_list:
                     action, payload = legal_actions_list[0]
                     warning_msg = f"Error: {error_msg}\nFallback to LLMAgent also failed: {str(fallback_error)}\nUsing first available action: {action.value}"
                     print(f"GuidelineClusterAgent: All fallbacks failed, using first available action: {action.value}", flush=True)
-                    return action, payload, warning_msg
+                    return action, payload, warning_msg, None, None
                 
                 # Only raise if no legal actions
                 raise ValueError(f"GuidelineClusterAgent error: {error_msg}. Fallback to LLMAgent also failed: {str(fallback_error)}. No legal actions available.")
@@ -376,7 +377,8 @@ class GuidelineClusterAgent(BaseAgent):
                 
                 # Convert action dict to Action and ActionPayload
                 action, payload = self._parse_action_dict(predicted, state, legal_actions_list)
-                return (action, payload, reasoning)
+                # Return 5-tuple: (action, payload, reasoning, raw_llm_response, parsing_warnings)
+                return (action, payload, reasoning, response_text, None)
                 
             except Exception as e:
                 last_error = e
@@ -393,13 +395,13 @@ class GuidelineClusterAgent(BaseAgent):
         end_turn_action = next((a for a, p in legal_actions_list if a == Action.END_TURN), None)
         if end_turn_action:
             warning_msg = f"All LLM parsing attempts failed. Using END_TURN as safe fallback. Last error: {last_error}"
-            return (Action.END_TURN, None, warning_msg)
+            return (Action.END_TURN, None, warning_msg, first_response_text, None)
         
         # Try first available action
         if legal_actions_list:
             action, payload = legal_actions_list[0]
             warning_msg = f"All LLM parsing attempts failed. Using first available action: {action.value}. Last error: {last_error}"
-            return (action, payload, warning_msg)
+            return (action, payload, warning_msg, first_response_text, None)
         
         # Only raise if no legal actions
         raise ValueError(f"GuidelineClusterAgent: All parsing attempts failed. Last error: {last_error}. No legal actions available.")
