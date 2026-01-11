@@ -61,7 +61,7 @@ class LeafGuidelineAgent(BaseAgent):
     def __init__(
         self,
         player_id: str,
-        leaf_tree_path: str = "dspy_ml/data/guideline_tree.json",
+        leaf_tree_path: str = "dspy_ml/data/guideline_tree_v2.json",
         model: str = "gpt-5.2",
         exclude_strategic_advice: bool = True,
         exclude_higher_level_features: bool = False,
@@ -91,7 +91,7 @@ class LeafGuidelineAgent(BaseAgent):
             raise ValueError("No clusters found in leaf tree")
 
         # Load dataset to get observations for centroid computation
-        dataset_path = backend_dir / "dspy_ml" / "data" / "drills_dataset.json"
+        dataset_path = backend_dir / "dspy_ml" / "data" / "drills_dataset_v2.json"
         if not dataset_path.exists():
             raise FileNotFoundError(f"Dataset not found at {dataset_path}")
         
@@ -113,7 +113,7 @@ class LeafGuidelineAgent(BaseAgent):
         """
         # Try to load precomputed embeddings
         backend_dir = Path(__file__).parent.parent
-        embeddings_path = backend_dir / "dspy_ml" / "data" / "observation_embeddings.json"
+        embeddings_path = backend_dir / "dspy_ml" / "data" / "observation_embeddings_v2.json"
         precomputed_embeddings = None
         if embeddings_path.exists():
             try:
@@ -244,6 +244,42 @@ class LeafGuidelineAgent(BaseAgent):
         
         # Find matching legal action with payload
         # Handle special cases
+        if target_action == Action.TRADE_BANK and action_payload_dict:
+            if "give_resources" in action_payload_dict and "receive_resources" in action_payload_dict:
+                from engine import ResourceType, TradeBankPayload
+                llm_give = action_payload_dict["give_resources"]
+                llm_receive = action_payload_dict["receive_resources"]
+                
+                # Convert string resource names to ResourceType
+                def convert_resource_dict(d):
+                    result = {}
+                    for k, v in d.items():
+                        if isinstance(k, str):
+                            for rt in ResourceType:
+                                if rt.value == k.lower():
+                                    result[rt] = v
+                                    break
+                            else:
+                                raise ValueError(f"Invalid resource type: {k}")
+                        else:
+                            result[k] = v
+                    return result
+                
+                give_resources = convert_resource_dict(llm_give)
+                receive_resources = convert_resource_dict(llm_receive)
+                
+                # Try to find exact match
+                for action, payload in legal_actions_list:
+                    if action == target_action and payload:
+                        if isinstance(payload, TradeBankPayload):
+                            # Check if give_resources and receive_resources match
+                            if (payload.give_resources == give_resources and 
+                                payload.receive_resources == receive_resources):
+                                return (action, payload)
+                
+                # If no exact match found, raise error (don't fallback to wrong trade)
+                raise ValueError(f"TRADE_BANK with give_resources={llm_give}, receive_resources={llm_receive} not found in legal actions")
+        
         if target_action == Action.PROPOSE_TRADE and action_payload_dict:
             if "give_resources" in action_payload_dict and "receive_resources" in action_payload_dict:
                 from engine import ResourceType, ProposeTradePayload
@@ -415,8 +451,15 @@ class LeafGuidelineAgent(BaseAgent):
                     return (action, payload)
         
         # If no match found, return first legal action of this type
+        # BUT: PROPOSE_TRADE and TRADE_BANK require payloads, so don't fallback to None payload
+        if target_action in (Action.PROPOSE_TRADE, Action.TRADE_BANK) and not action_payload_dict:
+            raise ValueError(f"{target_action.value} requires a payload with give_resources, receive_resources, and target_player_ids, but payload was missing or empty")
+        
         for action, payload in legal_actions_list:
             if action == target_action:
+                # Safety check: PROPOSE_TRADE and TRADE_BANK must have payloads
+                if action in (Action.PROPOSE_TRADE, Action.TRADE_BANK) and payload is None:
+                    raise ValueError(f"{action.value} requires a payload but legal_actions_list has None payload. This should not happen.")
                 return (action, payload)
         
         raise ValueError(f"Could not find matching legal action for {action_type_str}")
@@ -449,15 +492,47 @@ class LeafGuidelineAgent(BaseAgent):
                     exclude_strategic_advice=self.exclude_strategic_advice,
                     exclude_higher_level_features=self.exclude_higher_level_features,
                 )
-                action, payload, reasoning = fallback_agent.choose_action(state, legal_actions_list)
+                # LLMAgent now returns 5-tuple, handle both formats
+                result = fallback_agent.choose_action(state, legal_actions_list)
+                if len(result) == 5:
+                    action, payload, reasoning, raw_llm_response, parsing_warnings = result
+                elif len(result) == 4:
+                    action, payload, reasoning, raw_llm_response = result
+                    parsing_warnings = None
+                elif len(result) == 3:
+                    action, payload, reasoning = result
+                    raw_llm_response = None
+                    parsing_warnings = None
+                else:
+                    action, payload = result
+                    reasoning = None
+                    raw_llm_response = None
+                    parsing_warnings = None
+                
                 # Add note about fallback
                 fallback_reasoning = f"[Fallback to LLMAgent due to: {error_msg}]\n\n{reasoning}" if reasoning else f"[Fallback to LLMAgent due to: {error_msg}]"
                 return action, payload, fallback_reasoning
             except Exception as fallback_error:
-                # If fallback also fails, return the original error
+                # If fallback also fails, try safe fallbacks
                 total_time = time.time() - total_start
                 timing_str = f"[Timing: total={total_time:.2f}s, error={error_msg}, fallback_error={str(fallback_error)}]"
-                return Action.END_TURN, None, f"Error: {error_msg}\nFallback also failed: {str(fallback_error)}\n\n{timing_str}"
+                
+                # Try end_turn if available
+                end_turn_action = next((a for a, p in legal_actions_list if a == Action.END_TURN), None)
+                if end_turn_action:
+                    warning_msg = f"Error: {error_msg}\nFallback to LLMAgent also failed: {str(fallback_error)}\nUsing END_TURN as safe fallback.\n\n{timing_str}"
+                    print(f"LeafGuidelineAgent: All fallbacks failed, using END_TURN", flush=True)
+                    return Action.END_TURN, None, warning_msg
+                
+                # Try first available action
+                if legal_actions_list:
+                    action, payload = legal_actions_list[0]
+                    warning_msg = f"Error: {error_msg}\nFallback to LLMAgent also failed: {str(fallback_error)}\nUsing first available action: {action.value}\n\n{timing_str}"
+                    print(f"LeafGuidelineAgent: All fallbacks failed, using first available action: {action.value}", flush=True)
+                    return action, payload, warning_msg
+                
+                # Only raise if no legal actions
+                raise ValueError(f"LeafGuidelineAgent error: {error_msg}. Fallback to LLMAgent also failed: {str(fallback_error)}. No legal actions available.")
     
     def _choose_action_impl(
         self,
@@ -516,7 +591,7 @@ class LeafGuidelineAgent(BaseAgent):
         if drill_id is not None:
             # Try to load best_guidelines_leaf.json for direct lookup
             backend_dir = Path(__file__).parent.parent
-            best_guidelines_path = backend_dir / "dspy_ml" / "data" / "best_guidelines_leaf.json"
+            best_guidelines_path = backend_dir / "dspy_ml" / "data" / "best_guidelines_leaf_v2.json"
             file_check_time = time.time() - file_check_start
             timing_info["file_check"] = file_check_time
             

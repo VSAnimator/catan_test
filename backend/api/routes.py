@@ -597,16 +597,42 @@ async def create_drill_endpoint(request: CreateDrillRequest):
             
             # Validate all correct actions are legal
             for correct_action in s.correct_actions:
-                if not _action_dict_matches_legal_action(correct_action, la_list):
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Drill step at idx={idx} has a correct action that is not legal: {correct_action}"
+                if not _action_dict_matches_legal_action(correct_action, la_list, state=state):
+                    # Get more detailed error info
+                    canonical_correct = _canonical_action_dict(correct_action, state=state)
+                    legal_action_types = [serialize_action(a) for a, _ in la_list]
+                    legal_settlement_ids = [
+                        p.intersection_id for a, p in la_list 
+                        if a == Action.SETUP_PLACE_SETTLEMENT and p is not None
+                    ]
+                    legal_road_ids = [
+                        p.road_edge_id for a, p in la_list 
+                        if a == Action.SETUP_PLACE_ROAD and p is not None
+                    ]
+                    
+                    # Check if this might be a state_after_json vs state_before_json issue
+                    correct_action_type = canonical_correct.get("type", "")
+                    hint = ""
+                    if state.phase == "setup":
+                        if correct_action_type == "setup_place_settlement" and "setup_place_road" in legal_action_types:
+                            hint = " (Hint: This looks like you used state_after_json instead of state_before_json. After placing a settlement, only roads are legal. Use the state BEFORE the action was taken.)"
+                        elif correct_action_type == "setup_place_road" and "setup_place_settlement" in legal_action_types:
+                            hint = " (Hint: This looks like you used state_after_json instead of state_before_json. After placing a road, only settlements are legal. Use the state BEFORE the action was taken.)"
+                    
+                    error_detail = (
+                        f"Drill step at idx={idx} has a correct action that is not legal: {correct_action}. "
+                        f"Canonical: {canonical_correct}. "
+                        f"Legal action types: {set(legal_action_types)}. "
+                        f"Legal settlement IDs: {sorted(legal_settlement_ids)}. "
+                        f"Legal road IDs: {sorted(legal_road_ids)}"
+                        f"{hint}"
                     )
+                    raise HTTPException(status_code=400, detail=error_detail)
             
             # Validate all incorrect actions are legal (if provided)
             if s.incorrect_actions:
                 for incorrect_action in s.incorrect_actions:
-                    if not _action_dict_matches_legal_action(incorrect_action, la_list):
+                    if not _action_dict_matches_legal_action(incorrect_action, la_list, state=state):
                         raise HTTPException(
                             status_code=400,
                             detail=f"Drill step at idx={idx} has an incorrect action that is not legal: {incorrect_action}"
@@ -1712,17 +1738,18 @@ def _canonical_action_dict(action_dict: Dict[str, Any], state: Optional[GameStat
 
 def _action_dict_matches_legal_action(
     action_dict: Dict[str, Any],
-    legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
+    legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]],
+    state: Optional[GameState] = None
 ) -> bool:
     """Check if an action dict matches any legal action."""
-    canonical_action = _canonical_action_dict(action_dict)
+    canonical_action = _canonical_action_dict(action_dict, state=state)
     action_type = action_dict.get("type")
     
     for legal_action, legal_payload in legal_actions_list:
         legal_action_dict = {"type": serialize_action(legal_action)}
         if legal_payload is not None:
             legal_action_dict["payload"] = serialize_action_payload(legal_payload)
-        canonical_legal = _canonical_action_dict(legal_action_dict)
+        canonical_legal = _canonical_action_dict(legal_action_dict, state=state)
         
         # Special case: PROPOSE_TRADE actions are legal even if they have a payload
         # because legal_actions returns (PROPOSE_TRADE, None) but agents construct the payload
@@ -2456,6 +2483,11 @@ async def run_agents(game_id: str, request: RunAgentsRequest):
                 elif "card_type" in payload_dict:
                     chosen_action_text += f" ({payload_dict['card_type']})"
         
+        # Extract parsing_warnings from action dict if present
+        parsing_warnings = action.get("parsing_warnings")
+        reasoning = action.get("reasoning")
+        raw_llm_response = action.get("raw_llm_response")
+        
         # Save step to database
         add_step(
             game_id=game_id,
@@ -2468,6 +2500,9 @@ async def run_agents(game_id: str, request: RunAgentsRequest):
             state_text=state_text,
             legal_actions_text=legal_actions_text,
             chosen_action_text=chosen_action_text,
+            reasoning=reasoning,
+            raw_llm_response=raw_llm_response,
+            parsing_warnings=parsing_warnings,
         )
     
     # Run the game automatically
@@ -2690,9 +2725,10 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
                 elif "card_type" in payload_dict:
                     chosen_action_text += f" ({payload_dict['card_type']})"
         
-        # Extract reasoning and raw LLM response if present
+        # Extract reasoning, raw LLM response, and parsing warnings if present
         reasoning = action.get("reasoning", None)
         raw_llm_response = action.get("raw_llm_response", None)
+        parsing_warnings = action.get("parsing_warnings", None)
         
         # Save step to database
         add_step(
@@ -2708,6 +2744,7 @@ async def watch_agents_step(game_id: str, request: WatchAgentsRequest):
             chosen_action_text=chosen_action_text,
             reasoning=reasoning,  # Store reasoning in database
             raw_llm_response=raw_llm_response,  # Store raw LLM response for parsing error analysis
+            parsing_warnings=parsing_warnings,  # Store parsing warnings
         )
     
     # Get current player to check if they have an agent

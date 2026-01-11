@@ -213,16 +213,21 @@ class AgentRunner:
                     while retry_count < max_retries:
                         try:
                             result = agent.choose_action(self.state, legal_actions_list)
-                            if len(result) == 4:
+                            if len(result) == 5:
+                                action, payload, reasoning, raw_llm_response, parsing_warnings = result
+                            elif len(result) == 4:
                                 action, payload, reasoning, raw_llm_response = result
+                                parsing_warnings = None
                             elif len(result) == 3:
                                 action, payload, reasoning = result
                                 raw_llm_response = None
+                                parsing_warnings = None
                             else:
                                 # Backward compatibility: old agents return 2-tuple
                                 action, payload = result
                                 reasoning = None
                                 raw_llm_response = None
+                                parsing_warnings = None
                             # Success - break out of retry loop
                             break
                         except ValueError as e:
@@ -469,17 +474,21 @@ class AgentRunner:
                 while retry_count < max_retries:
                     try:
                         result = agent.choose_action(self.state, legal_actions_list)
-                        if len(result) == 4:
+                        if len(result) == 5:
+                            action, payload, reasoning, raw_llm_response, parsing_warnings = result
+                        elif len(result) == 4:
                             action, payload, reasoning, raw_llm_response = result
+                            parsing_warnings = None
                         elif len(result) == 3:
                             action, payload, reasoning = result
                             raw_llm_response = None
+                            parsing_warnings = None
                         else:
                             # Backward compatibility: old agents return 2-tuple
                             action, payload = result
                             reasoning = None
                             raw_llm_response = None
-                            reasoning = None
+                            parsing_warnings = None
                         # Success - break out of retry loop
                         break
                     except ValueError as e:
@@ -525,6 +534,9 @@ class AgentRunner:
                 # Store raw_llm_response if it was set (even if None, to track that we checked)
                 if 'raw_llm_response' in locals():
                     action_dict["raw_llm_response"] = raw_llm_response
+                # Store parsing_warnings if it was set
+                if 'parsing_warnings' in locals() and parsing_warnings:
+                    action_dict["parsing_warnings"] = parsing_warnings
                 save_state_callback(
                     self.state.game_id,
                     state_before,

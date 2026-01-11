@@ -1704,13 +1704,18 @@ def _calculate_min_roads_to_reach(state: GameState, target_inter_id: int, player
         inter_graph[inter.id] = list(inter.adjacent_intersections)
     
     # Build road ownership map (for each edge, who owns it)
+    # Also build a map from edge_key to RoadEdge for checking buildability
     road_ownership = {}
+    road_by_edge_key = {}
     for road in state.road_edges:
         edge_key = (min(road.intersection1_id, road.intersection2_id), 
                    max(road.intersection1_id, road.intersection2_id))
         road_ownership[edge_key] = road.owner
+        road_by_edge_key[edge_key] = road
     
     # BFS to find shortest path (minimum roads needed)
+    # Key insight: Once we "build" a road to reach an intersection, that intersection
+    # becomes part of our infrastructure, so roads from that intersection become buildable.
     from collections import deque
     queue = deque([(start, 0) for start in start_points])
     visited = {start: 0 for start in start_points}  # intersection_id -> roads_needed
@@ -1735,7 +1740,8 @@ def _calculate_min_roads_to_reach(state: GameState, target_inter_id: int, player
             
             # Can traverse if:
             # 1. Road is owned by player (free)
-            # 2. Road is unowned (need to build it, costs 1)
+            # 2. Road is unowned AND can be built from current position
+            #    (either connects to original infrastructure OR we've reached current via building roads)
             # Cannot traverse if road is owned by opponent
             
             if road_owner == player_id:
@@ -1744,11 +1750,34 @@ def _calculate_min_roads_to_reach(state: GameState, target_inter_id: int, player
                     visited[neighbor] = roads_needed
                     queue.append((neighbor, roads_needed))
             elif road_owner is None:
-                # Unowned road - need to build it (costs 1 road)
-                new_cost = roads_needed + 1
-                if neighbor not in visited or visited[neighbor] > new_cost:
-                    visited[neighbor] = new_cost
-                    queue.append((neighbor, new_cost))
+                # Unowned road - check if it can be built
+                road_edge = road_by_edge_key.get(edge_key)
+                if road_edge:
+                    # Check if road can be built from current position
+                    can_build = False
+                    
+                    # Check if current is in our infrastructure
+                    if current in visited:
+                        # Check that current intersection doesn't have opponent building
+                        current_inter = next((i for i in state.intersections if i.id == current), None)
+                        if current_inter and current_inter.owner and current_inter.owner != player_id:
+                            # Can't build from opponent building
+                            can_build = False
+                        elif not neighbor_inter or not neighbor_inter.owner or neighbor_inter.owner == player_id:
+                            # Current is in our infrastructure and neighbor is not blocked
+                            # We can build a road from current to neighbor
+                            can_build = True
+                    else:
+                        # Current not in visited - check if road connects to original infrastructure
+                        can_build = _can_build_road(state, road_edge, player_id)
+                    
+                    if can_build:
+                        # Road is buildable - need to build it (costs 1 road)
+                        new_cost = roads_needed + 1
+                        if neighbor not in visited or visited[neighbor] > new_cost:
+                            visited[neighbor] = new_cost
+                            queue.append((neighbor, new_cost))
+                # else: road cannot be built (blocked or doesn't connect), skip it
             # else: road owned by opponent, cannot traverse
     
     return None  # Not reachable

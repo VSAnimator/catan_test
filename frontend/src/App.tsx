@@ -2730,7 +2730,7 @@ function App() {
         player_id: disagreement.player_id,
         steps: [{
           player_id: disagreement.player_id,
-          state: disagreement.state_after_json || disagreement.state_before_json,
+          state: disagreement.state_before_json || disagreement.state_after_json,
           expected_action: correctAction,
           correct_actions: [correctAction],
           incorrect_actions: [incorrectAction]
@@ -2789,7 +2789,7 @@ function App() {
         player_id: agreement.player_id,
         steps: [{
           player_id: agreement.player_id,
-          state: agreement.state_after_json || agreement.state_before_json,
+          state: agreement.state_before_json || agreement.state_after_json,
           expected_action: agreement.agreed_action,
           correct_actions: [agreement.agreed_action],
           incorrect_actions: []  // Empty - forces LLM to consider all legal actions

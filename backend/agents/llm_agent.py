@@ -237,8 +237,12 @@ class LLMAgent(BaseAgent):
         response_text: str,
         state: GameState,
         legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]],
-    ) -> Tuple[Action, Optional[ActionPayload], Optional[str], Optional[str]]:
-        """Parse an LLM response into a legal action tuple or raise on failure."""
+    ) -> Tuple[Action, Optional[ActionPayload], Optional[str], Optional[str], List[str]]:
+        """Parse an LLM response into a legal action tuple or raise on failure.
+        
+        Returns: (action, payload, reasoning, raw_response, parsing_warnings)
+        """
+        parsing_warnings = []  # Collect warnings during parsing
         # Parse response
         # (This is factored out so we can retry LLM calls if parsing fails.)
         try:
@@ -415,12 +419,15 @@ class LLMAgent(BaseAgent):
                         if not preferred_match:
                             preferred_match = (action, payload)
                 
+                # Check after loop completes
                 if exact_match:
                     matching_action = exact_match
                 elif preferred_match:
                     # LLM specified a tile_id but it doesn't match any legal action
                     # This might be a parsing error - log it
-                    print(f"Warning: LLM requested tile_id {llm_tile_id} but it's not in legal actions. Using first available.", flush=True)
+                    warning_msg = f"LLM requested tile_id {llm_tile_id} but it's not in legal actions. Using first available."
+                    print(f"Warning: {warning_msg}", flush=True)
+                    parsing_warnings.append(warning_msg)
                     matching_action = preferred_match
             
             # For BUILD_ROAD actions, handle both "road_id" and "road_edge_id" field names
@@ -442,7 +449,9 @@ class LLMAgent(BaseAgent):
                         matching_action = exact_match
                     elif preferred_match:
                         # LLM specified a road_id but it doesn't match any legal action
-                        print(f"Warning: LLM requested road_id {llm_road_id} but it's not in legal actions. Using first available.", flush=True)
+                        warning_msg = f"LLM requested road_id {llm_road_id} but it's not in legal actions. Using first available."
+                        print(f"Warning: {warning_msg}", flush=True)
+                        parsing_warnings.append(warning_msg)
                         matching_action = preferred_match
             
             # For SETUP_PLACE_SETTLEMENT and BUILD_SETTLEMENT actions, match by intersection_id
@@ -466,7 +475,9 @@ class LLMAgent(BaseAgent):
                         matching_action = exact_match
                     elif preferred_match:
                         # LLM specified an intersection_id but it doesn't match any legal action
-                        print(f"Warning: LLM requested intersection_id {llm_intersection_id} but it's not in legal actions. Using first available.", flush=True)
+                        warning_msg = f"LLM requested intersection_id {llm_intersection_id} but it's not in legal actions. Using first available."
+                        print(f"Warning: {warning_msg}", flush=True)
+                        parsing_warnings.append(warning_msg)
                         matching_action = preferred_match
             
             # For BUILD_CITY actions, match by intersection_id
@@ -490,7 +501,9 @@ class LLMAgent(BaseAgent):
                         matching_action = exact_match
                     elif preferred_match:
                         # LLM specified an intersection_id but it doesn't match any legal action
-                        print(f"Warning: LLM requested intersection_id {llm_intersection_id} but it's not in legal actions. Using first available.", flush=True)
+                        warning_msg = f"LLM requested intersection_id {llm_intersection_id} but it's not in legal actions. Using first available."
+                        print(f"Warning: {warning_msg}", flush=True)
+                        parsing_warnings.append(warning_msg)
                         matching_action = preferred_match
             
             # For PROPOSE_TRADE, construct payload from LLM response
@@ -590,13 +603,76 @@ class LLMAgent(BaseAgent):
                                     break
                         
                         if not matching_action:
-                            print(f"Warning: LLM requested PROPOSE_TRADE with give_resources={llm_give}, receive_resources={llm_receive}, but no exact match found in legal actions", flush=True)
+                            warning_msg = f"LLM requested PROPOSE_TRADE with give_resources={llm_give}, receive_resources={llm_receive}, but no exact match found in legal actions"
+                            print(f"Warning: {warning_msg}", flush=True)
                             print(f"  Available trades: {[(self._payload_to_dict(p).get('give_resources'), self._payload_to_dict(p).get('receive_resources')) for a, p in legal_actions_list if a == target_action][:5]}", flush=True)
+                            parsing_warnings.append(warning_msg)
                             # Don't fallback - require exact match for PROPOSE_TRADE
                             # This prevents executing wrong trades
                 else:
                     # Missing required fields - raise error to trigger retry
                     error_msg = "PROPOSE_TRADE requires 'give_resources' and 'receive_resources' in action_payload. Format: {\"action_type\": \"propose_trade\", \"action_payload\": {\"give_resources\": {\"wood\": 1}, \"receive_resources\": {\"sheep\": 1}, \"target_player_ids\": [\"player_1\"]}}"
+                    print(f"Error: {error_msg}", flush=True)
+                    raise ValueError(error_msg)
+            
+            # For TRADE_BANK, match by resource types (similar to PROPOSE_TRADE)
+            if target_action == Action.TRADE_BANK and action_payload_dict:
+                if "give_resources" in action_payload_dict and "receive_resources" in action_payload_dict:
+                    from engine import ResourceType, TradeBankPayload
+                    
+                    llm_give = action_payload_dict["give_resources"]
+                    llm_receive = action_payload_dict["receive_resources"]
+                    
+                    # Convert string resource names to ResourceType enum
+                    def convert_resource_dict(d):
+                        """Convert resource dict with string keys to ResourceType keys."""
+                        result = {}
+                        for k, v in d.items():
+                            if isinstance(k, str):
+                                # Find matching ResourceType
+                                found = False
+                                for rt in ResourceType:
+                                    if rt.value == k.lower():
+                                        result[rt] = v
+                                        found = True
+                                        break
+                                if not found:
+                                    raise ValueError(f"Invalid resource type: {k}. Valid types: {[rt.value for rt in ResourceType]}")
+                            else:
+                                result[k] = v
+                        return result
+                    
+                    try:
+                        give_resources = convert_resource_dict(llm_give)
+                        receive_resources = convert_resource_dict(llm_receive)
+                        
+                        # Try to find exact match first
+                        for action, payload in legal_actions_list:
+                            if action == target_action and payload:
+                                if isinstance(payload, TradeBankPayload):
+                                    # Check if give_resources and receive_resources match
+                                    if (payload.give_resources == give_resources and 
+                                        payload.receive_resources == receive_resources):
+                                        matching_action = (action, payload)
+                                        print(f"  Matched TRADE_BANK: give={llm_give}, receive={llm_receive}", flush=True)
+                                        break
+                        
+                        # If no exact match found, log warning but don't fallback to wrong trade
+                        if not matching_action:
+                            warning_msg = f"LLM requested TRADE_BANK with give_resources={llm_give}, receive_resources={llm_receive}, but no exact match found in legal actions"
+                            print(f"Warning: {warning_msg}", flush=True)
+                            print(f"  Available bank trades: {[(p.give_resources, p.receive_resources) for a, p in legal_actions_list if a == target_action and p][:5]}", flush=True)
+                            parsing_warnings.append(warning_msg)
+                            # Don't fallback - require exact match for TRADE_BANK to prevent wrong trades
+                            raise ValueError(f"TRADE_BANK with give_resources={llm_give}, receive_resources={llm_receive} not found in legal actions")
+                    except (ValueError, KeyError, TypeError) as e:
+                        # Invalid trade format - raise error to trigger retry
+                        error_msg = f"Invalid TRADE_BANK format: {str(e)}. Required fields: give_resources (dict), receive_resources (dict). Resource types must be: {[rt.value for rt in ResourceType]}"
+                        print(f"Error: {error_msg}", flush=True)
+                        raise ValueError(error_msg)
+                else:
+                    # Missing required fields - raise error to trigger retry
+                    error_msg = "TRADE_BANK requires 'give_resources' and 'receive_resources' in action_payload. Format: {\"action_type\": \"trade_bank\", \"action_payload\": {\"give_resources\": {\"wood\": 4}, \"receive_resources\": {\"sheep\": 1}}}"
                     print(f"Error: {error_msg}", flush=True)
                     raise ValueError(error_msg)
             
@@ -662,8 +738,8 @@ class LLMAgent(BaseAgent):
                             matching_action = (action, payload)
                             break
                 
-                # Fallback only if still no match (and not PROPOSE_TRADE which requires exact match)
-                if not matching_action and target_action != Action.PROPOSE_TRADE:
+                # Fallback only if still no match (and not PROPOSE_TRADE or TRADE_BANK which require exact match)
+                if not matching_action and target_action not in (Action.PROPOSE_TRADE, Action.TRADE_BANK):
                     # Store first match as fallback
                     for action, payload in legal_actions_list:
                         if action == target_action:
@@ -672,24 +748,37 @@ class LLMAgent(BaseAgent):
             
             if not matching_action:
                 # Fallback: just pick the first matching action type
-                for action, payload in legal_actions_list:
-                    if action == target_action:
-                        matching_action = (action, payload)
-                        break
+                # BUT: PROPOSE_TRADE and TRADE_BANK require payloads, so don't fallback to them
+                if target_action not in (Action.PROPOSE_TRADE, Action.TRADE_BANK):
+                    for action, payload in legal_actions_list:
+                        if action == target_action:
+                            matching_action = (action, payload)
+                            break
             
             if not matching_action:
-                print(f"Warning: Could not find exact matching legal action for {action_type_str}", flush=True)
+                # Check if this is PROPOSE_TRADE or TRADE_BANK without a valid payload
+                if target_action in (Action.PROPOSE_TRADE, Action.TRADE_BANK):
+                    # These actions require payloads - can't fallback to None payload
+                    error_msg = f"PROPOSE_TRADE/TRADE_BANK requires a valid payload with give_resources, receive_resources, and target_player_ids. LLM response: {json.dumps(response_json, indent=2)[:500]}"
+                    print(f"Error: {error_msg}", flush=True)
+                    raise ValueError(error_msg)
+                
+                warning_msg = f"Could not find exact matching legal action for {action_type_str}. Using first available action of this type."
+                print(f"Warning: {warning_msg}", flush=True)
                 print(f"  Target action enum: {target_action.value if target_action else 'None'}", flush=True)
                 print(f"  Legal actions of this type: {[(a.value, type(p).__name__ if p else None) for a, p in legal_actions_list if a == target_action]}", flush=True)
                 print(f"  All available legal actions: {[a.value for a, _ in legal_actions_list]}", flush=True)
                 print(f"  LLM response JSON: {json.dumps(response_json, indent=2)[:500]}", flush=True)
+                parsing_warnings.append(warning_msg)
                 
                 # Last resort: pick first matching action type
-                for action, payload in legal_actions_list:
-                    if action == target_action:
-                        matching_action = (action, payload)
-                        print(f"  Using first available action: {action.value}", flush=True)
-                        break
+                # BUT: PROPOSE_TRADE and TRADE_BANK require payloads, so don't fallback to them
+                if target_action not in (Action.PROPOSE_TRADE, Action.TRADE_BANK):
+                    for action, payload in legal_actions_list:
+                        if action == target_action:
+                            matching_action = (action, payload)
+                            print(f"  Using first available action: {action.value}", flush=True)
+                            break
                 
                 if not matching_action:
                     # The LLM returned an action that isn't legal. Try to find a similar legal action
@@ -719,15 +808,33 @@ class LLMAgent(BaseAgent):
                                     matching_action = (action, payload)
                                     break
                         # If no special case matches, just use the first legal action
+                        # BUT: Skip PROPOSE_TRADE and TRADE_BANK as they require payloads
                         if not matching_action and legal_actions_list:
-                            matching_action = legal_actions_list[0]
-                            print(f"  LLM wanted {target_action.value if target_action else action_type_str} but it's not legal. Using first available action: {matching_action[0].value}", flush=True)
+                            # Find first action that's not PROPOSE_TRADE or TRADE_BANK
+                            for action, payload in legal_actions_list:
+                                if action not in (Action.PROPOSE_TRADE, Action.TRADE_BANK):
+                                    matching_action = (action, payload)
+                                    warning_msg = f"LLM wanted {target_action.value if target_action else action_type_str} but it's not legal. Using first available action: {matching_action[0].value}"
+                                    print(f"  {warning_msg}", flush=True)
+                                    parsing_warnings.append(warning_msg)
+                                    break
+                            
+                            # If only PROPOSE_TRADE/TRADE_BANK available, raise error instead
+                            if not matching_action:
+                                error_msg = f"LLM wanted {target_action.value if target_action else action_type_str} but it's not legal. Only PROPOSE_TRADE/TRADE_BANK available, which require payloads. Available: {[a.value for a, _ in legal_actions_list]}"
+                                raise ValueError(error_msg)
                     
                     if not matching_action:
                         raise ValueError(f"Could not find matching legal action for {action_type_str}. Available: {[a.value for a, _ in legal_actions_list]}")
             
             # Return action, payload, reasoning, and raw response
             action, payload = matching_action
+            
+            # Safety check: PROPOSE_TRADE and TRADE_BANK must have payloads
+            if action in (Action.PROPOSE_TRADE, Action.TRADE_BANK) and payload is None:
+                error_msg = f"{action.value} requires a payload but got None. This should not happen - parsing should have constructed a payload or raised an error."
+                print(f"Error: {error_msg}", flush=True)
+                raise ValueError(error_msg)
             
             # Handle DISCARD_RESOURCES actions that have None payload
             # Generate a valid discard payload if needed
@@ -764,7 +871,9 @@ class LLMAgent(BaseAgent):
                 else:
                     raise ValueError(f"Player {self.player_id} not found for DISCARD_RESOURCES")
             
-            return (action, payload, reasoning, response_text)
+            # Join warnings with newlines for storage
+            warnings_text = "\n".join(parsing_warnings) if parsing_warnings else None
+            return (action, payload, reasoning, response_text, warnings_text)
             
         except json.JSONDecodeError as e:
             raise
@@ -1069,7 +1178,7 @@ Be strategic and consider:
         self,
         state: GameState,
         legal_actions_list: List[Tuple[Action, Optional[ActionPayload]]]
-    ) -> Tuple[Action, Optional[ActionPayload], Optional[str], Optional[str]]:
+    ) -> Tuple[Action, Optional[ActionPayload], Optional[str], Optional[str], Optional[str]]:
         """
         Choose an action using ReAct pattern with RAG.
         
@@ -1103,9 +1212,9 @@ Be strategic and consider:
                     if accept_actions or reject_actions:
                         # If only one option, use it immediately
                         if accept_actions and not reject_actions:
-                            return (accept_actions[0][0], accept_actions[0][1], "Accepting trade (only option available)")
+                            return (accept_actions[0][0], accept_actions[0][1], "Accepting trade (only option available)", None, None)
                         elif reject_actions and not accept_actions:
-                            return (reject_actions[0][0], reject_actions[0][1], "Rejecting trade (cannot afford)")
+                            return (reject_actions[0][0], reject_actions[0][1], "Rejecting trade (cannot afford)", None, None)
                         # If both available, let LLM decide but add urgent note to prompt
                         # Continue to LLM call below, but we'll add a note in the prompt
             
@@ -1119,7 +1228,7 @@ Be strategic and consider:
                         # Pick first accepting player (or could let LLM decide)
                         from engine import SelectTradePartnerPayload
                         return (Action.SELECT_TRADE_PARTNER, SelectTradePartnerPayload(selected_player_id=accepting_players[0]), 
-                                f"Selecting trade partner: {accepting_players[0]}")
+                                f"Selecting trade partner: {accepting_players[0]}", None, None)
                 elif len(accepting_players) == 1:
                     # Only one accepted - trade will execute automatically, just need to wait
                     # But we should still be able to continue, so let it fall through
@@ -1201,23 +1310,35 @@ Now reason about the best action and respond in JSON format as specified."""
             {"role": "user", "content": user_prompt}
         ]
 
-        # Call + parse with one retry. If parsing fails, retry using gpt-5.2 with thinking disabled.
+        # Call + parse with multiple fallbacks:
+        # 1. Original model
+        # 2. gpt-5.2 fallback
+        # 3. gpt-4o fallback
+        # 4. end_turn if available
+        # 5. First available action
+        # 6. Raise exception only if all fail
         first_response_text: Optional[str] = None
         last_error: Optional[Exception] = None
         original_model = self.model
         game_id = state.game_id if hasattr(state, 'game_id') else 'unknown'
         
-        for attempt in range(2):
+        fallback_models = [
+            ("gpt-5.2", False),  # (model, thinking_mode)
+            ("gpt-4o", False),
+        ]
+        
+        for attempt in range(1 + len(fallback_models)):
             try:
                 if attempt == 0:
                     _log_fallback(f"Player {self.player_id} (Game {game_id}): Attempting with model {original_model}")
                     response_text = self._call_llm(messages)
                 else:
-                    # Fallback call: gpt-5.2 without thinking, and with strict JSON-only instruction.
-                    _log_fallback(f"Player {self.player_id} (Game {game_id}): FALLBACK TRIGGERED!")
+                    # Fallback call with different model
+                    fallback_model, fallback_thinking = fallback_models[attempt - 1]
+                    _log_fallback(f"Player {self.player_id} (Game {game_id}): FALLBACK {attempt} TRIGGERED!")
                     _log_fallback(f"  Original model: {original_model}")
-                    _log_fallback(f"  Fallback model: gpt-5.2")
-                    _log_fallback(f"  Error from original attempt: {last_error}")
+                    _log_fallback(f"  Fallback model: {fallback_model}")
+                    _log_fallback(f"  Error from previous attempt: {last_error}")
                     _log_fallback(f"  First response (truncated): {(first_response_text or '')[:500]}")
                     
                     prev = (first_response_text or "")[:1500]
@@ -1240,10 +1361,10 @@ Now reason about the best action and respond in JSON format as specified."""
                     ]
                     response_text = self._call_llm(
                         retry_messages,
-                        model_override="gpt-5.2",
-                        thinking_mode_override=False,
+                        model_override=fallback_model,
+                        thinking_mode_override=fallback_thinking,
                     )
-                    _log_fallback(f"Player {self.player_id} (Game {game_id}): Fallback to gpt-5.2 completed, attempting to parse response")
+                    _log_fallback(f"Player {self.player_id} (Game {game_id}): Fallback to {fallback_model} completed, attempting to parse response")
 
                 # Store response for debugging
                 self._last_llm_response = response_text
@@ -1252,25 +1373,48 @@ Now reason about the best action and respond in JSON format as specified."""
 
                 parsed_result = self._parse_llm_action_response(response_text, state, legal_actions_list)
                 if attempt > 0:
-                    _log_fallback(f"Player {self.player_id} (Game {game_id}): Fallback to gpt-5.2 SUCCESSFUL - action parsed")
+                    fallback_model, _ = fallback_models[attempt - 1]
+                    _log_fallback(f"Player {self.player_id} (Game {game_id}): Fallback to {fallback_model} SUCCESSFUL - action parsed")
                 return parsed_result
             except Exception as e:
                 last_error = e
                 if attempt == 0:
                     _log_fallback(f"Player {self.player_id} (Game {game_id}): First attempt with {original_model} FAILED: {e}")
                 else:
-                    _log_fallback(f"Player {self.player_id} (Game {game_id}): Fallback to gpt-5.2 also FAILED: {e}")
-                # Retry once; otherwise fall through to final fallback.
+                    fallback_model, _ = fallback_models[attempt - 1]
+                    _log_fallback(f"Player {self.player_id} (Game {game_id}): Fallback to {fallback_model} also FAILED: {e}")
+                # Continue to next fallback
                 continue
 
-        # Final fallback: pick first legal action so the game keeps moving.
-        _log_fallback(f"Player {self.player_id} (Game {game_id}): FINAL FALLBACK - Using first legal action")
+        # All LLM attempts failed. Try safe fallbacks before raising exception.
+        _log_fallback(f"Player {self.player_id} (Game {game_id}): All LLM parsing attempts failed, trying safe fallbacks")
         _log_fallback(f"  Original model: {original_model}")
-        _log_fallback(f"  Attempted fallback to: gpt-5.2")
+        _log_fallback(f"  Attempted fallbacks: {[m[0] for m in fallback_models]}")
         _log_fallback(f"  Final error: {last_error}")
         _log_fallback(f"  First response (truncated): {(first_response_text or '')[:500]}")
-        action, payload = legal_actions_list[0]
-        return (action, payload, f"Fallback: LLM parsing failed twice ({last_error})", first_response_text)
+        
+        # Try end_turn if available
+        end_turn_action = next((a for a, p in legal_actions_list if a == Action.END_TURN), None)
+        if end_turn_action:
+            warning_msg = f"All LLM parsing attempts failed. Using END_TURN as safe fallback."
+            _log_fallback(f"Player {self.player_id} (Game {game_id}): Using END_TURN fallback")
+            return (Action.END_TURN, None, warning_msg, first_response_text, warning_msg)
+        
+        # Try first available action
+        if legal_actions_list:
+            action, payload = legal_actions_list[0]
+            warning_msg = f"All LLM parsing attempts failed. Using first available action: {action.value}"
+            _log_fallback(f"Player {self.player_id} (Game {game_id}): Using first available action fallback: {action.value}")
+            return (action, payload, warning_msg, first_response_text, warning_msg)
+        
+        # Only raise exception if we have no legal actions at all
+        error_msg = (
+            f"LLM parsing failed after {1 + len(fallback_models)} attempts (original: {original_model}, "
+            f"fallbacks: {[m[0] for m in fallback_models]}). "
+            f"No safe fallback available. Last error: {last_error}. "
+            f"First response (truncated): {(first_response_text or '')[:500]}"
+        )
+        raise ValueError(error_msg)
     
     def _payload_to_dict(self, payload: ActionPayload) -> Dict[str, Any]:
         """Convert action payload to dictionary."""

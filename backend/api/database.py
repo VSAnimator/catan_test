@@ -122,6 +122,12 @@ def init_db():
     except sqlite3.OperationalError:
         pass  # Column already exists
     
+    # Add parsing_warnings column if it doesn't exist (for existing databases)
+    try:
+        cursor.execute("ALTER TABLE steps ADD COLUMN parsing_warnings TEXT")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+    
     # Create index on game_id for faster queries
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_steps_game_id ON steps(game_id)
@@ -460,6 +466,7 @@ def add_step(
     chosen_action_text: Optional[str] = None,
     reasoning: Optional[str] = None,
     raw_llm_response: Optional[str] = None,
+    parsing_warnings: Optional[str] = None,
     batch_write: bool = False,
 ) -> None:
     """
@@ -487,6 +494,7 @@ def add_step(
                 'chosen_action_text': chosen_action_text,
                 'reasoning': reasoning,
                 'raw_llm_response': raw_llm_response,
+                'parsing_warnings': parsing_warnings,
             })
             
             queue_size = len(_write_queue[game_id])
@@ -506,9 +514,9 @@ def add_step(
             INSERT INTO steps (
                 game_id, step_idx, player_id,
                 state_before_json, state_after_json, action_json,
-                dice_roll, state_text, legal_actions_text, chosen_action_text, reasoning, raw_llm_response
+                dice_roll, state_text, legal_actions_text, chosen_action_text, reasoning, raw_llm_response, parsing_warnings
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             game_id,
             step_idx,
@@ -522,6 +530,7 @@ def add_step(
             chosen_action_text,
             reasoning,
             raw_llm_response,
+            parsing_warnings,
         ))
         
         conn.commit()
@@ -546,9 +555,9 @@ def _flush_write_queue(game_id: str) -> None:
             INSERT INTO steps (
                 game_id, step_idx, player_id,
                 state_before_json, state_after_json, action_json,
-                dice_roll, state_text, legal_actions_text, chosen_action_text, reasoning, raw_llm_response
+                dice_roll, state_text, legal_actions_text, chosen_action_text, reasoning, raw_llm_response, parsing_warnings
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, [
             (
                 step['game_id'],
@@ -563,6 +572,7 @@ def _flush_write_queue(game_id: str) -> None:
                 step['chosen_action_text'],
                 step.get('reasoning'),  # Use .get() for backward compatibility
                 step.get('raw_llm_response'),  # Use .get() for backward compatibility
+                step.get('parsing_warnings'),  # Use .get() for backward compatibility
             )
             for step in steps
         ])

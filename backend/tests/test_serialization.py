@@ -410,3 +410,583 @@ def test_parse_action_from_text_no_match_raises():
     with pytest.raises(ValueError, match="Could not parse"):
         parse_action_from_text("completely unrelated text", actions)
 
+
+# Import private functions for testing
+from engine.serialization import _calculate_min_roads_to_reach, _can_build_road
+
+
+def test_calculate_min_roads_to_reach_opponent_road_blocked():
+    """Test that roads owned by opponents cannot be traversed."""
+    players = [
+        Player(id="player_0", name="Alice"),
+        Player(id="player_1", name="Bob"),
+    ]
+    
+    # Create a simple path: player_0 settlement -> opponent road -> target intersection
+    intersections = [
+        Intersection(
+            id=0,
+            position=(0.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={1},
+            owner="player_0",
+            building_type="settlement"
+        ),
+        Intersection(
+            id=1,
+            position=(1.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={0, 2},
+            owner=None,
+            building_type=None
+        ),
+        Intersection(
+            id=2,
+            position=(2.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={1},
+            owner=None,
+            building_type=None
+        ),
+    ]
+    
+    # Road from 0->1 is owned by player_0, road from 1->2 is owned by opponent
+    road_edges = [
+        RoadEdge(id=0, intersection1_id=0, intersection2_id=1, owner="player_0"),
+        RoadEdge(id=1, intersection1_id=1, intersection2_id=2, owner="player_1"),  # Opponent road
+    ]
+    
+    state = GameState(
+        game_id="test_game",
+        players=players,
+        current_player_index=0,
+        phase="playing",
+        tiles=[],
+        intersections=intersections,
+        road_edges=road_edges,
+        dice_roll=7,
+    )
+    
+    # Should not be able to reach intersection 2 because opponent road blocks it
+    result = _calculate_min_roads_to_reach(state, 2, "player_0")
+    assert result is None, "Should not be able to reach intersection through opponent road"
+
+
+
+
+def test_calculate_min_roads_to_reach_buildable_road():
+    """Test that unowned roads that can be built are counted correctly."""
+    players = [
+        Player(id="player_0", name="Alice"),
+        Player(id="player_1", name="Bob"),
+    ]
+    
+    # Create a path where player can build roads to reach target
+    intersections = [
+        Intersection(
+            id=0,
+            position=(0.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={1},
+            owner="player_0",
+            building_type="settlement"
+        ),
+        Intersection(
+            id=1,
+            position=(1.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={0, 2},
+            owner=None,
+            building_type=None
+        ),
+        Intersection(
+            id=2,
+            position=(2.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={1, 3},
+            owner=None,
+            building_type=None
+        ),
+        Intersection(
+            id=3,
+            position=(3.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={2},
+            owner=None,
+            building_type=None
+        ),
+    ]
+    
+    # Road from 0->1 is owned by player_0
+    # Roads 1->2 and 2->3 are unowned but buildable (form a connected path)
+    road_edges = [
+        RoadEdge(id=0, intersection1_id=0, intersection2_id=1, owner="player_0"),
+        RoadEdge(id=1, intersection1_id=1, intersection2_id=2, owner=None),  # Buildable
+        RoadEdge(id=2, intersection1_id=2, intersection2_id=3, owner=None),  # Buildable
+    ]
+    
+    state = GameState(
+        game_id="test_game",
+        players=players,
+        current_player_index=0,
+        phase="playing",
+        tiles=[],
+        intersections=intersections,
+        road_edges=road_edges,
+        dice_roll=7,
+    )
+    
+    # Should be able to reach intersection 2 (1 road needed)
+    result = _calculate_min_roads_to_reach(state, 2, "player_0")
+    assert result == 1, f"Should need 1 road to reach intersection 2, got {result}"
+    
+    # Should be able to reach intersection 3 (2 roads needed)
+    result = _calculate_min_roads_to_reach(state, 3, "player_0")
+    assert result == 2, f"Should need 2 roads to reach intersection 3, got {result}"
+
+
+def test_calculate_min_roads_to_reach_player_road_free():
+    """Test that player-owned roads are free to traverse."""
+    players = [
+        Player(id="player_0", name="Alice"),
+    ]
+    
+    # Create a path where player already owns all roads
+    intersections = [
+        Intersection(
+            id=0,
+            position=(0.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={1},
+            owner="player_0",
+            building_type="settlement"
+        ),
+        Intersection(
+            id=1,
+            position=(1.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={0, 2},
+            owner=None,
+            building_type=None
+        ),
+        Intersection(
+            id=2,
+            position=(2.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={1},
+            owner=None,
+            building_type=None
+        ),
+    ]
+    
+    # Both roads are owned by player_0
+    road_edges = [
+        RoadEdge(id=0, intersection1_id=0, intersection2_id=1, owner="player_0"),
+        RoadEdge(id=1, intersection1_id=1, intersection2_id=2, owner="player_0"),
+    ]
+    
+    state = GameState(
+        game_id="test_game",
+        players=players,
+        current_player_index=0,
+        phase="playing",
+        tiles=[],
+        intersections=intersections,
+        road_edges=road_edges,
+        dice_roll=7,
+    )
+    
+    # Should be able to reach intersection 2 with 0 roads needed (already connected)
+    result = _calculate_min_roads_to_reach(state, 2, "player_0")
+    assert result == 0, f"Should need 0 roads to reach intersection 2 (already connected), got {result}"
+
+
+def test_calculate_min_roads_to_reach_opponent_building_blocked():
+    """Test that paths through opponent buildings are blocked."""
+    players = [
+        Player(id="player_0", name="Alice"),
+        Player(id="player_1", name="Bob"),
+    ]
+    
+    # Create a path where opponent building blocks the way
+    intersections = [
+        Intersection(
+            id=0,
+            position=(0.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={1},
+            owner="player_0",
+            building_type="settlement"
+        ),
+        Intersection(
+            id=1,
+            position=(1.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={0, 2},
+            owner="player_1",  # Opponent building blocks this
+            building_type="settlement"
+        ),
+        Intersection(
+            id=2,
+            position=(2.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={1},
+            owner=None,
+            building_type=None
+        ),
+    ]
+    
+    # Road from 0->1 is owned by player_0, road from 1->2 is unowned
+    road_edges = [
+        RoadEdge(id=0, intersection1_id=0, intersection2_id=1, owner="player_0"),
+        RoadEdge(id=1, intersection1_id=1, intersection2_id=2, owner=None),
+    ]
+    
+    state = GameState(
+        game_id="test_game",
+        players=players,
+        current_player_index=0,
+        phase="playing",
+        tiles=[],
+        intersections=intersections,
+        road_edges=road_edges,
+        dice_roll=7,
+    )
+    
+    # Should not be able to reach intersection 2 because opponent building at intersection 1 blocks it
+    result = _calculate_min_roads_to_reach(state, 2, "player_0")
+    assert result is None, "Should not be able to reach intersection through opponent building"
+
+
+def test_calculate_min_roads_to_reach_mixed_path():
+    """Test a complex path with owned roads, buildable roads, and blocked roads."""
+    players = [
+        Player(id="player_0", name="Alice"),
+        Player(id="player_1", name="Bob"),
+    ]
+    
+    # Create a complex path: 0 (player settlement) -> 1 (player road) -> 2 (buildable) -> 3 (opponent road blocks) -> 4 (target)
+    # Also: 0 -> 5 (buildable) -> 6 (buildable) -> 4 (alternative path)
+    intersections = [
+        Intersection(id=0, position=(0.0, 0.0), adjacent_tiles=set(), adjacent_intersections={1, 5}, owner="player_0", building_type="settlement"),
+        Intersection(id=1, position=(1.0, 0.0), adjacent_tiles=set(), adjacent_intersections={0, 2}, owner=None, building_type=None),
+        Intersection(id=2, position=(2.0, 0.0), adjacent_tiles=set(), adjacent_intersections={1, 3}, owner=None, building_type=None),
+        Intersection(id=3, position=(3.0, 0.0), adjacent_tiles=set(), adjacent_intersections={2, 4}, owner=None, building_type=None),
+        Intersection(id=4, position=(4.0, 0.0), adjacent_tiles=set(), adjacent_intersections={3, 6}, owner=None, building_type=None),
+        Intersection(id=5, position=(0.0, 1.0), adjacent_tiles=set(), adjacent_intersections={0, 6}, owner=None, building_type=None),
+        Intersection(id=6, position=(1.0, 1.0), adjacent_tiles=set(), adjacent_intersections={5, 4}, owner=None, building_type=None),
+    ]
+    
+    road_edges = [
+        RoadEdge(id=0, intersection1_id=0, intersection2_id=1, owner="player_0"),  # Owned
+        RoadEdge(id=1, intersection1_id=1, intersection2_id=2, owner=None),  # Buildable
+        RoadEdge(id=2, intersection1_id=2, intersection2_id=3, owner=None),  # Buildable
+        RoadEdge(id=3, intersection1_id=3, intersection2_id=4, owner="player_1"),  # Opponent road - blocks path
+        RoadEdge(id=4, intersection1_id=0, intersection2_id=5, owner=None),  # Buildable
+        RoadEdge(id=5, intersection1_id=5, intersection2_id=6, owner=None),  # Buildable
+        RoadEdge(id=6, intersection1_id=6, intersection2_id=4, owner=None),  # Buildable
+    ]
+    
+    state = GameState(
+        game_id="test_game",
+        players=players,
+        current_player_index=0,
+        phase="playing",
+        tiles=[],
+        intersections=intersections,
+        road_edges=road_edges,
+        dice_roll=7,
+    )
+    
+    # Should find the alternative path: 0 -> 5 -> 6 -> 4 (3 roads needed)
+    result = _calculate_min_roads_to_reach(state, 4, "player_0")
+    assert result == 3, f"Should need 3 roads via alternative path, got {result}"
+
+
+def test_calculate_min_roads_to_reach_opponent_road_blocked():
+    """Test that roads owned by opponents cannot be traversed."""
+    players = [
+        Player(id="player_0", name="Alice"),
+        Player(id="player_1", name="Bob"),
+    ]
+    
+    # Create a simple path: player_0 settlement -> opponent road -> target intersection
+    intersections = [
+        Intersection(
+            id=0,
+            position=(0.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={1},
+            owner="player_0",
+            building_type="settlement"
+        ),
+        Intersection(
+            id=1,
+            position=(1.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={0, 2},
+            owner=None,
+            building_type=None
+        ),
+        Intersection(
+            id=2,
+            position=(2.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={1},
+            owner=None,
+            building_type=None
+        ),
+    ]
+    
+    # Road from 0->1 is owned by player_0, road from 1->2 is owned by opponent
+    road_edges = [
+        RoadEdge(id=0, intersection1_id=0, intersection2_id=1, owner="player_0"),
+        RoadEdge(id=1, intersection1_id=1, intersection2_id=2, owner="player_1"),  # Opponent road
+    ]
+    
+    state = GameState(
+        game_id="test_game",
+        players=players,
+        current_player_index=0,
+        phase="playing",
+        tiles=[],
+        intersections=intersections,
+        road_edges=road_edges,
+        dice_roll=7,
+    )
+    
+    # Should not be able to reach intersection 2 because opponent road blocks it
+    result = _calculate_min_roads_to_reach(state, 2, "player_0")
+    assert result is None, "Should not be able to reach intersection through opponent road"
+
+
+
+
+def test_calculate_min_roads_to_reach_buildable_road():
+    """Test that unowned roads that can be built are counted correctly."""
+    players = [
+        Player(id="player_0", name="Alice"),
+        Player(id="player_1", name="Bob"),
+    ]
+    
+    # Create a path where player can build roads to reach target
+    intersections = [
+        Intersection(
+            id=0,
+            position=(0.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={1},
+            owner="player_0",
+            building_type="settlement"
+        ),
+        Intersection(
+            id=1,
+            position=(1.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={0, 2},
+            owner=None,
+            building_type=None
+        ),
+        Intersection(
+            id=2,
+            position=(2.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={1, 3},
+            owner=None,
+            building_type=None
+        ),
+        Intersection(
+            id=3,
+            position=(3.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={2},
+            owner=None,
+            building_type=None
+        ),
+    ]
+    
+    # Road from 0->1 is owned by player_0
+    # Roads 1->2 and 2->3 are unowned but buildable (form a connected path)
+    road_edges = [
+        RoadEdge(id=0, intersection1_id=0, intersection2_id=1, owner="player_0"),
+        RoadEdge(id=1, intersection1_id=1, intersection2_id=2, owner=None),  # Buildable
+        RoadEdge(id=2, intersection1_id=2, intersection2_id=3, owner=None),  # Buildable
+    ]
+    
+    state = GameState(
+        game_id="test_game",
+        players=players,
+        current_player_index=0,
+        phase="playing",
+        tiles=[],
+        intersections=intersections,
+        road_edges=road_edges,
+        dice_roll=7,
+    )
+    
+    # Should be able to reach intersection 2 (1 road needed)
+    result = _calculate_min_roads_to_reach(state, 2, "player_0")
+    assert result == 1, f"Should need 1 road to reach intersection 2, got {result}"
+    
+    # Should be able to reach intersection 3 (2 roads needed)
+    result = _calculate_min_roads_to_reach(state, 3, "player_0")
+    assert result == 2, f"Should need 2 roads to reach intersection 3, got {result}"
+
+
+def test_calculate_min_roads_to_reach_player_road_free():
+    """Test that player-owned roads are free to traverse."""
+    players = [
+        Player(id="player_0", name="Alice"),
+    ]
+    
+    # Create a path where player already owns all roads
+    intersections = [
+        Intersection(
+            id=0,
+            position=(0.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={1},
+            owner="player_0",
+            building_type="settlement"
+        ),
+        Intersection(
+            id=1,
+            position=(1.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={0, 2},
+            owner=None,
+            building_type=None
+        ),
+        Intersection(
+            id=2,
+            position=(2.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={1},
+            owner=None,
+            building_type=None
+        ),
+    ]
+    
+    # Both roads are owned by player_0
+    road_edges = [
+        RoadEdge(id=0, intersection1_id=0, intersection2_id=1, owner="player_0"),
+        RoadEdge(id=1, intersection1_id=1, intersection2_id=2, owner="player_0"),
+    ]
+    
+    state = GameState(
+        game_id="test_game",
+        players=players,
+        current_player_index=0,
+        phase="playing",
+        tiles=[],
+        intersections=intersections,
+        road_edges=road_edges,
+        dice_roll=7,
+    )
+    
+    # Should be able to reach intersection 2 with 0 roads needed (already connected)
+    result = _calculate_min_roads_to_reach(state, 2, "player_0")
+    assert result == 0, f"Should need 0 roads to reach intersection 2 (already connected), got {result}"
+
+
+def test_calculate_min_roads_to_reach_opponent_building_blocked():
+    """Test that paths through opponent buildings are blocked."""
+    players = [
+        Player(id="player_0", name="Alice"),
+        Player(id="player_1", name="Bob"),
+    ]
+    
+    # Create a path where opponent building blocks the way
+    intersections = [
+        Intersection(
+            id=0,
+            position=(0.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={1},
+            owner="player_0",
+            building_type="settlement"
+        ),
+        Intersection(
+            id=1,
+            position=(1.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={0, 2},
+            owner="player_1",  # Opponent building blocks this
+            building_type="settlement"
+        ),
+        Intersection(
+            id=2,
+            position=(2.0, 0.0),
+            adjacent_tiles=set(),
+            adjacent_intersections={1},
+            owner=None,
+            building_type=None
+        ),
+    ]
+    
+    # Road from 0->1 is owned by player_0, road from 1->2 is unowned
+    road_edges = [
+        RoadEdge(id=0, intersection1_id=0, intersection2_id=1, owner="player_0"),
+        RoadEdge(id=1, intersection1_id=1, intersection2_id=2, owner=None),
+    ]
+    
+    state = GameState(
+        game_id="test_game",
+        players=players,
+        current_player_index=0,
+        phase="playing",
+        tiles=[],
+        intersections=intersections,
+        road_edges=road_edges,
+        dice_roll=7,
+    )
+    
+    # Should not be able to reach intersection 2 because opponent building at intersection 1 blocks it
+    result = _calculate_min_roads_to_reach(state, 2, "player_0")
+    assert result is None, "Should not be able to reach intersection through opponent building"
+
+
+def test_calculate_min_roads_to_reach_mixed_path():
+    """Test a complex path with owned roads, buildable roads, and blocked roads."""
+    players = [
+        Player(id="player_0", name="Alice"),
+        Player(id="player_1", name="Bob"),
+    ]
+    
+    # Create a complex path: 0 (player settlement) -> 1 (player road) -> 2 (buildable) -> 3 (opponent road blocks) -> 4 (target)
+    # Also: 0 -> 5 (buildable) -> 6 (buildable) -> 4 (alternative path)
+    intersections = [
+        Intersection(id=0, position=(0.0, 0.0), adjacent_tiles=set(), adjacent_intersections={1, 5}, owner="player_0", building_type="settlement"),
+        Intersection(id=1, position=(1.0, 0.0), adjacent_tiles=set(), adjacent_intersections={0, 2}, owner=None, building_type=None),
+        Intersection(id=2, position=(2.0, 0.0), adjacent_tiles=set(), adjacent_intersections={1, 3}, owner=None, building_type=None),
+        Intersection(id=3, position=(3.0, 0.0), adjacent_tiles=set(), adjacent_intersections={2, 4}, owner=None, building_type=None),
+        Intersection(id=4, position=(4.0, 0.0), adjacent_tiles=set(), adjacent_intersections={3, 6}, owner=None, building_type=None),
+        Intersection(id=5, position=(0.0, 1.0), adjacent_tiles=set(), adjacent_intersections={0, 6}, owner=None, building_type=None),
+        Intersection(id=6, position=(1.0, 1.0), adjacent_tiles=set(), adjacent_intersections={5, 4}, owner=None, building_type=None),
+    ]
+    
+    road_edges = [
+        RoadEdge(id=0, intersection1_id=0, intersection2_id=1, owner="player_0"),  # Owned
+        RoadEdge(id=1, intersection1_id=1, intersection2_id=2, owner=None),  # Buildable
+        RoadEdge(id=2, intersection1_id=2, intersection2_id=3, owner=None),  # Buildable
+        RoadEdge(id=3, intersection1_id=3, intersection2_id=4, owner="player_1"),  # Opponent road - blocks path
+        RoadEdge(id=4, intersection1_id=0, intersection2_id=5, owner=None),  # Buildable
+        RoadEdge(id=5, intersection1_id=5, intersection2_id=6, owner=None),  # Buildable
+        RoadEdge(id=6, intersection1_id=6, intersection2_id=4, owner=None),  # Buildable
+    ]
+    
+    state = GameState(
+        game_id="test_game",
+        players=players,
+        current_player_index=0,
+        phase="playing",
+        tiles=[],
+        intersections=intersections,
+        road_edges=road_edges,
+        dice_roll=7,
+    )
+    
+    # Should find the alternative path: 0 -> 5 -> 6 -> 4 (3 roads needed)
+    result = _calculate_min_roads_to_reach(state, 4, "player_0")
+    assert result == 3, f"Should need 3 roads via alternative path, got {result}"
+
